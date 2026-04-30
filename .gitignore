@@ -1,2 +1,10 @@
-/.venv/
-/data/
+.venv/
+data/
+
+.idea/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+*.log
