@@ -28,6 +28,3 @@ settings_live = Settings()
 settings_for_demo = Settings(
     ib_port=7497,
 )
-settings_for_gap = Settings(
-    ib_client_id=105,
-)
