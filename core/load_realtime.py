@@ -515,161 +515,6 @@ def maybe_start_recent_backfill_task(
     recent_backfill_state["backfill_task"] = asyncio.create_task(run_recent_backfill())
 
 
-def build_pearson_partial_bar(what_to_show, bar):
-    # Преобразуем одну сторону realtime-бара в частичный payload
-    # для pearson_live.
-    if what_to_show == "ASK":
-        return {
-            "ask_open": bar.open_,
-            "ask_close": bar.close,
-        }
-
-    if what_to_show == "BID":
-        return {
-            "bid_open": bar.open_,
-            "bid_close": bar.close,
-        }
-
-    raise ValueError(f"Неподдерживаемый realtime stream: {what_to_show}")
-
-
-def format_pearson_live_leader_text(item, score_field_name, score_label):
-    # Формируем короткий текст по лидеру ranking.
-    return (
-        f"{item['hour_start_ct']} CT | "
-        f"slot_ct={item['hour_slot_ct']} | "
-        f"{score_label}={item[score_field_name]:.4f}"
-    )
-
-
-def build_forecast_direction_text(forecast_summary):
-    # Короткая интерпретация направления по прогнозному слою.
-    mean_final_move = forecast_summary["mean_final_move"]
-    median_final_move = forecast_summary["median_final_move"]
-
-    if mean_final_move > 0.0 and median_final_move > 0.0:
-        return "UP"
-
-    if mean_final_move < 0.0 and median_final_move < 0.0:
-        return "DOWN"
-
-    return "MIXED"
-
-
-def format_forecast_summary_text(forecast_summary):
-    # Формируем короткий текст по сводке прогнозного слоя.
-    direction_text = build_forecast_direction_text(forecast_summary)
-
-    return (
-        f"dir={direction_text} | "
-        f"n={forecast_summary['candidate_count']} | "
-        f"up={forecast_summary['positive_ratio']:.2f} | "
-        f"down={forecast_summary['negative_ratio']:.2f} | "
-        f"mean={forecast_summary['mean_final_move'] * 100:+.3f}% | "
-        f"median={forecast_summary['median_final_move'] * 100:+.3f}%"
-    )
-
-
-def build_relaxed_shortlist_counts(pearson_live_runtime):
-    # Диагностика: сколько исторических часов прошло бы первый порог Пирсона,
-    # если ослабить его на 0.05 и на 0.10 относительно текущего боевого значения.
-    if pearson_live_runtime is None:
-        return None
-
-    current_hour = pearson_live_runtime.current_analysis_window
-    if current_hour is None:
-        return None
-
-    base_threshold = pearson_live_runtime.min_correlation
-    threshold_minus_005 = max(-1.0, base_threshold - 0.05)
-    threshold_minus_010 = max(-1.0, base_threshold - 0.10)
-
-    count_minus_005 = len(
-        current_hour.get_ranked_candidates(
-            min_correlation=threshold_minus_005,
-            top_n=None,
-        )
-    )
-    count_minus_010 = len(
-        current_hour.get_ranked_candidates(
-            min_correlation=threshold_minus_010,
-            top_n=None,
-        )
-    )
-
-    return (
-        threshold_minus_005,
-        count_minus_005,
-        threshold_minus_010,
-        count_minus_010,
-    )
-
-
-def maybe_log_pearson_live_snapshot(pearson_live_runtime):
-    # Пишем короткую диагностику live-runtime после каждого расчётного бара.
-    if pearson_live_runtime is None:
-        return
-
-    snapshot = pearson_live_runtime.get_last_snapshot()
-
-    if snapshot is None:
-        return
-
-    if not snapshot.correlation_calculated:
-        return
-
-    pearson_leader_text = "нет кандидатов"
-    if snapshot.ranked_candidates:
-        pearson_leader_text = format_pearson_live_leader_text(
-            item=snapshot.ranked_candidates[0],
-            score_field_name="correlation",
-            score_label="corr",
-        )
-
-    similarity_leader_text = "второй шаг не считался"
-    if snapshot.similarity_calculated:
-        if snapshot.ranked_similarity_candidates:
-            similarity_leader_text = format_pearson_live_leader_text(
-                item=snapshot.ranked_similarity_candidates[0],
-                score_field_name="final_score",
-                score_label="score",
-            )
-        else:
-            similarity_leader_text = "shortlist пуст"
-
-    forecast_text = "прогноз не считался"
-    if snapshot.forecast_calculated:
-        if snapshot.forecast_summary is not None:
-            forecast_text = format_forecast_summary_text(snapshot.forecast_summary)
-        else:
-            forecast_text = "нет forecast summary"
-
-    relaxed_shortlist_text = "relaxed=не считалось"
-    relaxed_counts = build_relaxed_shortlist_counts(pearson_live_runtime)
-    if relaxed_counts is not None:
-        threshold_minus_005, count_minus_005, threshold_minus_010, count_minus_010 = relaxed_counts
-        relaxed_shortlist_text = (
-            f"corr>={threshold_minus_005:.2f}:{count_minus_005} | "
-            f"corr>={threshold_minus_010:.2f}:{count_minus_010}"
-        )
-    log_info(
-        logger,
-        (
-            f"PEARSON LIVE | "
-            f"bar_index={snapshot.current_bar_index} | "
-            f"UTC_hour={snapshot.hour_start_ts} | "
-            f"CT_hour={snapshot.hour_start_ct} | "
-            f"hist={snapshot.history_candidate_count} | "
-            f"shortlist={len(snapshot.ranked_candidates)} | "
-            f"relaxed_shortlist={relaxed_shortlist_text} | "
-            f"similarity={len(snapshot.ranked_similarity_candidates)} | "
-            f"best_pearson={pearson_leader_text} | "
-            f"best_similarity={similarity_leader_text} | "
-        ),
-        to_telegram=False,
-    )
-
-
 def build_realtime_update_handler(
         ib,
         ib_health,
@@ -677,9 +522,6 @@ def build_realtime_update_handler(
         instrument_code,
         contract_local_symbol,
         recent_backfill_state,
-        pearson_live_runtime,
-        pearson_live_state,
-        active_futures,
         contract,
         what_to_show,
         conn,
@@ -738,7 +580,6 @@ def build_realtime_update_handler(
                 recent_backfill_state=recent_backfill_state,
                 what_to_show=what_to_show,
                 bar_time_ts=bar_time_ts,
-                pearson_live_runtime=pearson_live_runtime,
             )
 
         except Exception as exc:
@@ -765,7 +606,6 @@ async def load_realtime_task(
     # - открываем отдельные подписки на BID и ASK 5-second bars;
     # - пишем новые бары в SQLite в таблицу вида MNQ_5s;
     # - BID и ASK пишем независимо по мере их прихода;
-    # - для pearson_live собираем полноценный бар только когда пришли обе стороны;
     # - при reconnect умеем переподписываться на realtime BID/ASK;
     # - при зависании потока умеем предупредить и попробовать переподписаться.
     instrument_code, contract_local_symbol = get_realtime_active_future(active_futures)
