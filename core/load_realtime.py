@@ -459,7 +459,6 @@ def maybe_start_recent_backfill_task(
         recent_backfill_state,
         what_to_show,
         bar_time_ts,
-        pearson_live_runtime=None,
 ):
     # Обновляем состояние первого BID / ASK бара и,
     # когда получен первый синхронный BID/ASK bar_time_ts,
@@ -499,9 +498,6 @@ def maybe_start_recent_backfill_task(
 
             if was_loaded:
                 recent_backfill_state["last_backfill_completed_sync_ts"] = sync_ts
-
-            if pearson_live_runtime is not None:
-                pearson_live_runtime.mark_startup_backfill_completed(sync_ts=sync_ts)
 
         except asyncio.CancelledError:
             raise
@@ -571,14 +567,6 @@ def format_forecast_summary_text(forecast_summary):
         f"down={forecast_summary['negative_ratio']:.2f} | "
         f"mean={forecast_summary['mean_final_move'] * 100:+.3f}% | "
         f"median={forecast_summary['median_final_move'] * 100:+.3f}%"
-    )
-
-
-def format_decision_result_text(decision_result):
-    # Формируем короткий текст по decision layer.
-    return (
-        f"{decision_result['decision']} | "
-        f"{decision_result['reason']}"
     )
 
 
@@ -656,12 +644,6 @@ def maybe_log_pearson_live_snapshot(pearson_live_runtime):
         else:
             forecast_text = "нет forecast summary"
 
-    decision_text = "решение не считалось"
-    if snapshot.decision_calculated:
-        if snapshot.decision_result is not None:
-            decision_text = format_decision_result_text(snapshot.decision_result)
-        else:
-            decision_text = "нет decision_result"
     relaxed_shortlist_text = "relaxed=не считалось"
     relaxed_counts = build_relaxed_shortlist_counts(pearson_live_runtime)
     if relaxed_counts is not None:
@@ -683,81 +665,9 @@ def maybe_log_pearson_live_snapshot(pearson_live_runtime):
             f"similarity={len(snapshot.ranked_similarity_candidates)} | "
             f"best_pearson={pearson_leader_text} | "
             f"best_similarity={similarity_leader_text} | "
-            f"forecast={forecast_text} | "
-            f"decision={decision_text}"
         ),
         to_telegram=False,
     )
-
-
-def maybe_feed_pearson_live(
-        pearson_live_runtime,
-        pearson_live_state,
-        instrument_code,
-        what_to_show,
-        bar,
-):
-    # Кормим pearson_live только уже полностью собранным 5-секундным баром,
-    # где есть и BID, и ASK.
-    if pearson_live_runtime is None:
-        return
-
-    if instrument_code != pearson_live_runtime.instrument_code:
-        return
-
-    dt_utc = bar.time.astimezone(timezone.utc)
-    bar_time_ts = int(dt_utc.timestamp())
-    bar_time_ts_ct, bar_time_ct = build_ct_time_fields_from_utc_dt(dt_utc)
-
-    last_emitted_bar_time_ts = pearson_live_state["last_emitted_bar_time_ts"]
-
-    if (
-            last_emitted_bar_time_ts is not None
-            and bar_time_ts <= last_emitted_bar_time_ts
-    ):
-        return
-
-    pending_bars = pearson_live_state["pending_bars"]
-
-    if bar_time_ts not in pending_bars:
-        pending_bars[bar_time_ts] = {
-            "bar_time_ts": bar_time_ts,
-            "bar_time_ts_ct": bar_time_ts_ct,
-            "bar_time_ct": bar_time_ct,
-        }
-
-    pending_bars[bar_time_ts].update(
-        build_pearson_partial_bar(
-            what_to_show=what_to_show,
-            bar=bar,
-        )
-    )
-
-    pending_bar = pending_bars[bar_time_ts]
-
-    if (
-            "ask_open" not in pending_bar
-            or "bid_open" not in pending_bar
-            or "ask_close" not in pending_bar
-            or "bid_close" not in pending_bar
-    ):
-        return
-
-    pearson_live_runtime.on_closed_bar(pending_bar)
-    maybe_log_pearson_live_snapshot(pearson_live_runtime)
-    pearson_live_state["last_emitted_bar_time_ts"] = bar_time_ts
-
-    del pending_bars[bar_time_ts]
-
-    stale_bar_time_ts_list = [
-        ts for ts in pending_bars
-        if ts <= bar_time_ts
-    ]
-    for stale_bar_time_ts in stale_bar_time_ts_list:
-        del pending_bars[stale_bar_time_ts]
-
-
-
 
 
 def build_realtime_update_handler(
@@ -831,14 +741,6 @@ def build_realtime_update_handler(
                 pearson_live_runtime=pearson_live_runtime,
             )
 
-            maybe_feed_pearson_live(
-                pearson_live_runtime=pearson_live_runtime,
-                pearson_live_state=pearson_live_state,
-                instrument_code=instrument_code,
-                what_to_show=what_to_show,
-                bar=bar,
-            )
-
         except Exception as exc:
             log_warning(
                 logger,
@@ -857,7 +759,6 @@ async def load_realtime_task(
         settings,
         active_futures,
         recent_backfill_state,
-        pearson_live_runtime=None,
 ):
     # Текущая realtime-версия loader-а:
     # - берём один активный контракт из ACTIVE_FUTURES;
@@ -881,12 +782,6 @@ async def load_realtime_task(
     table_name = build_table_name(instrument_code, instrument_row["barSizeSetting"])
     db_path = settings.price_db_path
     db_conn = None
-
-    pearson_live_state = {
-        "pending_bars": {},
-        "last_emitted_bar_time_ts": None,
-    }
-
 
     realtime_monitor_state = build_realtime_monitor_state()
     # Храним все открытые подписки и их обработчики,
@@ -913,8 +808,6 @@ async def load_realtime_task(
         def subscribe_all_realtime_streams():
             clear_realtime_subscription_rows(ib, current_subscriptions)
 
-            pearson_live_state["pending_bars"].clear()
-
             for what_to_show in REALTIME_WHAT_TO_SHOW_LIST:
                 log_info(
                     logger,
@@ -937,8 +830,6 @@ async def load_realtime_task(
                     instrument_code=instrument_code,
                     contract_local_symbol=contract_local_symbol,
                     recent_backfill_state=recent_backfill_state,
-                    pearson_live_runtime=pearson_live_runtime,
-                    pearson_live_state=pearson_live_state,
                     active_futures=active_futures,
                     contract=contract,
                     what_to_show=what_to_show,

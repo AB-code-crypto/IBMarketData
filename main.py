@@ -91,11 +91,6 @@ def _start_background_tasks(
                 settings=settings,
                 active_futures=active_futures,
                 recent_backfill_state=recent_backfill_state,
-
-                # В IBDownload торговая/аналитическая часть отключена.
-                # Если load_realtime_task пока требует эти параметры,
-                # надо сделать их Optional внутри core/load_realtime.py.
-                pearson_live_runtime=None,
             ),
             name="load_realtime_task",
         ),
