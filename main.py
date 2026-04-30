@@ -43,7 +43,6 @@ def _build_recent_backfill_state() -> Dict[str, Any]:
 
 def _log_connection_details(*, server_time_text: str, active_futures: dict) -> None:
     log_info(logger, "IBDownload data-service started", to_telegram=True)
-    log_info(logger, "Trading/order execution is disabled", to_telegram=True)
     log_info(logger, f"Host: {settings.ib_host}", to_telegram=False)
     log_info(logger, f"Port: {settings.ib_port}", to_telegram=False)
     log_info(logger, f"Client ID: {settings.ib_client_id}", to_telegram=True)
@@ -97,7 +96,6 @@ def _start_background_tasks(
                 # Если load_realtime_task пока требует эти параметры,
                 # надо сделать их Optional внутри core/load_realtime.py.
                 pearson_live_runtime=None,
-                decision_order_executor=None,
             ),
             name="load_realtime_task",
         ),
