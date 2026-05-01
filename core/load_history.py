@@ -20,7 +20,7 @@ from core.time_utils import (
     format_utc,
     parse_utc_iso_to_ts,
 )
-from core.price_validation import validate_positive_price
+from core.history_bar_validation import validate_history_bid_ask_bars
 from core.price_db import write_quote_rows_to_sqlite, get_contract_history_bounds
 from core.quote_rows import build_quote_rows
 from core.history_coverage import analyze_history_coverage, describe_missing_segments
@@ -161,17 +161,6 @@ def should_load_futures_hour_chunk(chunk_start_ts, chunk_end_ts):
 
     return True
 
-
-def validate_price_value(value, field_name, stream_name, contract_name, interval_text, bar_index):
-    context = (
-        f"{stream_name} для {contract_name}, "
-        f"interval={interval_text}, bar_index={bar_index}"
-    )
-    return validate_positive_price(
-        value,
-        field_name=field_name,
-        context=context,
-    )
 
 
 async def wait_for_ib_connection(ib):
@@ -386,98 +375,12 @@ async def load_history_bid_ask_once(
         await asyncio.sleep(HISTORICAL_REQUEST_DELAY_SECONDS)
 
         interval_text = f"{format_utc(start_dt)} -> {format_utc(end_dt)}"
-        validation_error = None
-
-        for index, bar in enumerate(bid_bars):
-            validation_error = validate_price_value(
-                value=bar.open,
-                field_name="open",
-                stream_name="BID",
-                contract_name=contract.localSymbol,
-                interval_text=interval_text,
-                bar_index=index,
-            )
-            if validation_error is not None:
-                break
-
-            validation_error = validate_price_value(
-                value=bar.high,
-                field_name="high",
-                stream_name="BID",
-                contract_name=contract.localSymbol,
-                interval_text=interval_text,
-                bar_index=index,
-            )
-            if validation_error is not None:
-                break
-
-            validation_error = validate_price_value(
-                value=bar.low,
-                field_name="low",
-                stream_name="BID",
-                contract_name=contract.localSymbol,
-                interval_text=interval_text,
-                bar_index=index,
-            )
-            if validation_error is not None:
-                break
-
-            validation_error = validate_price_value(
-                value=bar.close,
-                field_name="close",
-                stream_name="BID",
-                contract_name=contract.localSymbol,
-                interval_text=interval_text,
-                bar_index=index,
-            )
-            if validation_error is not None:
-                break
-
-        if validation_error is None:
-            for index, bar in enumerate(ask_bars):
-                validation_error = validate_price_value(
-                    value=bar.open,
-                    field_name="open",
-                    stream_name="ASK",
-                    contract_name=contract.localSymbol,
-                    interval_text=interval_text,
-                    bar_index=index,
-                )
-                if validation_error is not None:
-                    break
-
-                validation_error = validate_price_value(
-                    value=bar.high,
-                    field_name="high",
-                    stream_name="ASK",
-                    contract_name=contract.localSymbol,
-                    interval_text=interval_text,
-                    bar_index=index,
-                )
-                if validation_error is not None:
-                    break
-
-                validation_error = validate_price_value(
-                    value=bar.low,
-                    field_name="low",
-                    stream_name="ASK",
-                    contract_name=contract.localSymbol,
-                    interval_text=interval_text,
-                    bar_index=index,
-                )
-                if validation_error is not None:
-                    break
-
-                validation_error = validate_price_value(
-                    value=bar.close,
-                    field_name="close",
-                    stream_name="ASK",
-                    contract_name=contract.localSymbol,
-                    interval_text=interval_text,
-                    bar_index=index,
-                )
-                if validation_error is not None:
-                    break
+        validation_error = validate_history_bid_ask_bars(
+            bid_bars=bid_bars,
+            ask_bars=ask_bars,
+            contract_name=contract.localSymbol,
+            interval_text=interval_text,
+        )
 
         if validation_error is not None:
             log_warning(
