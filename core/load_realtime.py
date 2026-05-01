@@ -20,6 +20,7 @@ from core.recent_gaps_service import (
     get_recent_backfill_sync_ts,
     backfill_recent_hour,
 )
+from core.runtime_state import RecentBackfillState, RealtimeMonitorState
 from core.time_utils import (
     CT_TIMEZONE,
     build_ct_time_fields_from_utc_dt,
@@ -74,21 +75,13 @@ def is_expected_realtime_flow_now():
 
 
 def build_realtime_monitor_state():
-    return {
-        "last_bar_monotonic": None,
-        "last_bar_time_ts": None,
-        "last_bar_stream": None,
-        "last_ok_telegram_monotonic": None,
-        "last_stall_warning_monotonic": None,
-        "last_restore_monotonic": None,
-    }
-
+    return RealtimeMonitorState()
 
 def note_realtime_bar_received(realtime_monitor_state, what_to_show, bar_time_ts):
     now_mono = time.monotonic()
-    realtime_monitor_state["last_bar_monotonic"] = now_mono
-    realtime_monitor_state["last_bar_time_ts"] = bar_time_ts
-    realtime_monitor_state["last_bar_stream"] = what_to_show
+    realtime_monitor_state.last_bar_monotonic = now_mono
+    realtime_monitor_state.last_bar_time_ts = bar_time_ts
+    realtime_monitor_state.last_bar_stream = what_to_show
 
 
 def clear_realtime_subscription_rows(ib, current_subscriptions):
@@ -330,15 +323,15 @@ def write_realtime_bar_to_sqlite(conn, table_name, contract_name, what_to_show, 
 
 def reset_recent_backfill_state(recent_backfill_state):
     # Сбрасываем состояние разовой докачки последнего часа.
-    backfill_task = recent_backfill_state["backfill_task"]
+    backfill_task = recent_backfill_state.backfill_task
 
     if backfill_task is not None and not backfill_task.done():
         backfill_task.cancel()
 
-    recent_backfill_state["first_bid_ts"] = None
-    recent_backfill_state["first_ask_ts"] = None
-    recent_backfill_state["last_backfill_completed_sync_ts"] = None
-    recent_backfill_state["backfill_task"] = None
+    recent_backfill_state.first_bid_ts = None
+    recent_backfill_state.first_ask_ts = None
+    recent_backfill_state.last_backfill_completed_sync_ts = None
+    recent_backfill_state.backfill_task = None
 
 
 def is_realtime_ready_now(ib, ib_health):
@@ -367,24 +360,24 @@ def maybe_start_recent_backfill_task(
     # когда получен первый синхронный BID/ASK bar_time_ts,
     # один раз запускаем дозагрузку последнего часа.
     first_bid_ts, first_ask_ts = note_first_realtime_bar_timestamps(
-        first_bid_ts=recent_backfill_state["first_bid_ts"],
-        first_ask_ts=recent_backfill_state["first_ask_ts"],
+        first_bid_ts=recent_backfill_state.first_bid_ts,
+        first_ask_ts=recent_backfill_state.first_ask_ts,
         what_to_show=what_to_show,
         bar_time_ts=bar_time_ts,
     )
 
-    recent_backfill_state["first_bid_ts"] = first_bid_ts
-    recent_backfill_state["first_ask_ts"] = first_ask_ts
+    recent_backfill_state.first_bid_ts = first_bid_ts
+    recent_backfill_state.first_ask_ts = first_ask_ts
 
     if not is_first_synced_bid_ask_bar_ready(first_bid_ts, first_ask_ts):
         return
 
     sync_ts = get_recent_backfill_sync_ts(first_bid_ts, first_ask_ts)
 
-    if recent_backfill_state["last_backfill_completed_sync_ts"] == sync_ts:
+    if recent_backfill_state.last_backfill_completed_sync_ts == sync_ts:
         return
 
-    backfill_task = recent_backfill_state["backfill_task"]
+    backfill_task = recent_backfill_state.backfill_task
     if backfill_task is not None and not backfill_task.done():
         return
 
@@ -400,7 +393,7 @@ def maybe_start_recent_backfill_task(
             )
 
             if was_loaded:
-                recent_backfill_state["last_backfill_completed_sync_ts"] = sync_ts
+                recent_backfill_state.last_backfill_completed_sync_ts = sync_ts
 
         except asyncio.CancelledError:
             raise
@@ -413,9 +406,9 @@ def maybe_start_recent_backfill_task(
             )
 
         finally:
-            recent_backfill_state["backfill_task"] = None
+            recent_backfill_state.backfill_task = None
 
-    recent_backfill_state["backfill_task"] = asyncio.create_task(run_recent_backfill())
+    recent_backfill_state.backfill_task = asyncio.create_task(run_recent_backfill())
 
 
 def build_realtime_update_handler(
@@ -607,7 +600,7 @@ async def load_realtime_task(
         # дозагрузить последний час.
         was_realtime_ready = is_realtime_ready_now(ib, ib_health)
         if was_realtime_ready:
-            realtime_monitor_state["last_restore_monotonic"] = time.monotonic()
+            realtime_monitor_state.last_restore_monotonic = time.monotonic()
 
         while True:
             realtime_ready_now = is_realtime_ready_now(ib, ib_health)
@@ -633,13 +626,13 @@ async def load_realtime_task(
 
                 subscribe_all_realtime_streams()
 
-                realtime_monitor_state["last_restore_monotonic"] = now_mono
-                realtime_monitor_state["last_stall_warning_monotonic"] = None
-                realtime_monitor_state["last_ok_telegram_monotonic"] = None
+                realtime_monitor_state.last_restore_monotonic = now_mono
+                realtime_monitor_state.last_stall_warning_monotonic = None
+                realtime_monitor_state.last_ok_telegram_monotonic = None
 
             if realtime_ready_now and is_expected_realtime_flow_now():
-                last_bar_monotonic = realtime_monitor_state["last_bar_monotonic"]
-                last_restore_monotonic = realtime_monitor_state["last_restore_monotonic"]
+                last_bar_monotonic = realtime_monitor_state.last_bar_monotonic
+                last_restore_monotonic = realtime_monitor_state.last_restore_monotonic
 
                 bar_is_recent = (
                         last_bar_monotonic is not None
@@ -652,7 +645,7 @@ async def load_realtime_task(
                 )
 
                 if restore_grace_passed and not bar_is_recent:
-                    last_warning = realtime_monitor_state["last_stall_warning_monotonic"]
+                    last_warning = realtime_monitor_state.last_stall_warning_monotonic
                     if last_warning is None or (now_mono - last_warning) >= REALTIME_STALL_WARNING_SECONDS:
                         log_warning(
                             logger,
@@ -665,11 +658,11 @@ async def load_realtime_task(
 
                         subscribe_all_realtime_streams()
 
-                        realtime_monitor_state["last_stall_warning_monotonic"] = now_mono
-                        realtime_monitor_state["last_restore_monotonic"] = now_mono
+                        realtime_monitor_state.last_stall_warning_monotonic = now_mono
+                        realtime_monitor_state.last_restore_monotonic = now_mono
 
                 if bar_is_recent:
-                    last_ok = realtime_monitor_state["last_ok_telegram_monotonic"]
+                    last_ok = realtime_monitor_state.last_ok_telegram_monotonic
                     if last_ok is None or (now_mono - last_ok) >= REALTIME_OK_TELEGRAM_INTERVAL_SECONDS:
                         log_info(
                             logger,
@@ -677,7 +670,7 @@ async def load_realtime_task(
                             f"новые BID/ASK бары продолжают поступать.",
                             to_telegram=True,
                         )
-                        realtime_monitor_state["last_ok_telegram_monotonic"] = now_mono
+                        realtime_monitor_state.last_ok_telegram_monotonic = now_mono
 
             was_realtime_ready = realtime_ready_now
             await asyncio.sleep(1)

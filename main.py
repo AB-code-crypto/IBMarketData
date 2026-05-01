@@ -13,6 +13,7 @@ from core.ib_connector import (
 )
 from core.load_history import load_history_task
 from core.load_realtime import load_realtime_task
+from core.runtime_state import RecentBackfillState
 from core.logger import (
     disable_telegram_logging,
     get_logger,
@@ -30,14 +31,6 @@ telegram_sender = TelegramSender(settings)
 setup_telegram_logging(telegram_sender)
 
 
-def _build_recent_backfill_state() -> dict:
-    return {
-        "first_bid_ts": None,
-        "first_ask_ts": None,
-        "last_backfill_completed_sync_ts": None,
-        "backfill_task": None,
-    }
-
 
 def _log_connection_details(*, server_time_text: str, active_futures: dict) -> None:
     log_info(logger, "IBMarketData data-service started", to_telegram=True)
@@ -54,7 +47,7 @@ def _start_background_tasks(
         ib,
         ib_health,
         active_futures: dict,
-        recent_backfill_state: dict,
+        recent_backfill_state: RecentBackfillState,
 ) -> dict[str, asyncio.Task]:
     return {
         "monitor": asyncio.create_task(
@@ -128,7 +121,7 @@ async def _shutdown_app(*, ib, shutdown_message: str, tasks: dict[str, asyncio.T
 async def main():
     shutdown_message = "IBMarketData data-service завершает работу"
     tasks: dict[str, asyncio.Task] = {}
-    recent_backfill_state = _build_recent_backfill_state()
+    recent_backfill_state = RecentBackfillState()
 
     ib, ib_health = await connect_ib(settings)
 
