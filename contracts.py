@@ -5,7 +5,7 @@ from typing import Any, Dict, Literal
 # Types
 # ==============================
 
-SecType = Literal["FUT", "IND"]
+SecType = Literal["FUT",]
 WhatToShow = Literal["TRADES", "MIDPOINT", "BID", "ASK", "BID_ASK"]
 InstrumentRow = Dict[str, Any]
 Registry = Dict[str, InstrumentRow]
@@ -19,12 +19,6 @@ FUT_DEFAULTS: InstrumentRow = {
     "barSizeSetting": "5 secs",
     "useRTH": False,
     "minTick": Decimal("0.25"),
-}
-
-IND_DEFAULTS: InstrumentRow = {
-    "secType": "IND",
-    "currency": "USD",
-    "useRTH": False,
 }
 
 # ==============================

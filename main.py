@@ -142,8 +142,8 @@ async def main():
             active_futures=active_futures,
         )
 
-        await _run_initial_history_load(ib=ib, ib_health=ib_health)
         initialize_databases_sync(settings)
+        await _run_initial_history_load(ib=ib, ib_health=ib_health)
 
         tasks = _start_background_tasks(
             ib=ib,

@@ -100,11 +100,6 @@ IB_HEALTH_WAIT_SECONDS = 1
 # Пользователь явно зафиксировал, что для фьючерсов качаем по одному часу.
 FUTURES_5_SECS_CHUNK_SECONDS = 3600
 
-# Размер куска для индексов с часовыми барами.
-# Для индекса запросы можно делать существенно крупнее, чем для 5-секундных баров.
-# 30 суток — спокойный и предсказуемый размер одного запроса.
-INDEX_1_HOUR_CHUNK_SECONDS = 30 * 24 * 3600
-
 
 def format_utc(dt, for_ib=False):
     # Универсальный форматтер времени.
@@ -188,32 +183,15 @@ def build_duration_str(start_dt, end_dt):
 
 
 def get_bar_size_seconds(bar_size_setting):
-    # Явно переводим поддерживаемые barSizeSetting в секунды.
-    #
-    # В проекте договорились работать без скрытых допущений.
-    # Поэтому если придёт новый barSizeSetting, о котором мы не знаем,
-    # то лучше упасть сразу и явно, чем молча посчитать что-то неверно.
     if bar_size_setting == "5 secs":
         return 5
-
-    if bar_size_setting == "1 hour":
-        return 3600
 
     raise ValueError(f"Неподдерживаемый barSizeSetting: {bar_size_setting}")
 
 
 def get_chunk_seconds(sec_type, bar_size_setting):
-    # Определяем размер куска historical request.
-    #
-    # Для фьючерсов пользователь явно зафиксировал:
-    # - бары 5 секунд;
-    # - качаем по одному часу.
     if sec_type == "FUT" and bar_size_setting == "5 secs":
         return FUTURES_5_SECS_CHUNK_SECONDS
-
-    # Для индекса с часовыми барами можно качать заметно более длинными кусками.
-    if sec_type == "IND" and bar_size_setting == "1 hour":
-        return INDEX_1_HOUR_CHUNK_SECONDS
 
     raise ValueError(
         f"Не задан размер куска для secType={sec_type}, barSizeSetting={bar_size_setting}"
@@ -245,17 +223,6 @@ def build_futures_contract(instrument_code, instrument_row, contract_row):
         conId=contract_row["conId"],
         localSymbol=contract_row["localSymbol"],
         lastTradeDateOrContractMonth=contract_row["lastTradeDateOrContractMonth"],
-    )
-
-
-def build_index_contract(instrument_code, instrument_row):
-    # Контракт индекса проще, чем контракт фьючерса.
-    return Contract(
-        secType=instrument_row["secType"],
-        symbol=instrument_code,
-        exchange=instrument_row["exchange"],
-        currency=instrument_row["currency"],
-        conId=instrument_row["conId"],
     )
 
 
@@ -447,35 +414,6 @@ def build_quote_rows(bid_bars, ask_bars, contract_name):
                 row["volume"],
                 row["average"],
                 row["bar_count"],
-            )
-        )
-
-    return rows
-
-
-def build_ohlc_rows(bars, contract_name):
-    # Преобразуем одиночный поток баров в строки для SQLite.
-    rows = []
-
-    for bar in bars:
-        dt = bar.date.astimezone(timezone.utc)
-        bar_time_ts = int(dt.timestamp())
-        bar_time_ts_ct, bar_time_ct = build_ct_time_fields_from_utc_dt(dt)
-
-        rows.append(
-            (
-                bar_time_ts,
-                format_utc(dt),
-                bar_time_ts_ct,
-                bar_time_ct,
-                contract_name,
-                bar.open,
-                bar.high,
-                bar.low,
-                bar.close,
-                bar.volume,
-                bar.average,
-                bar.barCount,
             )
         )
 
@@ -952,108 +890,6 @@ async def load_history_bid_ask_once(
 
         await asyncio.to_thread(
             write_quote_rows_to_sqlite,
-            db_path,
-            table_name,
-            rows,
-        )
-
-        return len(rows)
-
-
-async def load_history_single_stream_once(
-        ib,
-        ib_health,
-        contract,
-        db_path,
-        table_name,
-        start_dt,
-        end_dt,
-        bar_size_setting,
-        what_to_show,
-        use_rth,
-        contract_name,
-):
-    # Атомарная загрузка одного временного куска одиночного потока OHLC.
-    #
-    # Если IB вернул битые цены, повторяем этот же chunk заново.
-    while True:
-        bars = await request_historical_data_with_reconnect(
-            ib=ib,
-            ib_health=ib_health,
-            contract=contract,
-            end_dt=end_dt,
-            start_dt=start_dt,
-            bar_size_setting=bar_size_setting,
-            what_to_show=what_to_show,
-            use_rth=use_rth,
-        )
-
-        await asyncio.sleep(HISTORICAL_REQUEST_DELAY_SECONDS)
-
-        interval_text = f"{format_utc(start_dt)} -> {format_utc(end_dt)}"
-        validation_error = None
-
-        for index, bar in enumerate(bars):
-            validation_error = validate_price_value(
-                value=bar.open,
-                field_name="open",
-                stream_name=what_to_show,
-                contract_name=contract_name,
-                interval_text=interval_text,
-                bar_index=index,
-            )
-            if validation_error is not None:
-                break
-
-            validation_error = validate_price_value(
-                value=bar.high,
-                field_name="high",
-                stream_name=what_to_show,
-                contract_name=contract_name,
-                interval_text=interval_text,
-                bar_index=index,
-            )
-            if validation_error is not None:
-                break
-
-            validation_error = validate_price_value(
-                value=bar.low,
-                field_name="low",
-                stream_name=what_to_show,
-                contract_name=contract_name,
-                interval_text=interval_text,
-                bar_index=index,
-            )
-            if validation_error is not None:
-                break
-
-            validation_error = validate_price_value(
-                value=bar.close,
-                field_name="close",
-                stream_name=what_to_show,
-                contract_name=contract_name,
-                interval_text=interval_text,
-                bar_index=index,
-            )
-            if validation_error is not None:
-                break
-
-        if validation_error is not None:
-            log_warning(
-                logger,
-                f"Инструмент {contract_name}: historical request вернул некорректные цены {what_to_show}. "
-                f"{validation_error}. Повторяю этот же chunk",
-                to_telegram=False,
-            )
-            await asyncio.sleep(RECONNECT_WAIT_SECONDS)
-            continue
-
-        rows = build_ohlc_rows(
-            bars=bars,
-            contract_name=contract_name,
-        )
-
-        await asyncio.to_thread(
             db_path,
             table_name,
             rows,
@@ -1566,23 +1402,6 @@ async def load_history_task(ib, ib_health, settings):
             log_info(
                 logger,
                 f"Инструмент {instrument_code}: обработка всех контрактов завершена",
-                to_telegram=False,
-            )
-            continue
-
-        if instrument_row["secType"] == "IND":
-            total_rows_written += await process_index_instrument(
-                ib=ib,
-                ib_health=ib_health,
-                settings=settings,
-                instrument_code=instrument_code,
-                instrument_row=instrument_row,
-                table_name=table_name,
-            )
-
-            log_info(
-                logger,
-                f"Инструмент {instrument_code}: обработка завершена",
                 to_telegram=False,
             )
             continue
