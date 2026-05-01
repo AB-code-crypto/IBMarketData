@@ -122,9 +122,15 @@ async def _shutdown_app(*, ib, shutdown_message: str, tasks: dict[str, asyncio.T
     except Exception:
         pass
 
-    disable_telegram_logging()
-    log_info(logger, shutdown_message)
+    log_info(logger, shutdown_message, to_telegram=True)
     await wait_telegram_logging()
+
+    disable_telegram_logging()
+
+    try:
+        await telegram_sender.close()
+    except Exception:
+        pass
 
 
 async def main():
@@ -174,4 +180,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        log_info(logger, "IBMarketData data-service остановлен пользователем")
+        pass
