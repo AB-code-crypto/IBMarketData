@@ -17,9 +17,7 @@ from core.contract_utils import build_futures_contract, build_table_name
 # - log_info / log_warning: наши обёртки над logging.
 from core.logger import get_logger, log_info, log_warning
 from core.time_utils import (
-    build_ct_time_fields_from_utc_dt,
     format_utc,
-    format_utc_ts,
     parse_utc_iso_to_ts,
 )
 from core.price_validation import validate_positive_price
