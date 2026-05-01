@@ -61,8 +61,3 @@ def initialize_databases_sync(settings):
     log_info(logger, "Запускаю инициализацию price DB", to_telegram=False)
     initialize_price_database(settings)
     log_info(logger, "Инициализация price DB завершена", to_telegram=False)
-
-
-async def initialize_databases(settings):
-    """Совместимый async-wrapper для существующего main.py."""
-    initialize_databases_sync(settings)

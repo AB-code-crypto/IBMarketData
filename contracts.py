@@ -101,14 +101,4 @@ Instrument: Registry = {
     #          "active_from_utc": "2026-09-16T22:00:00Z", "active_to_utc": "2026-12-16T23:00:00Z"},
     #     ],
     # },
-    #
-    # "VIX": {
-    #     **IND_DEFAULTS,
-    #     "exchange": "CBOE",
-    #     "minTick": Decimal("0.01"),
-    #     "whatToShow": "TRADES",
-    #     "barSizeSetting": "1 hour",
-    #     "conId": 13455763,
-    #     "active_from_utc": "2025-01-01T00:00:00Z",
-    # },
 }

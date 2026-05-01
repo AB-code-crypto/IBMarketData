@@ -55,8 +55,6 @@ from core.db_initializer import build_table_name
 from core.db_sql import (
     create_quotes_table_sql,
     upsert_quotes_sql,
-    create_ohlc_table_sql,
-    upsert_ohlc_sql,
 )
 
 # Из logger берём:
@@ -488,26 +486,6 @@ def write_quote_rows_to_sqlite(db_path, table_name, rows):
     # Записываем BID/ASK строки в SQLite через UPSERT.
     create_sql = create_quotes_table_sql(table_name)
     upsert_sql = upsert_quotes_sql(table_name)
-
-    conn = sqlite3.connect(db_path)
-
-    try:
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        conn.execute("PRAGMA busy_timeout=5000;")
-
-        conn.execute(create_sql)
-        conn.executemany(upsert_sql, rows)
-        conn.commit()
-
-    finally:
-        conn.close()
-
-
-def write_ohlc_rows_to_sqlite(db_path, table_name, rows):
-    # Записываем одиночный OHLC-поток в SQLite через UPSERT.
-    create_sql = create_ohlc_table_sql(table_name)
-    upsert_sql = upsert_ohlc_sql(table_name)
 
     conn = sqlite3.connect(db_path)
 
@@ -1076,7 +1054,6 @@ async def load_history_single_stream_once(
         )
 
         await asyncio.to_thread(
-            write_ohlc_rows_to_sqlite,
             db_path,
             table_name,
             rows,

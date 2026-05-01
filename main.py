@@ -1,9 +1,9 @@
 import asyncio
-from typing import Any, Dict, Optional
+from typing import Optional
 
 from config import settings_live as settings
 from core.active_futures import build_active_futures
-from core.db_initializer import initialize_databases
+from core.db_initializer import initialize_databases_sync
 from core.ib_connector import (
     connect_ib,
     disconnect_ib,
@@ -30,7 +30,7 @@ telegram_sender = TelegramSender(settings)
 setup_telegram_logging(telegram_sender)
 
 
-def _build_recent_backfill_state() -> Dict[str, Any]:
+def _build_recent_backfill_state() -> dict:
     return {
         "first_bid_ts": None,
         "first_ask_ts": None,
@@ -47,10 +47,6 @@ def _log_connection_details(*, server_time_text: str, active_futures: dict) -> N
     log_info(logger, f"Время сервера IB: {server_time_text}", to_telegram=True)
     log_info(logger, f"Активные фьючерсы на старте: {active_futures}", to_telegram=False)
     log_info(logger, f"Price DB: {settings.price_db_path}", to_telegram=False)
-
-
-async def _bootstrap_data_runtime() -> None:
-    await initialize_databases(settings)
 
 
 def _start_background_tasks(
@@ -83,11 +79,7 @@ def _start_background_tasks(
 
 
 async def _run_initial_history_load(*, ib, ib_health) -> None:
-    history_task = asyncio.create_task(
-        load_history_task(ib, ib_health, settings),
-        name="load_history_task",
-    )
-    await history_task
+    await load_history_task(ib, ib_health, settings)
 
 
 async def _cancel_and_await(task: Optional[asyncio.Task]) -> None:
@@ -151,7 +143,7 @@ async def main():
         )
 
         await _run_initial_history_load(ib=ib, ib_health=ib_health)
-        await _bootstrap_data_runtime()
+        initialize_databases_sync(settings)
 
         tasks = _start_background_tasks(
             ib=ib,
