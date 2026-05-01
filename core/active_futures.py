@@ -32,6 +32,7 @@ def build_active_futures(server_time_text):
     # Ключ словаря результата — ключ из Instrument, например MNQ или NQ.
     # Значение — localSymbol текущего активного фьючерса.
     current_utc = parse_server_time_text(server_time_text)
+    current_utc = parse_server_time_text(server_time_text)
     active_futures = {}
 
     for instrument_code, instrument_row in Instrument.items():
