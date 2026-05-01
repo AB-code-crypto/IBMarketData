@@ -1,5 +1,4 @@
 import asyncio
-import math
 import sqlite3
 import traceback
 from datetime import timezone
@@ -14,6 +13,7 @@ from core.contract_utils import (
     get_contract_row_by_local_symbol,
 )
 from core.db_sql import upsert_quotes_ask_sql, upsert_quotes_bid_sql
+from core.price_validation import validate_positive_price
 from core.logger import get_logger, log_info, log_warning
 from core.recent_gaps_service import (
     note_first_realtime_bar_timestamps,
@@ -231,43 +231,15 @@ def cancel_realtime_bars_safe(ib, realtime_bars):
 
 
 def validate_price_value(value, field_name, stream_name, contract_name, bar_time_text):
-    # Проверяем одно конкретное ценовое поле realtime-бара.
-    #
-    # Если значение некорректно, возвращаем готовую строку для лога.
-    if value is None:
-        return (
-            f"Некорректная цена в realtime {stream_name} для {contract_name}, "
-            f"bar_time={bar_time_text}, field={field_name}, value={value}"
-        )
-
-    if isinstance(value, bool):
-        return (
-            f"Некорректная цена в realtime {stream_name} для {contract_name}, "
-            f"bar_time={bar_time_text}, field={field_name}, value={value}"
-        )
-
-    if not isinstance(value, (int, float)):
-        return (
-            f"Некорректная цена в realtime {stream_name} для {contract_name}, "
-            f"bar_time={bar_time_text}, field={field_name}, value={value}"
-        )
-
-    numeric_value = float(value)
-
-    if not math.isfinite(numeric_value):
-        return (
-            f"Некорректная цена в realtime {stream_name} для {contract_name}, "
-            f"bar_time={bar_time_text}, field={field_name}, value={value}"
-        )
-
-    if numeric_value <= 0:
-        return (
-            f"Некорректная цена в realtime {stream_name} для {contract_name}, "
-            f"bar_time={bar_time_text}, field={field_name}, value={value}"
-        )
-
-    return None
-
+    context = (
+        f"realtime {stream_name} для {contract_name}, "
+        f"bar_time={bar_time_text}"
+    )
+    return validate_positive_price(
+        value,
+        field_name=field_name,
+        context=context,
+    )
 
 def validate_realtime_bar(contract, what_to_show, bar):
     # Проверяем весь realtime-бар целиком.

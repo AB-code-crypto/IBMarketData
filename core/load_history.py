@@ -4,7 +4,6 @@
 #                  bar_time_ts + utc_offset_for_this_bar.
 
 import asyncio
-import math
 import sqlite3
 from datetime import datetime, timezone
 
@@ -29,6 +28,7 @@ from core.time_utils import (
     format_utc_ts,
     parse_utc_iso_to_ts,
 )
+from core.price_validation import validate_positive_price
 
 # Логгер именно этого файла.
 logger = get_logger(__name__)
@@ -168,52 +168,15 @@ def should_load_futures_hour_chunk(chunk_start_ts, chunk_end_ts):
 
 
 def validate_price_value(value, field_name, stream_name, contract_name, interval_text, bar_index):
-    # Главная функция валидации цены.
-    #
-    # Проверяет одно конкретное значение, например BID open или ASK high.
-    # Если цена корректна, возвращает None.
-    # Если цена плохая, возвращает готовое описание для лога.
-    #
-    # Некорректными считаем:
-    # - None;
-    # - bool;
-    # - нечисловые значения;
-    # - NaN / inf;
-    # - 0 и отрицательные цены.
-    if value is None:
-        return (
-            f"Некорректная цена в {stream_name} для {contract_name}, "
-            f"interval={interval_text}, bar_index={bar_index}, field={field_name}, value={value}"
-        )
-
-    if isinstance(value, bool):
-        return (
-            f"Некорректная цена в {stream_name} для {contract_name}, "
-            f"interval={interval_text}, bar_index={bar_index}, field={field_name}, value={value}"
-        )
-
-    if not isinstance(value, (int, float)):
-        return (
-            f"Некорректная цена в {stream_name} для {contract_name}, "
-            f"interval={interval_text}, bar_index={bar_index}, field={field_name}, value={value}"
-        )
-
-    numeric_value = float(value)
-
-    if not math.isfinite(numeric_value):
-        return (
-            f"Некорректная цена в {stream_name} для {contract_name}, "
-            f"interval={interval_text}, bar_index={bar_index}, field={field_name}, value={value}"
-        )
-
-    if numeric_value <= 0:
-        return (
-            f"Некорректная цена в {stream_name} для {contract_name}, "
-            f"interval={interval_text}, bar_index={bar_index}, field={field_name}, value={value}"
-        )
-
-    return None
-
+    context = (
+        f"{stream_name} для {contract_name}, "
+        f"interval={interval_text}, bar_index={bar_index}"
+    )
+    return validate_positive_price(
+        value,
+        field_name=field_name,
+        context=context,
+    )
 
 def build_quote_rows(bid_bars, ask_bars, contract_name):
     # Склеиваем BID и ASK бары по bar_time_ts в единые строки для SQLite.
