@@ -24,6 +24,7 @@ from core.time_utils import (
 )
 from core.price_validation import validate_positive_price
 from core.price_db import write_quote_rows_to_sqlite, get_contract_history_bounds
+from core.quote_rows import build_quote_rows
 from core.history_coverage import analyze_history_coverage, describe_missing_segments
 
 # Логгер именно этого файла.
@@ -173,98 +174,6 @@ def validate_price_value(value, field_name, stream_name, contract_name, interval
         field_name=field_name,
         context=context,
     )
-
-def build_quote_rows(bid_bars, ask_bars, contract_name):
-    # Склеиваем BID и ASK бары по bar_time_ts в единые строки для SQLite.
-    rows_by_ts = {}
-
-    for bar in ask_bars:
-        dt = bar.date.astimezone(timezone.utc)
-        bar_time_ts = int(dt.timestamp())
-        bar_time_ts_ct, bar_time_ct = build_ct_time_fields_from_utc_dt(dt)
-
-        if bar_time_ts not in rows_by_ts:
-            rows_by_ts[bar_time_ts] = {
-                "bar_time_ts": bar_time_ts,
-                "bar_time": format_utc(dt),
-                "bar_time_ts_ct": bar_time_ts_ct,
-                "bar_time_ct": bar_time_ct,
-                "contract": contract_name,
-                "ask_open": None,
-                "bid_open": None,
-                "ask_high": None,
-                "bid_high": None,
-                "ask_low": None,
-                "bid_low": None,
-                "ask_close": None,
-                "bid_close": None,
-                "volume": None,
-                "average": None,
-                "bar_count": None,
-            }
-
-        rows_by_ts[bar_time_ts]["ask_open"] = bar.open
-        rows_by_ts[bar_time_ts]["ask_high"] = bar.high
-        rows_by_ts[bar_time_ts]["ask_low"] = bar.low
-        rows_by_ts[bar_time_ts]["ask_close"] = bar.close
-
-    for bar in bid_bars:
-        dt = bar.date.astimezone(timezone.utc)
-        bar_time_ts = int(dt.timestamp())
-        bar_time_ts_ct, bar_time_ct = build_ct_time_fields_from_utc_dt(dt)
-
-        if bar_time_ts not in rows_by_ts:
-            rows_by_ts[bar_time_ts] = {
-                "bar_time_ts": bar_time_ts,
-                "bar_time": format_utc(dt),
-                "bar_time_ts_ct": bar_time_ts_ct,
-                "bar_time_ct": bar_time_ct,
-                "contract": contract_name,
-                "ask_open": None,
-                "bid_open": None,
-                "ask_high": None,
-                "bid_high": None,
-                "ask_low": None,
-                "bid_low": None,
-                "ask_close": None,
-                "bid_close": None,
-                "volume": None,
-                "average": None,
-                "bar_count": None,
-            }
-
-        rows_by_ts[bar_time_ts]["bid_open"] = bar.open
-        rows_by_ts[bar_time_ts]["bid_high"] = bar.high
-        rows_by_ts[bar_time_ts]["bid_low"] = bar.low
-        rows_by_ts[bar_time_ts]["bid_close"] = bar.close
-
-    rows = []
-
-    for bar_time_ts in sorted(rows_by_ts.keys()):
-        row = rows_by_ts[bar_time_ts]
-        rows.append(
-            (
-                row["bar_time_ts"],
-                row["bar_time"],
-                row["bar_time_ts_ct"],
-                row["bar_time_ct"],
-                row["contract"],
-                row["ask_open"],
-                row["bid_open"],
-                row["ask_high"],
-                row["bid_high"],
-                row["ask_low"],
-                row["bid_low"],
-                row["ask_close"],
-                row["bid_close"],
-                row["volume"],
-                row["average"],
-                row["bar_count"],
-            )
-        )
-
-    return rows
-
 
 
 async def wait_for_ib_connection(ib):
