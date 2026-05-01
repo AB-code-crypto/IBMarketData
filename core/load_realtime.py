@@ -74,9 +74,6 @@ def is_expected_realtime_flow_now():
     return hour != 16
 
 
-def build_realtime_monitor_state():
-    return RealtimeMonitorState()
-
 def note_realtime_bar_received(realtime_monitor_state, what_to_show, bar_time_ts):
     now_mono = time.monotonic()
     realtime_monitor_state.last_bar_monotonic = now_mono
@@ -519,7 +516,7 @@ async def load_realtime_task(
     db_path = settings.price_db_path
     db_conn = None
 
-    realtime_monitor_state = build_realtime_monitor_state()
+    realtime_monitor_state = RealtimeMonitorState()
     # Храним все открытые подписки и их обработчики,
     # чтобы в finally корректно всё снять и отменить.
     current_subscriptions = []
