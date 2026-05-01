@@ -40,7 +40,7 @@ def _build_recent_backfill_state() -> Dict[str, Any]:
 
 
 def _log_connection_details(*, server_time_text: str, active_futures: dict) -> None:
-    log_info(logger, "IBDownload data-service started", to_telegram=True)
+    log_info(logger, "IBMarketData data-service started", to_telegram=True)
     log_info(logger, f"Host: {settings.ib_host}", to_telegram=False)
     log_info(logger, f"Port: {settings.ib_port}", to_telegram=False)
     log_info(logger, f"Client ID: {settings.ib_client_id}", to_telegram=True)
@@ -128,7 +128,7 @@ async def _shutdown_app(*, ib, shutdown_message: str, tasks: dict[str, asyncio.T
 
 
 async def main():
-    shutdown_message = "IBDownload data-service завершает работу"
+    shutdown_message = "IBMarketData data-service завершает работу"
     tasks: dict[str, asyncio.Task] = {}
     recent_backfill_state = _build_recent_backfill_state()
 
@@ -159,7 +159,7 @@ async def main():
         )
 
     except asyncio.CancelledError:
-        shutdown_message = "IBDownload data-service остановлен пользователем"
+        shutdown_message = "IBMarketData data-service остановлен пользователем"
         raise
 
     finally:
@@ -174,4 +174,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        log_info(logger, "IBDownload data-service остановлен пользователем")
+        log_info(logger, "IBMarketData data-service остановлен пользователем")
