@@ -29,6 +29,7 @@ from core.time_utils import (
     parse_utc_iso_to_ts,
 )
 from core.price_validation import validate_positive_price
+from core.sqlite_utils import open_sqlite_connection
 
 # Логгер именно этого файла.
 logger = get_logger(__name__)
@@ -275,13 +276,9 @@ def write_quote_rows_to_sqlite(db_path, table_name, rows):
     create_sql = create_quotes_table_sql(table_name)
     upsert_sql = upsert_quotes_sql(table_name)
 
-    conn = sqlite3.connect(db_path)
+    conn = open_sqlite_connection(db_path)
 
     try:
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        conn.execute("PRAGMA busy_timeout=5000;")
-
         conn.execute(create_sql)
         conn.executemany(upsert_sql, rows)
         conn.commit()
@@ -296,11 +293,9 @@ def get_contract_history_bounds(db_path, table_name, contract_name):
     # Это ключевое отличие новой логики:
     # мы смотрим историю НЕ по таблице целиком,
     # а именно по текущему контракту внутри таблицы.
-    conn = sqlite3.connect(db_path)
+    conn = open_sqlite_connection(db_path, use_wal=False)
 
     try:
-        conn.execute("PRAGMA busy_timeout=5000;")
-
         cursor = conn.execute(
             f"""
             SELECT

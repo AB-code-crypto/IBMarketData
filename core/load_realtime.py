@@ -1,8 +1,6 @@
 import asyncio
-import sqlite3
 import traceback
 from datetime import timezone
-from pathlib import Path
 import time
 from datetime import datetime
 
@@ -14,6 +12,7 @@ from core.contract_utils import (
 )
 from core.db_sql import upsert_quotes_ask_sql, upsert_quotes_bid_sql
 from core.price_validation import validate_positive_price
+from core.sqlite_utils import open_sqlite_connection
 from core.logger import get_logger, log_info, log_warning
 from core.recent_gaps_service import (
     note_first_realtime_bar_timestamps,
@@ -278,31 +277,12 @@ def format_realtime_bar_message(contract, what_to_show, bar):
 
 
 def open_quotes_db(db_path):
-    # Открываем только уже существующую SQLite БД.
-    #
-    # ВАЖНО:
-    # 1) settings.price_db_path теперь уже абсолютный путь из config.py,
-    #    поэтому здесь не нужно ничего дополнительно resolve-ить.
-    #
-    # 2) Нам нельзя молча создавать новую пустую БД, если путь ошибочный.
-    #    SQLite по умолчанию именно так и делает при обычном connect().
-    #    Поэтому перед подключением ЯВНО проверяем, что файл уже существует.
-    #
-    # 3) Используем обычный sqlite3.connect(db_path), а не URI-режим
-    #    file:...?... Это проще и обычно надёжнее на Windows.
-    db_path_obj = Path(db_path)
-
-    if not db_path_obj.is_file():
-        raise FileNotFoundError(
-            f"Файл SQLite БД не найден: {db_path_obj}. "
-            f"Realtime loader не должен создавать новую БД автоматически."
-        )
-
-    conn = sqlite3.connect(str(db_path_obj))
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA synchronous=NORMAL;")
-    conn.execute("PRAGMA busy_timeout=5000;")
-    return conn
+    # Realtime loader открывает только уже существующую price DB.
+    # Первый старт и создание БД выполняются заранее через initialize_databases_sync().
+    return open_sqlite_connection(
+        db_path,
+        require_existing_file=True,
+    )
 
 
 def write_realtime_bar_to_sqlite(conn, table_name, contract_name, what_to_show, bar):

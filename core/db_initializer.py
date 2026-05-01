@@ -1,21 +1,20 @@
-import sqlite3
 from typing import Iterable
-from pathlib import Path
 from contracts import Instrument
 from core.contract_utils import build_table_name
 from core.db_sql import create_quotes_table_sql
 from core.logger import get_logger, log_info
+from core.sqlite_utils import open_sqlite_connection
 
 logger = get_logger(__name__)
 
 
 def create_db_objects_if_missing(db_path, sql_list: Iterable[str]):
-    db_path_obj = Path(db_path)
-    db_path_obj.parent.mkdir(parents=True, exist_ok=True)
-
-    conn = sqlite3.connect(str(db_path_obj))
+    conn = open_sqlite_connection(
+        db_path,
+        create_parent_dir=True,
+        use_wal=False,
+    )
     try:
-        conn.execute("PRAGMA busy_timeout=5000;")
         for sql in sql_list:
             conn.execute(sql)
         conn.commit()
