@@ -2,11 +2,7 @@ import sqlite3
 from typing import Iterable
 
 from contracts import Instrument
-from core.db_sql import (
-    create_prepared_quotes_indexes_sql,
-    create_prepared_quotes_table_sql,
-    create_quotes_table_sql,
-)
+from core.db_sql import create_quotes_table_sql
 from core.logger import get_logger, log_info
 
 logger = get_logger(__name__)
@@ -60,38 +56,13 @@ def initialize_price_database(settings):
         )
 
 
-def initialize_prepared_database(settings):
-    """Создаём таблицы prepared БД только для FUT-инструментов."""
-    for instrument_code, instrument_row in Instrument.items():
-        if instrument_row["secType"] != "FUT":
-            continue
-
-        table_name = build_table_name(
-            instrument_code=instrument_code,
-            bar_size_setting=instrument_row["barSizeSetting"],
-        )
-        create_db_objects_if_missing(
-            settings.prepared_db_path,
-            [
-                create_prepared_quotes_table_sql(table_name),
-                *create_prepared_quotes_indexes_sql(table_name),
-            ],
-        )
-        log_info(
-            logger,
-            f"Проверил prepared-таблицу {table_name} в БД {settings.prepared_db_path}: FUT/Pearson",
-            to_telegram=False,
-        )
-
-
 def initialize_databases_sync(settings):
-    """Синхронная точка входа инициализации всех проектных БД."""
-    log_info(logger, "Запускаю инициализацию проектных БД", to_telegram=False)
+    """Синхронная точка входа инициализации price DB."""
+    log_info(logger, "Запускаю инициализацию price DB", to_telegram=False)
     initialize_price_database(settings)
-    initialize_prepared_database(settings)
-    log_info(logger, "Инициализация проектных БД завершена", to_telegram=False)
+    log_info(logger, "Инициализация price DB завершена", to_telegram=False)
 
 
 async def initialize_databases(settings):
-    """Совместимый async-wrapper для существующих мест вызова."""
+    """Совместимый async-wrapper для существующего main.py."""
     initialize_databases_sync(settings)

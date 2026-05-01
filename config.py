@@ -12,7 +12,6 @@ class Settings:
 
     # Файл SQLite БД
     price_db_path: str = str(BASE_DIR / "data" / "price.sqlite3")
-    prepared_db_path: str = str(BASE_DIR / "data" / "prepared.sqlite3")
 
     # ==============================
     # Telegram bot / channels

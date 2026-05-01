@@ -22,8 +22,6 @@ from core.logger import (
     wait_telegram_logging,
 )
 from core.telegram_sender import TelegramSender
-from ts.prepared_task import prepared_db_sync_task, run_prepared_sync_once
-
 
 setup_logging()
 logger = get_logger(__name__)
@@ -49,31 +47,18 @@ def _log_connection_details(*, server_time_text: str, active_futures: dict) -> N
     log_info(logger, f"Время сервера IB: {server_time_text}", to_telegram=True)
     log_info(logger, f"Активные фьючерсы на старте: {active_futures}", to_telegram=False)
     log_info(logger, f"Price DB: {settings.price_db_path}", to_telegram=False)
-    log_info(logger, f"Prepared DB: {settings.prepared_db_path}", to_telegram=False)
 
 
 async def _bootstrap_data_runtime() -> None:
-    """
-    Разовый bootstrap data-service перед запуском realtime.
-
-    Создаём нужные БД/таблицы и один раз синхронизируем prepared DB,
-    чтобы realtime-контур стартовал уже с актуальной prepared-базой.
-    """
     await initialize_databases(settings)
-
-    await run_prepared_sync_once(
-        settings=settings,
-        instrument_code="MNQ",
-        lookback_days=31,
-    )
 
 
 def _start_background_tasks(
-    *,
-    ib,
-    ib_health,
-    active_futures: dict,
-    recent_backfill_state: dict,
+        *,
+        ib,
+        ib_health,
+        active_futures: dict,
+        recent_backfill_state: dict,
 ) -> dict[str, asyncio.Task]:
     return {
         "monitor": asyncio.create_task(
@@ -93,15 +78,6 @@ def _start_background_tasks(
                 recent_backfill_state=recent_backfill_state,
             ),
             name="load_realtime_task",
-        ),
-        "prepared_sync": asyncio.create_task(
-            prepared_db_sync_task(
-                settings=settings,
-                instrument_code="MNQ",
-                lookback_days=31,
-                run_immediately=False,
-            ),
-            name="prepared_db_sync_task",
         ),
     }
 
@@ -128,7 +104,6 @@ async def _cancel_and_await(task: Optional[asyncio.Task]) -> None:
 
 async def _shutdown_background_tasks(tasks: dict[str, asyncio.Task]) -> None:
     shutdown_order = (
-        "prepared_sync",
         "realtime",
         "heartbeat",
         "monitor",
@@ -181,7 +156,6 @@ async def main():
 
         await asyncio.gather(
             tasks["realtime"],
-            tasks["prepared_sync"],
         )
 
     except asyncio.CancelledError:
