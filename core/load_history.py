@@ -4,7 +4,6 @@
 #                  bar_time_ts + utc_offset_for_this_bar.
 
 import asyncio
-import sqlite3
 from datetime import datetime, timezone
 
 # Instrument — реестр инструментов из contracts.py.
@@ -13,11 +12,6 @@ from core.contract_utils import build_futures_contract, build_table_name
 
 # Из db_sql берём SQL-шаблоны создания таблиц и upsert.
 # Структуру таблиц держим централизованно в одном месте.
-from core.db_sql import (
-    create_quotes_table_sql,
-    upsert_quotes_sql,
-)
-
 # Из logger берём:
 # - get_logger: чтобы создать логгер именно этого модуля;
 # - log_info / log_warning: наши обёртки над logging.
@@ -29,7 +23,7 @@ from core.time_utils import (
     parse_utc_iso_to_ts,
 )
 from core.price_validation import validate_positive_price
-from core.sqlite_utils import open_sqlite_connection
+from core.price_db import write_quote_rows_to_sqlite, get_contract_history_bounds
 from core.history_coverage import analyze_history_coverage, describe_missing_segments
 
 # Логгер именно этого файла.
@@ -270,59 +264,6 @@ def build_quote_rows(bid_bars, ask_bars, contract_name):
         )
 
     return rows
-
-
-def write_quote_rows_to_sqlite(db_path, table_name, rows):
-    # Записываем BID/ASK строки в SQLite через UPSERT.
-    create_sql = create_quotes_table_sql(table_name)
-    upsert_sql = upsert_quotes_sql(table_name)
-
-    conn = open_sqlite_connection(db_path)
-
-    try:
-        conn.execute(create_sql)
-        conn.executemany(upsert_sql, rows)
-        conn.commit()
-
-    finally:
-        conn.close()
-
-
-def get_contract_history_bounds(db_path, table_name, contract_name):
-    # Получаем минимальный и максимальный bar_time_ts по конкретному contract.
-    #
-    # Это ключевое отличие новой логики:
-    # мы смотрим историю НЕ по таблице целиком,
-    # а именно по текущему контракту внутри таблицы.
-    conn = open_sqlite_connection(db_path, use_wal=False)
-
-    try:
-        cursor = conn.execute(
-            f"""
-            SELECT
-                MIN(bar_time_ts) AS min_bar_time_ts,
-                MAX(bar_time_ts) AS max_bar_time_ts
-            FROM {table_name}
-            WHERE contract = ?
-            """,
-            (contract_name,),
-        )
-        row = cursor.fetchone()
-
-        if row is None:
-            return None, None
-
-        if row[0] is None or row[1] is None:
-            return None, None
-
-        return int(row[0]), int(row[1])
-
-    except sqlite3.OperationalError:
-        # Если таблицы ещё нет, считаем, что истории нет совсем.
-        return None, None
-
-    finally:
-        conn.close()
 
 
 
