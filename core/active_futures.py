@@ -31,14 +31,15 @@ def build_active_futures(server_time_text):
     #
     # Ключ словаря результата — ключ из Instrument, например MNQ или NQ.
     # Значение — localSymbol текущего активного фьючерса.
-    #
-    # Индексы здесь полностью пропускаем.
     current_utc = parse_server_time_text(server_time_text)
     active_futures = {}
 
     for instrument_code, instrument_row in Instrument.items():
-        if instrument_row["secType"] == "IND":
-            continue
+        if instrument_row["secType"] != "FUT":
+            raise ValueError(
+                f"Неподдерживаемый secType для active futures: "
+                f"instrument={instrument_code}, secType={instrument_row['secType']}"
+            )
 
         current_local_symbol = None
 
