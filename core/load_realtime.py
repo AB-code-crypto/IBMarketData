@@ -4,7 +4,6 @@ import sqlite3
 import traceback
 from datetime import timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 import time
 from datetime import datetime
 
@@ -19,6 +18,11 @@ from core.recent_gaps_service import (
     is_first_synced_bid_ask_bar_ready,
     get_recent_backfill_sync_ts,
     backfill_recent_hour,
+)
+from core.time_utils import (
+    CT_TIMEZONE,
+    build_ct_time_fields_from_utc_dt,
+    format_utc,
 )
 
 logger = get_logger(__name__)
@@ -43,13 +47,12 @@ REALTIME_STALL_WARNING_SECONDS = 30
 REALTIME_OK_TELEGRAM_INTERVAL_SECONDS = 600
 REALTIME_RESUBSCRIBE_GRACE_SECONDS = 15
 
-CHICAGO_TZ = ZoneInfo("America/Chicago")
 
 
 def is_expected_realtime_flow_now():
     # Грубая проверка, должен ли сейчас вообще идти поток 5-секундных баров для CME MNQ.
     # Используем CT.
-    now_ct = datetime.now(CHICAGO_TZ)
+    now_ct = datetime.now(CT_TIMEZONE)
     weekday = now_ct.weekday()  # Mon=0 ... Sun=6
     hour = now_ct.hour
 
@@ -250,33 +253,6 @@ def cancel_realtime_bars_safe(ib, realtime_bars):
             to_telegram=False,
         )
 
-
-def format_utc(dt):
-    # Универсальный формат времени в UTC для БД и логов.
-    dt = dt.astimezone(timezone.utc)
-    return dt.strftime("%Y-%m-%d %H:%M:%S")
-
-
-def build_ct_time_fields_from_utc_dt(dt_utc):
-    # Строим CT-поля из UTC datetime.
-    #
-    # bar_time_ts_ct - это локальная числовая ось проекта в CT,
-    # а не стандартный Unix timestamp.
-    dt_utc = dt_utc.astimezone(timezone.utc)
-    utc_ts = int(dt_utc.timestamp())
-
-    dt_ct = dt_utc.astimezone(CHICAGO_TZ)
-    ct_offset = dt_ct.utcoffset()
-
-    if ct_offset is None:
-        raise ValueError(
-            f"Не удалось определить UTC offset для Chicago time. dt_utc={dt_utc}"
-        )
-
-    bar_time_ts_ct = utc_ts + int(ct_offset.total_seconds())
-    bar_time_ct = dt_ct.strftime("%Y-%m-%d %H:%M:%S")
-
-    return bar_time_ts_ct, bar_time_ct
 
 
 def validate_price_value(value, field_name, stream_name, contract_name, bar_time_text):

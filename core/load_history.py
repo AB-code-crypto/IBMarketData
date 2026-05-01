@@ -7,7 +7,6 @@ import asyncio
 import math
 import sqlite3
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
 
 from ib_async import Contract
 
@@ -26,15 +25,16 @@ from core.db_sql import (
 # - get_logger: чтобы создать логгер именно этого модуля;
 # - log_info / log_warning: наши обёртки над logging.
 from core.logger import get_logger, log_info, log_warning
+from core.time_utils import (
+    build_ct_time_fields_from_utc_dt,
+    format_utc,
+    format_utc_ts,
+    parse_utc_iso_to_ts,
+)
 
 # Логгер именно этого файла.
 logger = get_logger(__name__)
 
-# Рыночная временная зона CME для MNQ/NQ.
-#
-# В проекте договорились хранить базовый timestamp в UTC,
-# а дополнительно сохранять локальное биржевое время Chicago / Central Time.
-CT_TIMEZONE = ZoneInfo("America/Chicago")
 
 # Пауза после каждого historical request.
 #
@@ -65,63 +65,6 @@ IB_HEALTH_WAIT_SECONDS = 1
 # Пользователь явно зафиксировал, что для фьючерсов качаем по одному часу.
 FUTURES_5_SECS_CHUNK_SECONDS = 3600
 
-
-def format_utc(dt, for_ib=False):
-    # Универсальный форматтер времени.
-    #
-    # На вход всегда ждём datetime.
-    # Сразу принудительно приводим его к UTC,
-    # чтобы в БД, в логах и в IB request не было смешения часовых поясов.
-    dt = dt.astimezone(timezone.utc)
-
-    # Формат для reqHistoricalDataAsync.
-    if for_ib:
-        return dt.strftime("%Y%m%d %H:%M:%S UTC")
-
-    # Обычный человекочитаемый формат для БД и логов.
-    return dt.strftime("%Y-%m-%d %H:%M:%S")
-
-
-def format_utc_ts(ts):
-    # Удобный helper: из unix timestamp сразу делаем строку UTC для логов.
-    return format_utc(datetime.fromtimestamp(ts, tz=timezone.utc))
-
-
-def build_ct_time_fields_from_utc_dt(dt_utc):
-    # По UTC datetime считаем два дополнительных поля для БД:
-    # - bar_time_ts_ct: локальная числовая ось времени в CT;
-    # - bar_time_ct: человекочитаемое локальное время в CT.
-    #
-    # Важно:
-    # bar_time_ts_ct — это не POSIX timestamp в строгом смысле,
-    # а именно локальный числовой CT-timestamp проекта.
-    # Он нужен, чтобы стратегическая логика могла работать по CT-часам
-    # без постоянных runtime-конвертаций туда-обратно.
-    dt_utc = dt_utc.astimezone(timezone.utc)
-    dt_ct = dt_utc.astimezone(CT_TIMEZONE)
-
-    utc_ts = int(dt_utc.timestamp())
-    ct_offset = dt_ct.utcoffset()
-
-    if ct_offset is None:
-        raise ValueError("Не удалось определить UTC offset для CT timezone")
-
-    bar_time_ts_ct = utc_ts + int(ct_offset.total_seconds())
-    bar_time_ct = dt_ct.strftime("%Y-%m-%d %H:%M:%S")
-
-    return bar_time_ts_ct, bar_time_ct
-
-
-def parse_utc_iso_to_ts(utc_text):
-    # Преобразуем ISO-строку вида 2024-03-13T22:00:00Z в unix timestamp.
-    #
-    # В проекте договорились хранить в реестре контрактов именно UTC-время
-    # в текстовом виде и не дублировать рядом ещё и заранее посчитанный timestamp.
-    # Поэтому в загрузчике, где нужен timestamp для арифметики интервалов,
-    # считаем его локально и явно.
-    dt = datetime.strptime(utc_text, "%Y-%m-%dT%H:%M:%SZ")
-    dt = dt.replace(tzinfo=timezone.utc)
-    return int(dt.timestamp())
 
 
 def format_exception_for_log(exc):
