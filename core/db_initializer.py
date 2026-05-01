@@ -2,25 +2,11 @@ import sqlite3
 from typing import Iterable
 from pathlib import Path
 from contracts import Instrument
+from core.contract_utils import build_table_name
 from core.db_sql import create_quotes_table_sql
 from core.logger import get_logger, log_info
 
 logger = get_logger(__name__)
-
-
-def build_table_name(instrument_code, bar_size_setting):
-    """Приводим barSizeSetting к короткому и предсказуемому суффиксу имени таблицы."""
-    suffix = (
-        bar_size_setting
-        .replace(" ", "")
-        .replace("secs", "s")
-        .replace("sec", "s")
-        .replace("hours", "h")
-        .replace("hour", "h")
-        .replace("mins", "m")
-        .replace("min", "m")
-    )
-    return f"{instrument_code}_{suffix}"
 
 
 def create_db_objects_if_missing(db_path, sql_list: Iterable[str]):

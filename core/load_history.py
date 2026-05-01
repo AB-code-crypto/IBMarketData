@@ -8,11 +8,9 @@ import math
 import sqlite3
 from datetime import datetime, timezone
 
-from ib_async import Contract
-
 # Instrument — реестр инструментов из contracts.py.
 from contracts import Instrument
-from core.db_initializer import build_table_name
+from core.contract_utils import build_futures_contract, build_table_name
 
 # Из db_sql берём SQL-шаблоны создания таблиц и upsert.
 # Структуру таблиц держим централизованно в одном месте.
@@ -113,25 +111,6 @@ def align_timestamp_down(ts, step_seconds):
     # - ts=10:03:27 и step=5 -> 10:03:25
     # - ts=10:03:27 и step=3600 -> 10:00:00
     return ts - (ts % step_seconds)
-
-
-def build_futures_contract(instrument_code, instrument_row, contract_row):
-    # Собираем полноценный IB Contract для фьючерса.
-    #
-    # Важный момент проекта:
-    # мы НЕ делаем дополнительный resolve через IB,
-    # потому что все нужные поля уже заранее прописаны в contracts.py.
-    return Contract(
-        secType=instrument_row["secType"],
-        symbol=instrument_code,
-        exchange=instrument_row["exchange"],
-        currency=instrument_row["currency"],
-        tradingClass=instrument_row["tradingClass"],
-        multiplier=str(instrument_row["multiplier"]),
-        conId=contract_row["conId"],
-        localSymbol=contract_row["localSymbol"],
-        lastTradeDateOrContractMonth=contract_row["lastTradeDateOrContractMonth"],
-    )
 
 
 def iter_chunks(start_ts, end_ts, chunk_seconds):

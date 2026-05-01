@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
 
 from contracts import Instrument
-from core.db_initializer import build_table_name
-from core.load_history import build_futures_contract, load_quotes_segment
+from core.contract_utils import build_futures_contract, build_table_name
+from core.load_history import load_quotes_segment
 from core.time_utils import format_utc, parse_utc_iso_to_ts
 from core.logger import get_logger, log_info
 

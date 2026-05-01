@@ -7,10 +7,12 @@ from pathlib import Path
 import time
 from datetime import datetime
 
-from ib_async import Contract
-
 from contracts import Instrument
-from core.db_initializer import build_table_name
+from core.contract_utils import (
+    build_futures_contract,
+    build_table_name,
+    get_contract_row_by_local_symbol,
+)
 from core.db_sql import upsert_quotes_ask_sql, upsert_quotes_bid_sql
 from core.logger import get_logger, log_info, log_warning
 from core.recent_gaps_service import (
@@ -111,22 +113,6 @@ def clear_realtime_subscription_rows(ib, current_subscriptions):
     current_subscriptions.clear()
 
 
-def build_futures_contract(instrument_code, instrument_row, contract_row):
-    # Собираем IB Contract без дополнительного resolve через IB.
-    # Все нужные поля уже заранее зафиксированы в contracts.py.
-    return Contract(
-        secType=instrument_row["secType"],
-        symbol=instrument_code,
-        exchange=instrument_row["exchange"],
-        currency=instrument_row["currency"],
-        tradingClass=instrument_row["tradingClass"],
-        multiplier=str(instrument_row["multiplier"]),
-        conId=contract_row["conId"],
-        localSymbol=contract_row["localSymbol"],
-        lastTradeDateOrContractMonth=contract_row["lastTradeDateOrContractMonth"],
-    )
-
-
 def get_realtime_instrument_row(instrument_code):
     # Берём настройки инструмента из нашего реестра.
     if instrument_code not in Instrument:
@@ -145,17 +131,6 @@ def get_realtime_instrument_row(instrument_code):
         )
 
     return instrument_row
-
-
-def get_contract_row_by_local_symbol(instrument_row, local_symbol):
-    # Ищем в contracts.py строго тот контракт, который указали в настройках.
-    for contract_row in instrument_row["contracts"]:
-        if contract_row["localSymbol"] == local_symbol:
-            return contract_row
-
-    raise ValueError(
-        f"Контракт {local_symbol} не найден в списке contracts для инструмента"
-    )
 
 
 def get_realtime_active_future(active_futures):
@@ -646,7 +621,6 @@ async def load_realtime_task(
                     instrument_code=instrument_code,
                     contract_local_symbol=contract_local_symbol,
                     recent_backfill_state=recent_backfill_state,
-                    active_futures=active_futures,
                     contract=contract,
                     what_to_show=what_to_show,
                     conn=db_conn,
