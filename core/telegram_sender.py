@@ -10,8 +10,11 @@ class TelegramSender:
     def __init__(self, settings):
         # Токен бота Telegram.
         self.bot_token = settings.telegram_bot_token
-        # Канал по умолчанию для технических сообщений и логов.
+        # Группа или канал по умолчанию для технических сообщений и логов.
         self.default_chat_id = settings.telegram_chat_id_tech
+        # Тема по умолчанию внутри Telegram-группы.
+        # Если группа без тем или писать нужно в общий чат, оставляем None.
+        self.default_message_thread_id = settings.telegram_message_thread_id_tech
         # Если токен или chat_id по умолчанию не заданы,
         # модуль Telegram считаем выключенным.
         self.enabled = bool(self.bot_token and self.default_chat_id)
@@ -35,6 +38,26 @@ class TelegramSender:
             timeout = aiohttp.ClientTimeout(total=TELEGRAM_REQUEST_TIMEOUT_SECONDS)
             self.session = aiohttp.ClientSession(timeout=timeout)
         return True
+
+    def _resolve_chat_id(self, chat_id):
+        # Если chat_id явно передан в вызове, используем его.
+        # Иначе отправляем в группу или канал по умолчанию.
+        if chat_id is not None and str(chat_id).strip() != "":
+            return str(chat_id)
+
+        return str(self.default_chat_id)
+
+    def _resolve_message_thread_id(self, message_thread_id):
+        # Если тема явно передана в вызове, используем её.
+        # Иначе используем техническую тему по умолчанию из настроек.
+        if message_thread_id is None:
+            message_thread_id = self.default_message_thread_id
+
+        # None или пустая строка означает: писать без указания темы.
+        if message_thread_id is None or str(message_thread_id).strip() == "":
+            return None
+
+        return int(message_thread_id)
 
     def _split_text(self, text, limit):
         # Разрезаем длинный текст на части не длиннее limit.
@@ -79,9 +102,12 @@ class TelegramSender:
             # Повторных попыток не делаем.
             return False
 
-    async def send_text(self, text):
+    async def send_text(self, text, chat_id=None, message_thread_id=None):
         # Отправка обычного текста.
-        chat_id = str(self.default_chat_id)
+        # chat_id и message_thread_id можно передать явно,
+        # но для штатных логов используются значения из настроек.
+        resolved_chat_id = self._resolve_chat_id(chat_id)
+        resolved_message_thread_id = self._resolve_message_thread_id(message_thread_id)
 
         # Если текст длиннее лимита Telegram, режем на части
         # и отправляем последовательно.
@@ -92,9 +118,12 @@ class TelegramSender:
         result = True
         for chunk in chunks:
             payload = {
-                "chat_id": chat_id,
+                "chat_id": resolved_chat_id,
                 "text": chunk,
             }
+
+            if resolved_message_thread_id is not None:
+                payload["message_thread_id"] = resolved_message_thread_id
 
             ok = await self._post_json("sendMessage", payload)
             if not ok:
