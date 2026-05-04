@@ -87,27 +87,16 @@ class TelegramSender:
         return chunks
 
     async def _post_json(self, method, payload):
-        # Делаем JSON POST в Bot API.
-        # Если Telegram вернул ошибку, возвращаем False.
-        # Логировать здесь нельзя: иначе при проблеме Telegram можно получить цикл логирования.
+        # Делаем простой JSON POST в Bot API.
+        # Ничего не валидируем по ответу Telegram, просто отправляем.
         if not await self._ensure_session():
             return False
 
         url = f"{self.base_url}/{method}"
-
         try:
             async with self.session.post(url, json=payload) as response:
-                try:
-                    response_payload = await response.json(content_type=None)
-                except Exception:
-                    await response.read()
-                    return False
-
-                if response.status < 200 or response.status >= 300:
-                    return False
-
-                return bool(response_payload.get("ok"))
-
+                await response.read()
+                return True
         except Exception:
             # Не валим робота из-за проблем Telegram.
             # Повторных попыток не делаем.

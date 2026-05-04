@@ -1,0 +1,67 @@
+from datetime import datetime, timezone
+
+from core.time_utils import CT_TIMEZONE
+
+
+def should_load_futures_hour_chunk(chunk_start_ts, chunk_end_ts):
+    # Проверяем, попадает ли часовой chunk в гарантированное weekend-окно CME
+    # для MNQ/NQ в UTC.
+    #
+    # Логика специально консервативная:
+    # пропускаем только гарантированно закрытое окно,
+    # чтобы случайно не отрезать торговые бары на переходах летнего/зимнего времени.
+    #
+    # Функция возвращает:
+    # - True  -> chunk надо качать;
+    # - False -> chunk гарантированно попал на выходные, пропускаем.
+    chunk_start_dt = datetime.fromtimestamp(chunk_start_ts, tz=timezone.utc)
+    chunk_end_dt = datetime.fromtimestamp(chunk_end_ts, tz=timezone.utc)
+
+    # Для safety-логики функция рассчитана именно на часовые chunk-и.
+    # Если когда-нибудь сюда начнут передавать другой размер,
+    # лучше упасть сразу и явно.
+    if int((chunk_end_dt - chunk_start_dt).total_seconds()) > 3600:
+        raise ValueError(
+            f"Функция should_load_futures_hour_chunk рассчитана только на часовые интервалы. "
+            f"Получен интервал: {chunk_start_dt}-{chunk_end_dt}"
+        )
+
+    start_weekday = chunk_start_dt.weekday()
+    start_hour = chunk_start_dt.hour
+
+    # Пятница после 22:00 UTC и до конца суток — гарантированно выходные.
+    if start_weekday == 4 and start_hour >= 22:
+        return False
+
+    # Вся суббота целиком гарантированно попадает в weekend-окно.
+    if start_weekday == 5:
+        return False
+
+    # Воскресенье до 22:00 UTC не торгуется.
+    if start_weekday == 6 and start_hour < 22:
+        return False
+
+    return True
+
+
+def is_expected_realtime_flow_now():
+    # Грубая проверка, должен ли сейчас вообще идти поток 5-секундных баров для CME MNQ.
+    # Используем Chicago time, потому что расписание CME естественнее проверять в CT.
+    now_ct = datetime.now(CT_TIMEZONE)
+    weekday = now_ct.weekday()  # Mon=0 ... Sun=6
+    hour = now_ct.hour
+
+    # Суббота полностью закрыта.
+    if weekday == 5:
+        return False
+
+    # Воскресенье: открытие с 17:00 CT.
+    if weekday == 6:
+        return hour >= 17
+
+    # Пятница: торговля до 16:00 CT.
+    if weekday == 4:
+        return hour < 16
+
+    # Пн-Чт: ежедневный клиринг/maintenance 16:00-17:00 CT.
+    return hour != 16

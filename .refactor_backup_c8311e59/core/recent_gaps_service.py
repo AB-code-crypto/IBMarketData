@@ -2,9 +2,9 @@ from datetime import datetime, timezone
 
 from contracts import Instrument
 from core.contract_utils import build_futures_contract, build_table_name
-from core.history_segment_loader import load_quotes_segment
-from core.logger import get_logger, log_info
+from core.load_history import load_quotes_segment
 from core.time_utils import format_utc, parse_utc_iso_to_ts
+from core.logger import get_logger, log_info
 
 logger = get_logger(__name__)
 

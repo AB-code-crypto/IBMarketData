@@ -1,6 +1,4 @@
 import asyncio
-from dataclasses import dataclass
-from typing import Optional
 
 from config import settings_live as settings
 from core.active_futures import build_active_futures
@@ -14,6 +12,7 @@ from core.ib_connector import (
 )
 from core.load_history import load_history_task
 from core.load_realtime import load_realtime_task
+from core.runtime_state import RecentBackfillState
 from core.logger import (
     disable_telegram_logging,
     get_logger,
@@ -22,7 +21,6 @@ from core.logger import (
     setup_telegram_logging,
     wait_telegram_logging,
 )
-from core.runtime_state import RecentBackfillState
 from core.telegram_sender import TelegramSender
 
 setup_logging()
@@ -30,18 +28,6 @@ logger = get_logger(__name__)
 
 telegram_sender = TelegramSender(settings)
 setup_telegram_logging(telegram_sender)
-
-
-@dataclass
-class BackgroundTasks:
-    # Фоновые задачи, которые живут после начальной загрузки истории.
-    realtime: asyncio.Task
-    heartbeat: asyncio.Task
-    monitor: asyncio.Task
-
-    def as_tuple(self) -> tuple[asyncio.Task, ...]:
-        # Удобное представление для групповой отмены задач.
-        return self.realtime, self.heartbeat, self.monitor
 
 
 def _log_connection_details(*, server_time_text: str, active_futures: dict) -> None:
@@ -73,12 +59,7 @@ def _start_background_tasks(*, ib, ib_health, active_futures: dict, recent_backf
         ),
         name="load_realtime_task",
     )
-
-    return BackgroundTasks(
-        realtime=realtime_task,
-        heartbeat=heartbeat_task,
-        monitor=monitor_task,
-    )
+    return realtime_task, heartbeat_task, monitor_task
 
 
 async def _cancel_tasks(*tasks: asyncio.Task) -> None:
@@ -96,9 +77,8 @@ async def _cancel_tasks(*tasks: asyncio.Task) -> None:
             pass
 
 
-async def _shutdown_app(*, ib, shutdown_message: str, tasks: Optional[BackgroundTasks]) -> None:
-    if tasks is not None:
-        await _cancel_tasks(*tasks.as_tuple())
+async def _shutdown_app(*, ib, shutdown_message: str, tasks: tuple[asyncio.Task, ...]) -> None:
+    await _cancel_tasks(*tasks)
 
     try:
         disconnect_ib(ib)
@@ -119,7 +99,7 @@ async def _shutdown_app(*, ib, shutdown_message: str, tasks: Optional[Background
 
 async def main():
     shutdown_message = "IBMarketData data-service завершает работу"
-    background_tasks: Optional[BackgroundTasks] = None
+    background_tasks: tuple[asyncio.Task, ...] = ()
     recent_backfill_state = RecentBackfillState()
 
     ib, ib_health = await connect_ib(settings)
@@ -143,7 +123,8 @@ async def main():
             recent_backfill_state=recent_backfill_state,
         )
 
-        await background_tasks.realtime
+        realtime_task = background_tasks[0]
+        await realtime_task
 
     except asyncio.CancelledError:
         shutdown_message = "IBMarketData data-service остановлен пользователем"

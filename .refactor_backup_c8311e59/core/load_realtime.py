@@ -1,41 +1,40 @@
 import asyncio
-import time
 import traceback
 from datetime import timezone
+import time
+from datetime import datetime
 
 from contracts import Instrument
-from core.cme_session import is_expected_realtime_flow_now
 from core.contract_utils import (
     build_futures_contract,
     build_table_name,
     get_contract_row_by_local_symbol,
 )
-from core.logger import get_logger, log_info, log_warning
+from core.db_sql import upsert_quotes_ask_sql, upsert_quotes_bid_sql
 from core.price_validation import validate_positive_price
-from core.realtime_db import open_quotes_db, write_realtime_bar_to_sqlite
-from core.realtime_monitor import (
-    is_realtime_ready_now,
-    note_realtime_bar_received,
-    reset_recent_backfill_state,
-)
-from core.realtime_subscriptions import (
-    clear_realtime_subscription_rows,
-    subscribe_realtime_bars,
-)
+from core.sqlite_utils import open_sqlite_connection
+from core.logger import get_logger, log_info, log_warning
 from core.recent_gaps_service import (
-    backfill_recent_hour,
-    get_recent_backfill_sync_ts,
-    is_first_synced_bid_ask_bar_ready,
     note_first_realtime_bar_timestamps,
+    is_first_synced_bid_ask_bar_ready,
+    get_recent_backfill_sync_ts,
+    backfill_recent_hour,
 )
 from core.runtime_state import RecentBackfillState, RealtimeMonitorState
-from core.time_utils import format_utc
+from core.time_utils import (
+    CT_TIMEZONE,
+    build_bar_time_fields_from_utc_dt,
+    format_utc,
+)
 
 logger = get_logger(__name__)
 
 # В realtime сейчас работаем только с одним активным фьючерсом.
 # Сам активный контракт приходит снаружи в виде словаря ACTIVE_FUTURES,
 # например: {"MNQ": "MNQM6"}.
+
+# reqRealTimeBars у IB поддерживает только 5-секундные бары.
+REALTIME_BAR_SIZE_SECONDS = 5
 
 # Какие потоки данных хотим получать в realtime.
 # Для нашей схемы нужны отдельные бары по BID и ASK,
@@ -46,15 +45,58 @@ REALTIME_WHAT_TO_SHOW_LIST = ("BID", "ASK")
 # перед самой первой подпиской.
 REALTIME_READY_WAIT_SECONDS = 1
 
-# Через сколько секунд без новых баров считаем realtime-поток подозрительно зависшим.
 REALTIME_STALL_WARNING_SECONDS = 30
-
-# Как часто слать Telegram-сообщение о штатной работе realtime-потока.
 REALTIME_OK_TELEGRAM_INTERVAL_SECONDS = 600
-
-# Сколько секунд после восстановления соединения даём подпискам,
-# прежде чем считать отсутствие баров проблемой.
 REALTIME_RESUBSCRIBE_GRACE_SECONDS = 15
+
+
+def is_expected_realtime_flow_now():
+    # Грубая проверка, должен ли сейчас вообще идти поток 5-секундных баров для CME MNQ.
+    # Используем CT.
+    now_ct = datetime.now(CT_TIMEZONE)
+    weekday = now_ct.weekday()  # Mon=0 ... Sun=6
+    hour = now_ct.hour
+
+    # Суббота полностью закрыта
+    if weekday == 5:
+        return False
+
+    # Воскресенье: открытие с 17:00 CT
+    if weekday == 6:
+        return hour >= 17
+
+    # Пятница: торговля до 16:00 CT
+    if weekday == 4:
+        return hour < 16
+
+    # Пн-Чт: ежедневный клиринг/maintenance 16:00-17:00 CT
+    return hour != 16
+
+
+def note_realtime_bar_received(realtime_monitor_state):
+    now_mono = time.monotonic()
+    realtime_monitor_state.last_bar_monotonic = now_mono
+
+
+def clear_realtime_subscription_rows(ib, current_subscriptions):
+    for subscription_row in current_subscriptions:
+        realtime_bars = subscription_row["realtime_bars"]
+        update_handler = subscription_row["update_handler"]
+
+        if realtime_bars is not None and update_handler is not None:
+            try:
+                realtime_bars.updateEvent -= update_handler
+            except Exception as exc:
+                log_warning(
+                    logger,
+                    f"Не удалось снять обработчик realtime updateEvent "
+                    f"для {subscription_row['what_to_show']}: {exc}",
+                    to_telegram=False,
+                )
+
+        cancel_realtime_bars_safe(ib, realtime_bars)
+
+    current_subscriptions.clear()
 
 
 def get_realtime_instrument_row(instrument_code):
@@ -148,6 +190,31 @@ async def wait_for_realtime_ready(ib, ib_health):
         return
 
 
+def subscribe_realtime_bars(ib, contract, what_to_show, use_rth):
+    # Открываем подписку на 5-секундные real-time бары.
+    return ib.reqRealTimeBars(
+        contract=contract,
+        barSize=REALTIME_BAR_SIZE_SECONDS,
+        whatToShow=what_to_show,
+        useRTH=use_rth,
+    )
+
+
+def cancel_realtime_bars_safe(ib, realtime_bars):
+    # Безопасно отменяем активную подписку, если она была создана.
+    if realtime_bars is None:
+        return
+
+    try:
+        ib.cancelRealTimeBars(realtime_bars)
+    except Exception as exc:
+        log_warning(
+            logger,
+            f"Не удалось отменить realtime-подписку: {exc}",
+            to_telegram=False,
+        )
+
+
 def validate_price_value(value, field_name, stream_name, contract_name, bar_time_text):
     context = (
         f"realtime {stream_name} для {contract_name}, "
@@ -193,6 +260,89 @@ def format_realtime_bar_message(contract, what_to_show, bar):
         f"RT BAR {contract.localSymbol} | {what_to_show} | {bar_time_text} | "
         f"O={bar.open_} H={bar.high} L={bar.low} C={bar.close} "
         f"V={bar.volume} WAP={bar.wap} COUNT={bar.count}"
+    )
+
+
+def open_quotes_db(db_path):
+    # Realtime loader открывает только уже существующую price DB.
+    # Первый старт и создание БД выполняются заранее через initialize_databases_sync().
+    return open_sqlite_connection(
+        db_path,
+        require_existing_file=True,
+    )
+
+
+def write_realtime_bar_to_sqlite(conn, table_name, contract_name, what_to_show, bar):
+    # Записываем одну сторону realtime-бара в SQLite.
+    #
+    # BID и ASK приходят раздельно, поэтому и пишем их раздельными UPSERT-ами,
+    # которые обновляют только свою сторону строки.
+    time_fields = build_bar_time_fields_from_utc_dt(bar.time)
+
+    bar_time_ts = time_fields["bar_time_ts"]
+    bar_time = time_fields["bar_time"]
+    bar_time_ct = time_fields["bar_time_ct"]
+    bar_time_msk = time_fields["bar_time_msk"]
+
+    if what_to_show == "ASK":
+        sql = upsert_quotes_ask_sql(table_name)
+        params = (
+            bar_time_ts,
+            bar_time,
+            bar_time_ct,
+            bar_time_msk,
+            contract_name,
+
+            bar.open_,
+            bar.high,
+            bar.low,
+            bar.close,
+        )
+
+    elif what_to_show == "BID":
+        sql = upsert_quotes_bid_sql(table_name)
+        params = (
+            bar_time_ts,
+            bar_time,
+            bar_time_ct,
+            bar_time_msk,
+            contract_name,
+
+            bar.open_,
+            bar.high,
+            bar.low,
+            bar.close,
+        )
+
+    else:
+        raise ValueError(f"Неподдерживаемый realtime stream: {what_to_show}")
+
+    conn.execute(sql, params)
+    conn.commit()
+
+
+def reset_recent_backfill_state(recent_backfill_state):
+    # Сбрасываем состояние разовой докачки последнего часа.
+    backfill_task = recent_backfill_state.backfill_task
+
+    if backfill_task is not None and not backfill_task.done():
+        backfill_task.cancel()
+
+    recent_backfill_state.first_bid_ts = None
+    recent_backfill_state.first_ask_ts = None
+    recent_backfill_state.last_backfill_completed_sync_ts = None
+    recent_backfill_state.backfill_task = None
+
+
+def is_realtime_ready_now(ib, ib_health):
+    # Считаем realtime ready только если:
+    # - локальное API-соединение живо,
+    # - backend IB доступен,
+    # - market data farm в норме.
+    return (
+            ib.isConnected()
+            and ib_health.ib_backend_ok
+            and ib_health.market_data_ok
     )
 
 
@@ -312,7 +462,9 @@ def build_realtime_update_handler(
             )
 
             bar_time_ts = int(bar.time.astimezone(timezone.utc).timestamp())
-            note_realtime_bar_received(realtime_monitor_state)
+            note_realtime_bar_received(
+                realtime_monitor_state=realtime_monitor_state,
+            )
             maybe_start_recent_backfill_task(
                 ib=ib,
                 ib_health=ib_health,
@@ -341,7 +493,7 @@ async def load_realtime_task(
         ib_health,
         settings,
         active_futures,
-        recent_backfill_state: RecentBackfillState,
+        recent_backfill_state,
 ):
     # Текущая realtime-версия loader-а:
     # - берём один активный контракт из ACTIVE_FUTURES;
