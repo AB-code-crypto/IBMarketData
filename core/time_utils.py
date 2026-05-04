@@ -8,7 +8,7 @@ SQLITE_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def format_utc(dt, for_ib=False):
-    """Format datetime as UTC text for IB requests, SQLite rows and logs."""
+    """Форматирует datetime как UTC-текст для IB-запросов, SQLite-строк и логов."""
     dt = dt.astimezone(timezone.utc)
 
     if for_ib:
@@ -18,12 +18,12 @@ def format_utc(dt, for_ib=False):
 
 
 def format_utc_ts(ts):
-    """Format Unix timestamp as UTC text for logs."""
+    """Форматирует Unix timestamp как UTC-текст для логов."""
     return format_utc(datetime.fromtimestamp(ts, tz=timezone.utc))
 
 
 def parse_utc_iso_to_ts(utc_text):
-    """Convert ISO text like 2024-03-13T22:00:00Z to Unix timestamp."""
+    """Преобразует ISO-текст вида 2024-03-13T22:00:00Z в Unix timestamp."""
     dt = datetime.strptime(utc_text, "%Y-%m-%dT%H:%M:%SZ")
     dt = dt.replace(tzinfo=timezone.utc)
     return int(dt.timestamp())
@@ -31,10 +31,9 @@ def parse_utc_iso_to_ts(utc_text):
 
 def build_bar_time_fields_from_utc_dt(dt_utc):
     """
-    Build all time fields used by the price database.
-
-    bar_time_ts is the canonical UTC Unix timestamp.
-    bar_time, bar_time_ct and bar_time_msk are human-readable datetime projections.
+    Собирает все поля времени, которые используются в ценовой БД.
+    bar_time_ts — канонический UTC Unix timestamp бара.
+    bar_time, bar_time_ct и bar_time_msk — человекочитаемые datetime-проекции.
     """
     dt_utc = dt_utc.astimezone(timezone.utc)
     dt_ct = dt_utc.astimezone(CT_TIMEZONE)
