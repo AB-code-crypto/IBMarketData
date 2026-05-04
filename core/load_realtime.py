@@ -23,7 +23,7 @@ from core.recent_gaps_service import (
 from core.runtime_state import RecentBackfillState, RealtimeMonitorState
 from core.time_utils import (
     CT_TIMEZONE,
-    build_ct_time_fields_from_utc_dt,
+    build_bar_time_fields_from_utc_dt,
     format_utc,
 )
 
@@ -48,7 +48,6 @@ REALTIME_READY_WAIT_SECONDS = 1
 REALTIME_STALL_WARNING_SECONDS = 30
 REALTIME_OK_TELEGRAM_INTERVAL_SECONDS = 600
 REALTIME_RESUBSCRIBE_GRACE_SECONDS = 15
-
 
 
 def is_expected_realtime_flow_now():
@@ -218,7 +217,6 @@ def cancel_realtime_bars_safe(ib, realtime_bars):
         )
 
 
-
 def validate_price_value(value, field_name, stream_name, contract_name, bar_time_text):
     context = (
         f"realtime {stream_name} для {contract_name}, "
@@ -229,6 +227,7 @@ def validate_price_value(value, field_name, stream_name, contract_name, bar_time
         field_name=field_name,
         context=context,
     )
+
 
 def validate_realtime_bar(contract, what_to_show, bar):
     # Проверяем весь realtime-бар целиком.
@@ -280,37 +279,43 @@ def write_realtime_bar_to_sqlite(conn, table_name, contract_name, what_to_show, 
     #
     # BID и ASK приходят раздельно, поэтому и пишем их раздельными UPSERT-ами,
     # которые обновляют только свою сторону строки.
-    dt = bar.time.astimezone(timezone.utc)
-    bar_time_ts = int(dt.timestamp())
-    bar_time = format_utc(dt)
-    bar_time_ts_ct, bar_time_ct = build_ct_time_fields_from_utc_dt(dt)
+    time_fields = build_bar_time_fields_from_utc_dt(bar.time)
+
+    bar_time_ts = time_fields["bar_time_ts"]
+    bar_time = time_fields["bar_time"]
+    bar_time_ct = time_fields["bar_time_ct"]
+    bar_time_msk = time_fields["bar_time_msk"]
 
     if what_to_show == "ASK":
         sql = upsert_quotes_ask_sql(table_name)
         params = (
             bar_time_ts,
             bar_time,
-            bar_time_ts_ct,
             bar_time_ct,
+            bar_time_msk,
             contract_name,
+
             bar.open_,
             bar.high,
             bar.low,
             bar.close,
         )
+
     elif what_to_show == "BID":
         sql = upsert_quotes_bid_sql(table_name)
         params = (
             bar_time_ts,
             bar_time,
-            bar_time_ts_ct,
             bar_time_ct,
+            bar_time_msk,
             contract_name,
+
             bar.open_,
             bar.high,
             bar.low,
             bar.close,
         )
+
     else:
         raise ValueError(f"Неподдерживаемый realtime stream: {what_to_show}")
 

@@ -2,29 +2,27 @@ def create_quotes_table_sql(table_name):
     # Таблица для BID/ASK-баров.
     return f"""
     CREATE TABLE IF NOT EXISTS {table_name} (
-        bar_time_ts    INTEGER PRIMARY KEY,
-        bar_time       TEXT NOT NULL,
+        bar_time_ts INTEGER PRIMARY KEY,
+        bar_time TEXT NOT NULL,
+        bar_time_ct TEXT NOT NULL,
+        bar_time_msk TEXT NOT NULL,
+        contract TEXT NOT NULL,
 
-        bar_time_ts_ct INTEGER NOT NULL,
-        bar_time_ct    TEXT NOT NULL,
+        ask_open REAL,
+        bid_open REAL,
 
-        contract       TEXT NOT NULL,
+        ask_high REAL,
+        bid_high REAL,
 
-        ask_open       REAL,
-        bid_open       REAL,
+        ask_low REAL,
+        bid_low REAL,
 
-        ask_high       REAL,
-        bid_high       REAL,
+        ask_close REAL,
+        bid_close REAL,
 
-        ask_low        REAL,
-        bid_low        REAL,
-
-        ask_close      REAL,
-        bid_close      REAL,
-
-        volume         REAL,
-        average        REAL,
-        bar_count      INTEGER
+        volume REAL,
+        average REAL,
+        bar_count INTEGER
     );
     """
 
@@ -38,10 +36,8 @@ def upsert_quotes_sql(table_name):
     INSERT INTO {table_name} (
         bar_time_ts,
         bar_time,
-
-        bar_time_ts_ct,
         bar_time_ct,
-
+        bar_time_msk,
         contract,
 
         ask_open,
@@ -61,12 +57,11 @@ def upsert_quotes_sql(table_name):
         bar_count
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+
     ON CONFLICT(bar_time_ts) DO UPDATE SET
         bar_time = excluded.bar_time,
-
-        bar_time_ts_ct = excluded.bar_time_ts_ct,
         bar_time_ct = excluded.bar_time_ct,
-
+        bar_time_msk = excluded.bar_time_msk,
         contract = excluded.contract,
 
         ask_open = excluded.ask_open,
@@ -98,10 +93,8 @@ def upsert_quotes_ask_sql(table_name):
     INSERT INTO {table_name} (
         bar_time_ts,
         bar_time,
-
-        bar_time_ts_ct,
         bar_time_ct,
-
+        bar_time_msk,
         contract,
 
         ask_open,
@@ -110,12 +103,11 @@ def upsert_quotes_ask_sql(table_name):
         ask_close
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+
     ON CONFLICT(bar_time_ts) DO UPDATE SET
         bar_time = excluded.bar_time,
-
-        bar_time_ts_ct = excluded.bar_time_ts_ct,
         bar_time_ct = excluded.bar_time_ct,
-
+        bar_time_msk = excluded.bar_time_msk,
         contract = excluded.contract,
 
         ask_open = excluded.ask_open,
@@ -134,10 +126,8 @@ def upsert_quotes_bid_sql(table_name):
     INSERT INTO {table_name} (
         bar_time_ts,
         bar_time,
-
-        bar_time_ts_ct,
         bar_time_ct,
-
+        bar_time_msk,
         contract,
 
         bid_open,
@@ -146,12 +136,11 @@ def upsert_quotes_bid_sql(table_name):
         bid_close
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+
     ON CONFLICT(bar_time_ts) DO UPDATE SET
         bar_time = excluded.bar_time,
-
-        bar_time_ts_ct = excluded.bar_time_ts_ct,
         bar_time_ct = excluded.bar_time_ct,
-
+        bar_time_msk = excluded.bar_time_msk,
         contract = excluded.contract,
 
         bid_open = excluded.bid_open,

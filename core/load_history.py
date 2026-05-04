@@ -1,7 +1,7 @@
-# bar_time_ts    — канонический UTC Unix timestamp бара.
-# bar_time_ct    — человекочитаемое время бара в America/Chicago (CT).
-# bar_time_ts_ct — внутренняя локальная числовая ось CT:
-#                  bar_time_ts + utc_offset_for_this_bar.
+# bar_time_ts — канонический UTC Unix timestamp бара и единственный ключ времени.
+# bar_time — человекочитаемое время бара в UTC.
+# bar_time_ct — человекочитаемое время бара в America/Chicago.
+# bar_time_msk — человекочитаемое время бара в Europe/Moscow.
 
 import asyncio
 from datetime import datetime, timezone
