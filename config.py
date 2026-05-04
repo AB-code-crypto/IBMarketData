@@ -38,13 +38,9 @@ class Settings:
     # Файл SQLite БД
     price_db_path: str = str(BASE_DIR / "data" / "price.sqlite3")
 
-    # Telegram bot / channels
+    # Telegram-бот и технический канал.
     telegram_bot_token: str = get_required_env("TELEGRAM_BOT_TOKEN")
     telegram_chat_id_tech: int = get_required_int_env("TELEGRAM_CHAT_ID_TECH")
 
 
 settings_live = Settings()
-
-settings_for_demo = Settings(
-    ib_port=7497,
-)

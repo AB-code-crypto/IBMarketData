@@ -73,11 +73,9 @@ def is_expected_realtime_flow_now():
     return hour != 16
 
 
-def note_realtime_bar_received(realtime_monitor_state, what_to_show, bar_time_ts):
+def note_realtime_bar_received(realtime_monitor_state):
     now_mono = time.monotonic()
     realtime_monitor_state.last_bar_monotonic = now_mono
-    realtime_monitor_state.last_bar_time_ts = bar_time_ts
-    realtime_monitor_state.last_bar_stream = what_to_show
 
 
 def clear_realtime_subscription_rows(ib, current_subscriptions):
@@ -466,8 +464,6 @@ def build_realtime_update_handler(
             bar_time_ts = int(bar.time.astimezone(timezone.utc).timestamp())
             note_realtime_bar_received(
                 realtime_monitor_state=realtime_monitor_state,
-                what_to_show=what_to_show,
-                bar_time_ts=bar_time_ts,
             )
             maybe_start_recent_backfill_task(
                 ib=ib,

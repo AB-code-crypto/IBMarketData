@@ -32,7 +32,6 @@ def build_active_futures(server_time_text):
     # Ключ словаря результата — ключ из Instrument, например MNQ или NQ.
     # Значение — localSymbol текущего активного фьючерса.
     current_utc = parse_server_time_text(server_time_text)
-    current_utc = parse_server_time_text(server_time_text)
     active_futures = {}
 
     for instrument_code, instrument_row in Instrument.items():
@@ -57,7 +56,6 @@ def build_active_futures(server_time_text):
                 f"Текущий контракт не найден: instrument={instrument_code}, "
                 f"server_time_utc={server_time_text}"
             )
-            logger.error(error_text)
             log_warning(logger, error_text, to_telegram=True)
             raise RuntimeError(error_text)
 

@@ -18,6 +18,7 @@ from core.contract_utils import build_futures_contract, build_table_name
 from core.logger import get_logger, log_info, log_warning
 from core.time_utils import (
     format_utc,
+    format_utc_ts,
     parse_utc_iso_to_ts,
 )
 from core.history_bar_validation import validate_history_bid_ask_bars

@@ -123,7 +123,3 @@ def log_warning(logger, message, to_telegram=True):
     logger.warning(message, stacklevel=2)
     _send_to_telegram(message, to_telegram=to_telegram)
 
-
-def log_error(logger, message, to_telegram=True):
-    logger.error(message, stacklevel=2)
-    _send_to_telegram(message, to_telegram=to_telegram)

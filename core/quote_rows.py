@@ -40,14 +40,14 @@ def _get_or_create_quote_row(rows_by_ts, *, bar, contract_name):
             contract_name=contract_name,
         )
 
-    return bar_time_ts, rows_by_ts[bar_time_ts]
+    return rows_by_ts[bar_time_ts]
 
 
 def build_quote_rows(bid_bars, ask_bars, contract_name):
     rows_by_ts = {}
 
     for bar in ask_bars:
-        _, row = _get_or_create_quote_row(
+        row = _get_or_create_quote_row(
             rows_by_ts,
             bar=bar,
             contract_name=contract_name,
@@ -58,7 +58,7 @@ def build_quote_rows(bid_bars, ask_bars, contract_name):
         row["ask_close"] = bar.close
 
     for bar in bid_bars:
-        _, row = _get_or_create_quote_row(
+        row = _get_or_create_quote_row(
             rows_by_ts,
             bar=bar,
             contract_name=contract_name,

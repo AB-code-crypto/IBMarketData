@@ -1,11 +1,9 @@
-from decimal import Decimal
-from typing import Any, Dict, Literal
+from typing import Any, Dict
 
 # ==============================
-# Types
+# Типы
 # ==============================
 
-SecType = Literal["FUT"]
 InstrumentRow = Dict[str, Any]
 Registry = Dict[str, InstrumentRow]
 
@@ -13,14 +11,12 @@ FUT_DEFAULTS: InstrumentRow = {
     "secType": "FUT",
     "exchange": "CME",
     "currency": "USD",
-    "roll_days": 2,
     "barSizeSetting": "5 secs",
     "useRTH": False,
-    "minTick": Decimal("0.25"),
 }
 
 # ==============================
-# Registry
+# Реестр
 # ==============================
 
 Instrument: Registry = {

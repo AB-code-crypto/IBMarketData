@@ -14,8 +14,6 @@ class RecentBackfillState:
 @dataclass
 class RealtimeMonitorState:
     last_bar_monotonic: Optional[float] = None
-    last_bar_time_ts: Optional[int] = None
-    last_bar_stream: Optional[str] = None
     last_ok_telegram_monotonic: Optional[float] = None
     last_stall_warning_monotonic: Optional[float] = None
     last_restore_monotonic: Optional[float] = None
