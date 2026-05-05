@@ -1,4 +1,5 @@
 import asyncio
+import time
 import traceback
 from dataclasses import dataclass, field
 from typing import Optional
@@ -43,6 +44,7 @@ STATUS_TELEGRAM_INTERVAL_SECONDS = 600
 @dataclass
 class RuntimeStatus:
     # Текущее состояние сервиса для периодического Telegram-статуса.
+    started_monotonic: float = field(default_factory=time.monotonic)
     history_instrument: Optional[str] = None
     realtime_instruments: set[str] = field(default_factory=set)
 
@@ -60,6 +62,15 @@ class BackgroundTasks:
         return self.heartbeat, self.monitor, self.status, *self.realtime
 
 
+def _format_uptime(seconds: float) -> str:
+    # Форматируем uptime в HH:MM:SS.
+    seconds = max(0, int(seconds))
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    seconds = seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
 def _format_runtime_status(runtime_status: RuntimeStatus) -> str:
     # Собираем короткий статус сервиса для Telegram.
     if runtime_status.history_instrument is None:
@@ -67,15 +78,20 @@ def _format_runtime_status(runtime_status: RuntimeStatus) -> str:
     else:
         history_text = runtime_status.history_instrument
 
+    realtime_count = len(runtime_status.realtime_instruments)
     if runtime_status.realtime_instruments:
         realtime_text = ", ".join(sorted(runtime_status.realtime_instruments))
     else:
         realtime_text = "нет активных realtime-инструментов"
 
+    uptime_text = _format_uptime(time.monotonic() - runtime_status.started_monotonic)
+
     return (
         "Статус: всё нормально работает\n"
+        f"Uptime: {uptime_text}\n"
         f"Закачиваем историю: {history_text}\n"
-        f"Получаем рыночные данные: {realtime_text}"
+        f"Получаем рыночные данные: {realtime_text}\n"
+        f"Realtime-инструментов: {realtime_count}"
     )
 
 

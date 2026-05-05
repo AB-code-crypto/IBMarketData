@@ -344,6 +344,7 @@ async def load_realtime_instrument_task(
         settings,
         instrument_code,
         active_contract_name,
+        notify_recovered=False,
 ):
     # Realtime loader для одного логического инструмента.
     instrument_row, _, contract, contract_name = get_realtime_contract_context(
@@ -428,6 +429,13 @@ async def load_realtime_instrument_task(
                 )
 
         subscribe_all_realtime_streams()
+
+        if notify_recovered:
+            log_info(
+                logger,
+                f"Realtime восстановлен: {instrument_code}",
+                to_telegram=True,
+            )
 
         was_realtime_ready = is_realtime_ready_now(ib, ib_health)
         if was_realtime_ready:
@@ -535,6 +543,7 @@ async def run_realtime_instrument_forever(
                 settings=settings,
                 instrument_code=instrument_code,
                 active_contract_name=active_contract_name,
+                notify_recovered=restart_attempt > 0,
             )
 
             restart_attempt += 1
