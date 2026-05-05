@@ -1,5 +1,7 @@
 from ib_async import Contract
 
+from contracts import PLACEHOLDER_CON_ID
+
 
 def build_table_name(instrument_code, bar_size_setting):
     """Строит стабильное имя SQLite-таблицы из кода инструмента и размера бара IB."""
@@ -29,11 +31,11 @@ def build_futures_contract(instrument_code, instrument_row, contract_row):
         "lastTradeDateOrContractMonth": contract_row["lastTradeDateOrContractMonth"],
     }
 
-    # conId используем, если он задан.
-    # Для новых фьючерсов можно временно описывать контракт через localSymbol/expiry
-    # и не ждать, пока conId будет вручную внесён в реестр.
-    if contract_row.get("conId") is not None:
-        kwargs["conId"] = contract_row["conId"]
+    # conId используем, если он задан и не равен временной заглушке.
+    # conId=111 лежит в contracts.py только как явный маркер "заполнить позже".
+    con_id = contract_row.get("conId")
+    if con_id is not None and con_id != PLACEHOLDER_CON_ID:
+        kwargs["conId"] = con_id
 
     return Contract(**kwargs)
 

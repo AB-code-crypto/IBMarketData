@@ -2,13 +2,13 @@ import asyncio
 from datetime import datetime, timezone
 
 from core.bar_utils import get_chunk_seconds, iter_chunks
-from core.cme_session import should_load_history_chunk
 from core.history_bar_validation import validate_history_bid_ask_bars
 from core.ib_request_utils import (
     RECONNECT_WAIT_SECONDS,
     request_historical_data_with_reconnect,
 )
 from core.logger import get_logger, log_info, log_warning
+from core.market_sessions import should_load_history_chunk
 from core.price_db import write_quote_rows_to_sqlite
 from core.quote_rows import build_quote_rows
 from core.time_utils import format_utc

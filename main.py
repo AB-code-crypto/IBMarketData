@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from config import settings_live as settings
-from core.active_futures import build_active_instruments
+from core.active_instruments import build_active_instruments
 from core.db_initializer import initialize_databases_sync
 from core.ib_connector import (
     connect_ib,

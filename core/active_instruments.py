@@ -26,27 +26,29 @@ def parse_contract_utc_text(utc_text):
     return dt
 
 
+def is_instrument_enabled(instrument_row):
+    # Общий выключатель инструмента.
+    return instrument_row.get("enabled", True)
+
+
+def is_realtime_enabled(instrument_row):
+    # Отдельный выключатель realtime-загрузки.
+    return instrument_row.get("realtime_enabled", True)
+
+
 def get_active_futures_local_symbol(instrument_code, instrument_row, current_utc, server_time_text):
     # Возвращает localSymbol активного фьючерсного контракта.
-    current_local_symbol = None
-
     for contract_row in instrument_row["contracts"]:
         active_from_utc = parse_contract_utc_text(contract_row["active_from_utc"])
         active_to_utc = parse_contract_utc_text(contract_row["active_to_utc"])
 
         if active_from_utc <= current_utc < active_to_utc:
-            current_local_symbol = contract_row["localSymbol"]
-            break
+            return contract_row["localSymbol"]
 
-    if current_local_symbol is None:
-        error_text = (
-            f"Текущий контракт не найден: instrument={instrument_code}, "
-            f"server_time_utc={server_time_text}"
-        )
-        log_warning(logger, error_text, to_telegram=True)
-        raise RuntimeError(error_text)
-
-    return current_local_symbol
+    raise RuntimeError(
+        f"Текущий контракт не найден: instrument={instrument_code}, "
+        f"server_time_utc={server_time_text}"
+    )
 
 
 def build_active_instruments(server_time_text):
@@ -58,24 +60,39 @@ def build_active_instruments(server_time_text):
     active_instruments = {}
 
     for instrument_code, instrument_row in Instrument.items():
-        sec_type = instrument_row["secType"]
+        if not is_instrument_enabled(instrument_row):
+            continue
 
-        if sec_type == "FUT":
-            active_instruments[instrument_code] = get_active_futures_local_symbol(
-                instrument_code=instrument_code,
-                instrument_row=instrument_row,
-                current_utc=current_utc,
-                server_time_text=server_time_text,
+        if not is_realtime_enabled(instrument_row):
+            continue
+
+        try:
+            sec_type = instrument_row["secType"]
+
+            if sec_type == "FUT":
+                active_instruments[instrument_code] = get_active_futures_local_symbol(
+                    instrument_code=instrument_code,
+                    instrument_row=instrument_row,
+                    current_utc=current_utc,
+                    server_time_text=server_time_text,
+                )
+                continue
+
+            if sec_type in ("CASH", "CRYPTO"):
+                active_instruments[instrument_code] = instrument_code
+                continue
+
+            raise ValueError(
+                f"Неподдерживаемый secType для active instruments: "
+                f"instrument={instrument_code}, secType={sec_type}"
             )
-            continue
 
-        if sec_type in ("CASH", "CRYPTO"):
-            active_instruments[instrument_code] = instrument_code
-            continue
-
-        raise ValueError(
-            f"Неподдерживаемый secType для active instruments: "
-            f"instrument={instrument_code}, secType={sec_type}"
-        )
+        except Exception as exc:
+            log_warning(
+                logger,
+                f"Не удалось определить active-инструмент для realtime: "
+                f"instrument={instrument_code}, error={exc}. Пропускаю realtime по нему.",
+                to_telegram=True,
+            )
 
     return active_instruments

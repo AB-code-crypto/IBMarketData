@@ -4,7 +4,6 @@ import traceback
 from datetime import timezone
 
 from contracts import Instrument
-from core.cme_session import is_expected_realtime_flow_now
 from core.contract_utils import (
     build_instrument_contract,
     get_contract_row_by_local_symbol,
@@ -12,6 +11,7 @@ from core.contract_utils import (
 )
 from core.instrument_db import get_instrument_db_path, get_instrument_table_name
 from core.logger import get_logger, log_info, log_warning
+from core.market_sessions import is_expected_realtime_flow_now
 from core.price_validation import validate_positive_price
 from core.realtime_db import open_quotes_db, write_realtime_bar_to_sqlite
 from core.realtime_monitor import (
@@ -52,6 +52,10 @@ REALTIME_OK_TELEGRAM_INTERVAL_SECONDS = 600
 # Сколько секунд после восстановления соединения даём подпискам,
 # прежде чем считать отсутствие баров проблемой.
 REALTIME_RESUBSCRIBE_GRACE_SECONDS = 15
+
+# Через сколько секунд перезапускать realtime-задачу конкретного инструмента,
+# если она завершилась ошибкой.
+REALTIME_INSTRUMENT_RESTART_DELAY_SECONDS = 60
 
 
 def get_realtime_instrument_row(instrument_code):
@@ -517,6 +521,53 @@ async def load_realtime_instrument_task(
                 )
 
 
+async def run_realtime_instrument_forever(
+        ib,
+        ib_health,
+        settings,
+        instrument_code,
+        active_contract_name,
+):
+    # Изолируем realtime одного инструмента от остальных.
+    # Если инструмент упал из-за прав, недоступного exchange или ошибки подписки,
+    # остальные realtime-задачи продолжают работать.
+    restart_attempt = 0
+
+    while True:
+        try:
+            await load_realtime_instrument_task(
+                ib=ib,
+                ib_health=ib_health,
+                settings=settings,
+                instrument_code=instrument_code,
+                active_contract_name=active_contract_name,
+            )
+
+            restart_attempt += 1
+            log_warning(
+                logger,
+                f"Realtime loader для {instrument_code} завершился без исключения. "
+                f"Перезапускаю через {REALTIME_INSTRUMENT_RESTART_DELAY_SECONDS} сек.",
+                to_telegram=restart_attempt == 1 or restart_attempt % 10 == 0,
+            )
+
+        except asyncio.CancelledError:
+            raise
+
+        except Exception as exc:
+            restart_attempt += 1
+            log_warning(
+                logger,
+                f"Realtime loader для {instrument_code} завершился ошибкой "
+                f"(попытка перезапуска #{restart_attempt}): {exc}\n"
+                f"{traceback.format_exc()}\n"
+                f"Повтор через {REALTIME_INSTRUMENT_RESTART_DELAY_SECONDS} сек.",
+                to_telegram=restart_attempt == 1 or restart_attempt % 10 == 0,
+            )
+
+        await asyncio.sleep(REALTIME_INSTRUMENT_RESTART_DELAY_SECONDS)
+
+
 async def load_realtime_task(
         ib,
         ib_health,
@@ -524,14 +575,24 @@ async def load_realtime_task(
         active_instruments,
 ):
     # Запускаем realtime loader по всем активным инструментам.
-    if not isinstance(active_instruments, dict) or not active_instruments:
-        raise ValueError("active_instruments должен быть непустым словарём")
+    if not isinstance(active_instruments, dict):
+        raise ValueError("active_instruments должен быть словарём")
+
+    if not active_instruments:
+        log_warning(
+            logger,
+            "Нет активных realtime-инструментов. Realtime loader остаётся запущенным в режиме ожидания.",
+            to_telegram=True,
+        )
+
+        while True:
+            await asyncio.sleep(60)
 
     tasks = []
 
     for instrument_code, active_contract_name in active_instruments.items():
         task = asyncio.create_task(
-            load_realtime_instrument_task(
+            run_realtime_instrument_forever(
                 ib=ib,
                 ib_health=ib_health,
                 settings=settings,

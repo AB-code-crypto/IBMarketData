@@ -4,6 +4,7 @@
 # bar_time_msk — человекочитаемое время бара в Europe/Moscow.
 
 import asyncio
+import traceback
 
 from contracts import Instrument
 from core.bar_utils import (
@@ -20,7 +21,7 @@ from core.history_coverage import analyze_history_coverage, describe_missing_seg
 from core.history_segment_loader import load_quotes_segment
 from core.ib_request_utils import request_current_time_with_reconnect
 from core.instrument_db import get_instrument_db_path, get_instrument_table_name
-from core.logger import get_logger, log_info
+from core.logger import get_logger, log_info, log_warning
 from core.price_db import get_contract_history_bounds
 from core.time_utils import (
     format_utc,
@@ -29,6 +30,14 @@ from core.time_utils import (
 )
 
 logger = get_logger(__name__)
+
+
+def is_instrument_history_enabled(instrument_row):
+    # Проверяем общий и отдельный history-выключатель инструмента.
+    return (
+            instrument_row.get("enabled", True)
+            and instrument_row.get("history_enabled", True)
+    )
 
 
 def get_instrument_configured_start_ts(instrument_row, current_aligned_ts):
@@ -266,6 +275,103 @@ async def process_single_contract_instrument(
     )
 
 
+async def process_instrument_history(
+        ib,
+        ib_health,
+        settings,
+        instrument_code,
+        instrument_row,
+):
+    # Обрабатываем историю одного инструмента.
+    db_path = get_instrument_db_path(settings, instrument_code, instrument_row)
+    table_name = get_instrument_table_name(instrument_code, instrument_row)
+    bar_size_seconds = get_bar_size_seconds(instrument_row["barSizeSetting"])
+
+    log_info(
+        logger,
+        f"Начинаю обработку инструмента {instrument_code}. "
+        f"secType={instrument_row['secType']}, db={db_path}, "
+        f"table={table_name}, barSizeSetting={instrument_row['barSizeSetting']}",
+        to_telegram=False,
+    )
+
+    instrument_server_dt = await request_current_time_with_reconnect(ib)
+    current_aligned_ts = get_current_aligned_ts(
+        instrument_server_dt,
+        bar_size_seconds,
+    )
+
+    log_info(
+        logger,
+        f"Инструмент {instrument_code}: server time IB {format_utc(instrument_server_dt)}. "
+        f"Выровненное время по размеру бара: {format_utc_ts(current_aligned_ts)}",
+        to_telegram=False,
+    )
+
+    if instrument_row["secType"] == "FUT":
+        total_rows_written = 0
+
+        log_info(
+            logger,
+            f"Инструмент {instrument_code}: всего контрактов в списке "
+            f"{len(instrument_row['contracts'])}",
+            to_telegram=False,
+        )
+
+        for contract_row in instrument_row["contracts"]:
+            rows_written, was_loaded = await process_futures_contract(
+                ib=ib,
+                ib_health=ib_health,
+                db_path=db_path,
+                table_name=table_name,
+                instrument_code=instrument_code,
+                instrument_row=instrument_row,
+                contract_row=contract_row,
+                current_aligned_ts=current_aligned_ts,
+            )
+            total_rows_written += rows_written
+
+            # Время обновляем только после реальной закачки.
+            if was_loaded:
+                instrument_server_dt = await request_current_time_with_reconnect(ib)
+                current_aligned_ts = get_current_aligned_ts(
+                    instrument_server_dt,
+                    bar_size_seconds,
+                )
+
+                log_info(
+                    logger,
+                    f"Инструмент {instrument_code}: после закачки обновил server time IB до "
+                    f"{format_utc(instrument_server_dt)}. "
+                    f"Выровненное время: {format_utc_ts(current_aligned_ts)}",
+                    to_telegram=False,
+                )
+
+        log_info(
+            logger,
+            f"Инструмент {instrument_code}: обработка всех контрактов завершена",
+            to_telegram=False,
+        )
+        return total_rows_written
+
+    if instrument_row["secType"] in ("CASH", "CRYPTO"):
+        rows_written, _ = await process_single_contract_instrument(
+            ib=ib,
+            ib_health=ib_health,
+            db_path=db_path,
+            table_name=table_name,
+            instrument_code=instrument_code,
+            instrument_row=instrument_row,
+            current_aligned_ts=current_aligned_ts,
+        )
+        return rows_written
+
+    raise ValueError(
+        f"Неподдерживаемый secType в Instrument[{instrument_code}]: "
+        f"{instrument_row['secType']}"
+    )
+
+
 async def load_history_task(ib, ib_health, settings):
     # Главная таска загрузки истории.
     #
@@ -273,98 +379,41 @@ async def load_history_task(ib, ib_health, settings):
     # 2. для FUT обрабатываем каждый контракт отдельно;
     # 3. для CASH/CRYPTO обрабатываем сам инструмент как single-contract;
     # 4. для каждого инструмента используем его отдельную SQLite-БД;
-    # 5. на обрывах связи не падаем, а ждём реконнект и продолжаем.
+    # 5. ошибка одного инструмента не останавливает остальные;
+    # 6. на обрывах связи не падаем, а ждём реконнект и продолжаем.
     log_info(logger, "Запускаю задачу загрузки истории", to_telegram=False)
 
     total_rows_written = 0
 
     for instrument_code, instrument_row in Instrument.items():
-        db_path = get_instrument_db_path(settings, instrument_code, instrument_row)
-        table_name = get_instrument_table_name(instrument_code, instrument_row)
-        bar_size_seconds = get_bar_size_seconds(instrument_row["barSizeSetting"])
-
-        log_info(
-            logger,
-            f"Начинаю обработку инструмента {instrument_code}. "
-            f"secType={instrument_row['secType']}, db={db_path}, "
-            f"table={table_name}, barSizeSetting={instrument_row['barSizeSetting']}",
-            to_telegram=False,
-        )
-
-        instrument_server_dt = await request_current_time_with_reconnect(ib)
-        current_aligned_ts = get_current_aligned_ts(
-            instrument_server_dt,
-            bar_size_seconds,
-        )
-
-        log_info(
-            logger,
-            f"Инструмент {instrument_code}: server time IB {format_utc(instrument_server_dt)}. "
-            f"Выровненное время по размеру бара: {format_utc_ts(current_aligned_ts)}",
-            to_telegram=False,
-        )
-
-        if instrument_row["secType"] == "FUT":
+        if not is_instrument_history_enabled(instrument_row):
             log_info(
                 logger,
-                f"Инструмент {instrument_code}: всего контрактов в списке "
-                f"{len(instrument_row['contracts'])}",
-                to_telegram=False,
-            )
-
-            for contract_row in instrument_row["contracts"]:
-                rows_written, was_loaded = await process_futures_contract(
-                    ib=ib,
-                    ib_health=ib_health,
-                    db_path=db_path,
-                    table_name=table_name,
-                    instrument_code=instrument_code,
-                    instrument_row=instrument_row,
-                    contract_row=contract_row,
-                    current_aligned_ts=current_aligned_ts,
-                )
-                total_rows_written += rows_written
-
-                # Время обновляем только после реальной закачки.
-                if was_loaded:
-                    instrument_server_dt = await request_current_time_with_reconnect(ib)
-                    current_aligned_ts = get_current_aligned_ts(
-                        instrument_server_dt,
-                        bar_size_seconds,
-                    )
-
-                    log_info(
-                        logger,
-                        f"Инструмент {instrument_code}: после закачки обновил server time IB до "
-                        f"{format_utc(instrument_server_dt)}. "
-                        f"Выровненное время: {format_utc_ts(current_aligned_ts)}",
-                        to_telegram=False,
-                    )
-
-            log_info(
-                logger,
-                f"Инструмент {instrument_code}: обработка всех контрактов завершена",
+                f"Инструмент {instrument_code}: history-загрузка выключена, пропускаю.",
                 to_telegram=False,
             )
             continue
 
-        if instrument_row["secType"] in ("CASH", "CRYPTO"):
-            rows_written, _ = await process_single_contract_instrument(
+        try:
+            total_rows_written += await process_instrument_history(
                 ib=ib,
                 ib_health=ib_health,
-                db_path=db_path,
-                table_name=table_name,
+                settings=settings,
                 instrument_code=instrument_code,
                 instrument_row=instrument_row,
-                current_aligned_ts=current_aligned_ts,
             )
-            total_rows_written += rows_written
-            continue
 
-        raise ValueError(
-            f"Неподдерживаемый secType в Instrument[{instrument_code}]: "
-            f"{instrument_row['secType']}"
-        )
+        except asyncio.CancelledError:
+            raise
+
+        except Exception as exc:
+            log_warning(
+                logger,
+                f"Загрузка истории по инструменту {instrument_code} завершилась ошибкой: "
+                f"{exc}\n{traceback.format_exc()}",
+                to_telegram=True,
+            )
+            continue
 
     log_info(
         logger,
