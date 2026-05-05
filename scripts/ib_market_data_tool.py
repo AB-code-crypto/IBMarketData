@@ -9,6 +9,8 @@
 - массово пройтись по заглушкам conId=PLACEHOLDER_CON_ID в contracts.py;
 - проверить historical request по выбранному инструменту и интервалу;
 - получить historical bars в компактном виде;
+- найти самую раннюю доступную дату historical data;
+- массово проверить доступность historical data по фьючерсам из contracts.py;
 - проверить realtime bars по разным режимам whatToShow.
 
 Скрипт не пишет данные в SQLite-БД и не используется основным роботом.
@@ -44,8 +46,10 @@ from core.contract_utils import (
 # - "registry_conid_lookup"
 # - "historical_probe"
 # - "historical_fetch"
+# - "history_start_lookup"
+# - "registry_history_start_lookup"
 # - "realtime_probe"
-MODE = "registry_conid_lookup"
+MODE = "contract_lookup"
 
 # ==========================================================
 # НАСТРОЙКИ ПОДКЛЮЧЕНИЯ К IB
@@ -89,7 +93,7 @@ LOOKUP_PRINT_JSON = False
 # НАСТРОЙКИ МАССОВОГО ПОИСКА conId
 # ==========================================================
 # Пустой список означает: пройти все FUT-инструменты из contracts.py.
-CONID_LOOKUP_INSTRUMENT_CODES = []
+CONID_LOOKUP_INSTRUMENT_CODES = ["MES", "ES"]
 
 # Если True — ищем только строки, где conId отсутствует или равен PLACEHOLDER_CON_ID.
 CONID_LOOKUP_ONLY_MISSING_OR_PLACEHOLDER = True
@@ -135,6 +139,37 @@ FATAL_HISTORICAL_ERROR_CODES = {
     321,
     366,
 }
+
+# ==========================================================
+# НАСТРОЙКИ ПОИСКА НАЧАЛА ДОСТУПНОЙ ИСТОРИИ
+# ==========================================================
+# Для одного контракта используем MODE = "history_start_lookup".
+HISTORY_START_LOOKUP_INSTRUMENT_CODE = "MES"
+HISTORY_START_LOOKUP_CONTRACT_LOCAL_SYMBOL = "MESH6"
+
+# Для массового прогона используем MODE = "registry_history_start_lookup".
+# Пустой список означает: пройти все FUT-инструменты из contracts.py.
+# MNQ по умолчанию не включён, потому что история по нему уже есть.
+HISTORY_START_LOOKUP_INSTRUMENT_CODES = ["MES", "ES", "NQ"]
+
+# Проверяем именно те потоки, которые нужны основной BID/ASK-БД.
+HISTORY_START_LOOKUP_WHAT_TO_SHOW_LIST = ["BID", "ASK"]
+
+# Окно одного тестового запроса. 5 минут обычно достаточно, чтобы понять, есть бары или нет.
+HISTORY_START_LOOKUP_WINDOW_SECONDS = 300
+
+# Грубый шаг поиска. Чем меньше шаг, тем больше запросов к IB.
+HISTORY_START_LOOKUP_COARSE_STEP_DAYS = 7
+
+# Точность итоговой найденной границы. 1 час обычно достаточно для решения,
+# какие квартальные контракты оставить в contracts.py.
+HISTORY_START_LOOKUP_PRECISION_SECONDS = 3600
+
+# Пауза между historical-запросами. Если ловишь pacing violation, увеличь до 11.
+HISTORY_START_LOOKUP_DELAY_SECONDS = 5
+
+# Если True — печатать подробности каждого тестового запроса.
+HISTORY_START_LOOKUP_VERBOSE = False
 
 # ==========================================================
 # НАСТРОЙКИ REALTIME РЕЖИМА
@@ -573,6 +608,230 @@ def build_contract_for_conid_lookup(instrument_code, instrument_row, contract_ro
     return contract
 
 
+async def request_historical_with_error_capture(
+        ib,
+        contract,
+        start_dt,
+        end_dt,
+        what_to_show,
+        bar_size_setting,
+        use_rth,
+):
+    # Выполняем historical request и отдельно собираем фатальные IB errorEvent.
+    current_request_errors = []
+
+    def on_ib_error(req_id, error_code, error_string, contract_obj):
+        if error_code not in FATAL_HISTORICAL_ERROR_CODES:
+            return
+
+        message = normalize_ib_message(error_string)
+        current_request_errors.append((error_code, message))
+
+    ib.errorEvent += on_ib_error
+
+    try:
+        bars = await request_historical_once(
+            ib=ib,
+            contract=contract,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            what_to_show=what_to_show,
+            bar_size_setting=bar_size_setting,
+            use_rth=use_rth,
+        )
+        await asyncio.sleep(ERROR_FLUSH_DELAY_SECONDS)
+        return bars, current_request_errors
+
+    except Exception as exc:
+        return [], [(type(exc).__name__, str(exc))]
+
+    finally:
+        try:
+            ib.errorEvent -= on_ib_error
+        except Exception:
+            pass
+
+
+async def has_historical_bars_at_ts(ib, contract, start_ts, what_to_show):
+    # Проверяем маленькое окно [start_ts, start_ts + window), есть ли там бары.
+    start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
+    end_dt = datetime.fromtimestamp(
+        int(start_ts + HISTORY_START_LOOKUP_WINDOW_SECONDS),
+        tz=timezone.utc,
+    )
+
+    bars, errors = await request_historical_with_error_capture(
+        ib=ib,
+        contract=contract,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        what_to_show=what_to_show,
+        bar_size_setting=HISTORICAL_BAR_SIZE_SETTING,
+        use_rth=HISTORICAL_USE_RTH,
+    )
+
+    if HISTORY_START_LOOKUP_VERBOSE:
+        status = "OK" if bars else "EMPTY"
+        print(
+            f"    {what_to_show}: {format_utc(start_dt)} -> {format_utc(end_dt)} | "
+            f"{status} | bars={len(bars)} | errors={errors}"
+        )
+
+    if errors:
+        return False
+
+    return len(bars) > 0
+
+
+async def find_first_history_ts_for_what_to_show(
+        ib,
+        contract,
+        search_start_ts,
+        search_end_ts,
+        what_to_show,
+):
+    # Ищем самую раннюю дату, где IB отдаёт бары для конкретного whatToShow.
+    # Алгоритм:
+    # 1. проверяем самое начало;
+    # 2. грубо идём вправо недельными шагами до первого успешного окна;
+    # 3. уточняем найденную границу бинарным поиском.
+    search_start_ts = int(search_start_ts)
+    search_end_ts = int(search_end_ts)
+
+    latest_test_start_ts = search_end_ts - HISTORY_START_LOOKUP_WINDOW_SECONDS
+    if latest_test_start_ts <= search_start_ts:
+        return None
+
+    if await has_historical_bars_at_ts(ib, contract, search_start_ts, what_to_show):
+        await asyncio.sleep(HISTORY_START_LOOKUP_DELAY_SECONDS)
+        return search_start_ts
+
+    await asyncio.sleep(HISTORY_START_LOOKUP_DELAY_SECONDS)
+
+    step_seconds = int(HISTORY_START_LOOKUP_COARSE_STEP_DAYS) * 86400
+    low_ts = search_start_ts
+    high_ts = None
+    test_ts = min(search_start_ts + step_seconds, latest_test_start_ts)
+
+    while test_ts <= latest_test_start_ts:
+        ok = await has_historical_bars_at_ts(ib, contract, test_ts, what_to_show)
+        await asyncio.sleep(HISTORY_START_LOOKUP_DELAY_SECONDS)
+
+        if ok:
+            high_ts = test_ts
+            break
+
+        low_ts = test_ts
+        test_ts += step_seconds
+
+    if high_ts is None:
+        return None
+
+    precision = int(HISTORY_START_LOOKUP_PRECISION_SECONDS)
+    while high_ts - low_ts > precision:
+        mid_ts = (low_ts + high_ts) // 2
+        ok = await has_historical_bars_at_ts(ib, contract, mid_ts, what_to_show)
+        await asyncio.sleep(HISTORY_START_LOOKUP_DELAY_SECONDS)
+
+        if ok:
+            high_ts = mid_ts
+        else:
+            low_ts = mid_ts
+
+    return high_ts
+
+
+def get_contract_search_bounds(contract_row, server_time):
+    # Берём рабочее окно из contracts.py и ограничиваем правую границу текущим временем IB.
+    active_from_ts = int(datetime.strptime(
+        contract_row["active_from_utc"],
+        "%Y-%m-%dT%H:%M:%SZ",
+    ).replace(tzinfo=timezone.utc).timestamp())
+
+    active_to_ts = int(datetime.strptime(
+        contract_row["active_to_utc"],
+        "%Y-%m-%dT%H:%M:%SZ",
+    ).replace(tzinfo=timezone.utc).timestamp())
+
+    server_ts = int(server_time.astimezone(timezone.utc).timestamp())
+    return active_from_ts, min(active_to_ts, server_ts)
+
+
+async def lookup_contract_history_start(ib, instrument_code, instrument_row, contract_row, server_time):
+    contract = build_contract_for_conid_lookup(
+        instrument_code=instrument_code,
+        instrument_row=instrument_row,
+        contract_row=contract_row,
+    )
+    contract_name = contract_row["localSymbol"]
+    search_start_ts, search_end_ts = get_contract_search_bounds(contract_row, server_time)
+
+    print("=" * 100)
+    print(f"{instrument_code} / {contract_name}")
+    print("=" * 100)
+    print(f"active_from_utc : {contract_row['active_from_utc']}")
+    print(f"active_to_utc   : {contract_row['active_to_utc']}")
+    print(f"search_start    : {format_utc(datetime.fromtimestamp(search_start_ts, tz=timezone.utc))}")
+    print(f"search_end      : {format_utc(datetime.fromtimestamp(search_end_ts, tz=timezone.utc))}")
+
+    if search_end_ts <= search_start_ts + HISTORY_START_LOOKUP_WINDOW_SECONDS:
+        print("status          : SKIP, окно контракта уже вне доступного времени")
+        return {
+            "instrument_code": instrument_code,
+            "contract_name": contract_name,
+            "status": "skip",
+            "reliable_start_ts": None,
+            "by_what_to_show": {},
+        }
+
+    by_what_to_show = {}
+
+    for what_to_show in HISTORY_START_LOOKUP_WHAT_TO_SHOW_LIST:
+        print(f"Ищу начало истории для whatToShow={what_to_show}...")
+        first_ts = await find_first_history_ts_for_what_to_show(
+            ib=ib,
+            contract=contract,
+            search_start_ts=search_start_ts,
+            search_end_ts=search_end_ts,
+            what_to_show=what_to_show,
+        )
+        by_what_to_show[what_to_show] = first_ts
+
+        if first_ts is None:
+            print(f"  {what_to_show}: НЕ НАЙДЕНО")
+        else:
+            print(
+                f"  {what_to_show}: {format_utc(datetime.fromtimestamp(first_ts, tz=timezone.utc))}"
+            )
+
+    if any(value is None for value in by_what_to_show.values()):
+        reliable_start_ts = None
+        status = "unavailable"
+    else:
+        reliable_start_ts = max(by_what_to_show.values())
+        if reliable_start_ts <= search_start_ts + HISTORY_START_LOOKUP_PRECISION_SECONDS:
+            status = "ok_from_active_from"
+        else:
+            status = "partial"
+
+    if reliable_start_ts is None:
+        print("reliable_start  : -")
+        print(f"status          : {status}")
+    else:
+        print(
+            f"reliable_start  : {format_utc(datetime.fromtimestamp(reliable_start_ts, tz=timezone.utc))}"
+        )
+        print(f"status          : {status}")
+
+    return {
+        "instrument_code": instrument_code,
+        "contract_name": contract_name,
+        "status": status,
+        "reliable_start_ts": reliable_start_ts,
+        "by_what_to_show": by_what_to_show,
+    }
+
+
 # ==========================================================
 # РЕЖИМЫ
 # ==========================================================
@@ -866,12 +1125,123 @@ async def run_realtime_probe_mode(ib):
             await asyncio.sleep(2)
 
 
+async def run_history_start_lookup_mode(ib):
+    server_time = await ib.reqCurrentTimeAsync()
+    print("Соединение с IB установлено")
+    print(f"Время сервера IB: {format_server_time(server_time)}")
+    print()
+
+    instrument_row = get_instrument_row(HISTORY_START_LOOKUP_INSTRUMENT_CODE)
+    if instrument_row["secType"] != "FUT":
+        raise ValueError("history_start_lookup сейчас рассчитан на FUT-контракты")
+
+    contract_row = get_contract_row_by_local_symbol(
+        instrument_row,
+        HISTORY_START_LOOKUP_CONTRACT_LOCAL_SYMBOL,
+    )
+
+    await lookup_contract_history_start(
+        ib=ib,
+        instrument_code=HISTORY_START_LOOKUP_INSTRUMENT_CODE,
+        instrument_row=instrument_row,
+        contract_row=contract_row,
+        server_time=server_time,
+    )
+
+
+async def run_registry_history_start_lookup_mode(ib):
+    server_time = await ib.reqCurrentTimeAsync()
+    print("Соединение с IB установлено")
+    print(f"Время сервера IB: {format_server_time(server_time)}")
+    print()
+
+    target_codes = HISTORY_START_LOOKUP_INSTRUMENT_CODES or list(Instrument.keys())
+    all_results = []
+
+    for instrument_code in target_codes:
+        instrument_row = get_instrument_row(instrument_code)
+
+        if instrument_row["secType"] != "FUT":
+            continue
+
+        print("#" * 100)
+        print(f"МАССОВЫЙ ПОИСК НАЧАЛА ИСТОРИИ: {instrument_code}")
+        print("#" * 100)
+
+        instrument_results = []
+        for contract_row in instrument_row["contracts"]:
+            result = await lookup_contract_history_start(
+                ib=ib,
+                instrument_code=instrument_code,
+                instrument_row=instrument_row,
+                contract_row=contract_row,
+                server_time=server_time,
+            )
+            instrument_results.append(result)
+            all_results.append(result)
+
+        usable_results = [
+            item for item in instrument_results
+            if item["reliable_start_ts"] is not None
+        ]
+
+        print()
+        print("-" * 100)
+        print(f"ИТОГ ПО {instrument_code}")
+        print("-" * 100)
+
+        if not usable_results:
+            print("Нет доступных контрактов по выбранным whatToShow.")
+            continue
+
+        first_usable = min(usable_results, key=lambda item: item["reliable_start_ts"])
+        print(
+            f"Самый ранний доступный контракт: {first_usable['contract_name']} "
+            f"с {format_utc(datetime.fromtimestamp(first_usable['reliable_start_ts'], tz=timezone.utc))}"
+        )
+
+        print("Контракты, которые можно оставить:")
+        for item in usable_results:
+            print(
+                f"  {item['contract_name']}: "
+                f"{format_utc(datetime.fromtimestamp(item['reliable_start_ts'], tz=timezone.utc))} "
+                f"({item['status']})"
+            )
+
+        unavailable = [
+            item for item in instrument_results
+            if item["reliable_start_ts"] is None
+        ]
+        if unavailable:
+            print("Контракты, которые можно рассмотреть на удаление:")
+            for item in unavailable:
+                print(f"  {item['contract_name']}: {item['status']}")
+
+    print()
+    print("=" * 100)
+    print("ОБЩИЙ ИТОГ")
+    print("=" * 100)
+    for item in all_results:
+        reliable_start_ts = item["reliable_start_ts"]
+        if reliable_start_ts is None:
+            reliable_text = "-"
+        else:
+            reliable_text = format_utc(datetime.fromtimestamp(reliable_start_ts, tz=timezone.utc))
+
+        print(
+            f"{item['instrument_code']:>6} / {item['contract_name']:<8} | "
+            f"{item['status']:<20} | {reliable_text}"
+        )
+
+
 async def main():
     supported_modes = {
         "contract_lookup",
         "registry_conid_lookup",
         "historical_probe",
         "historical_fetch",
+        "history_start_lookup",
+        "registry_history_start_lookup",
         "realtime_probe",
     }
 
@@ -889,6 +1259,10 @@ async def main():
             await run_historical_probe_mode(ib)
         elif MODE == "historical_fetch":
             await run_historical_fetch_mode(ib)
+        elif MODE == "history_start_lookup":
+            await run_history_start_lookup_mode(ib)
+        elif MODE == "registry_history_start_lookup":
+            await run_registry_history_start_lookup_mode(ib)
         elif MODE == "realtime_probe":
             await run_realtime_probe_mode(ib)
     finally:
