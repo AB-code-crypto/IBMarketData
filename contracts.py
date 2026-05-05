@@ -36,7 +36,7 @@ FX_DEFAULTS: InstrumentRow = {
 }
 
 CRYPTO_DEFAULTS: InstrumentRow = {
-    "history_enabled": True,
+    "history_enabled": False,
     "realtime_enabled": False,
     "secType": "CRYPTO",
     "currency": "USD",
