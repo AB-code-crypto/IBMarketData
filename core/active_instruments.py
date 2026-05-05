@@ -25,12 +25,6 @@ def parse_contract_utc_text(utc_text):
     dt = dt.replace(tzinfo=timezone.utc)
     return dt
 
-
-def is_instrument_enabled(instrument_row):
-    # Общий выключатель инструмента.
-    return instrument_row.get("enabled", True)
-
-
 def is_realtime_enabled(instrument_row):
     # Отдельный выключатель realtime-загрузки.
     return instrument_row.get("realtime_enabled", True)
@@ -60,9 +54,6 @@ def build_active_instruments(server_time_text):
     active_instruments = {}
 
     for instrument_code, instrument_row in Instrument.items():
-        if not is_instrument_enabled(instrument_row):
-            continue
-
         if not is_realtime_enabled(instrument_row):
             continue
 

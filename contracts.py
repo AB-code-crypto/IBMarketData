@@ -14,7 +14,6 @@ Registry = Dict[str, InstrumentRow]
 PLACEHOLDER_CON_ID = 111
 
 FUT_DEFAULTS: InstrumentRow = {
-    "enabled": True,
     "history_enabled": True,
     "realtime_enabled": True,
     "secType": "FUT",
@@ -26,7 +25,6 @@ FUT_DEFAULTS: InstrumentRow = {
 }
 
 FX_DEFAULTS: InstrumentRow = {
-    "enabled": True,
     "history_enabled": True,
     "realtime_enabled": True,
     "secType": "CASH",
@@ -38,7 +36,6 @@ FX_DEFAULTS: InstrumentRow = {
 }
 
 CRYPTO_DEFAULTS: InstrumentRow = {
-    "enabled": True,
     "history_enabled": True,
     "realtime_enabled": True,
     "secType": "CRYPTO",
