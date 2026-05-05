@@ -104,37 +104,37 @@ Instrument: Registry = {
         # Если нужна более длинная история, увеличь history_lookback_days вручную.
         "history_lookback_days": 14,
         "contracts": [
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "MESM4", "lastTradeDateOrContractMonth": "20240621",
+            {"conId": 620731036, "localSymbol": "MESM4", "lastTradeDateOrContractMonth": "20240621",
              "active_from_utc": "2024-03-13T22:00:00Z", "active_to_utc": "2024-06-19T17:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "MESU4", "lastTradeDateOrContractMonth": "20240920",
+            {"conId": 637533398, "localSymbol": "MESU4", "lastTradeDateOrContractMonth": "20240920",
              "active_from_utc": "2024-06-19T22:00:00Z", "active_to_utc": "2024-09-18T21:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "MESZ4", "lastTradeDateOrContractMonth": "20241220",
+            {"conId": 654503314, "localSymbol": "MESZ4", "lastTradeDateOrContractMonth": "20241220",
              "active_from_utc": "2024-09-18T22:00:00Z", "active_to_utc": "2024-12-18T22:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "MESH5", "lastTradeDateOrContractMonth": "20250321",
+            {"conId": 672387462, "localSymbol": "MESH5", "lastTradeDateOrContractMonth": "20250321",
              "active_from_utc": "2024-12-18T23:00:00Z", "active_to_utc": "2025-03-19T21:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "MESM5", "lastTradeDateOrContractMonth": "20250620",
+            {"conId": 691171673, "localSymbol": "MESM5", "lastTradeDateOrContractMonth": "20250620",
              "active_from_utc": "2025-03-19T22:00:00Z", "active_to_utc": "2025-06-18T21:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "MESU5", "lastTradeDateOrContractMonth": "20250919",
+            {"conId": 711280067, "localSymbol": "MESU5", "lastTradeDateOrContractMonth": "20250919",
              "active_from_utc": "2025-06-18T22:00:00Z", "active_to_utc": "2025-09-17T21:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "MESZ5", "lastTradeDateOrContractMonth": "20251219",
+            {"conId": 730283085, "localSymbol": "MESZ5", "lastTradeDateOrContractMonth": "20251219",
              "active_from_utc": "2025-09-17T22:00:00Z", "active_to_utc": "2025-12-17T22:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "MESH6", "lastTradeDateOrContractMonth": "20260320",
+            {"conId": 750150186, "localSymbol": "MESH6", "lastTradeDateOrContractMonth": "20260320",
              "active_from_utc": "2025-12-17T23:00:00Z", "active_to_utc": "2026-03-18T21:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "MESM6", "lastTradeDateOrContractMonth": "20260618",
+            {"conId": 770561194, "localSymbol": "MESM6", "lastTradeDateOrContractMonth": "20260618",
              "active_from_utc": "2026-03-18T22:00:00Z", "active_to_utc": "2026-06-16T21:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "MESU6", "lastTradeDateOrContractMonth": "20260918",
+            {"conId": 793356217, "localSymbol": "MESU6", "lastTradeDateOrContractMonth": "20260918",
              "active_from_utc": "2026-06-16T22:00:00Z", "active_to_utc": "2026-09-16T21:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "MESZ6", "lastTradeDateOrContractMonth": "20261218",
+            {"conId": 815824257, "localSymbol": "MESZ6", "lastTradeDateOrContractMonth": "20261218",
              "active_from_utc": "2026-09-16T22:00:00Z", "active_to_utc": "2026-12-16T22:00:00Z"},
         ]
     },
@@ -148,37 +148,37 @@ Instrument: Registry = {
         # Если нужна более длинная история, увеличь history_lookback_days вручную.
         "history_lookback_days": 14,
         "contracts": [
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "ESM4", "lastTradeDateOrContractMonth": "20240621",
+            {"conId": 551601561, "localSymbol": "ESM4", "lastTradeDateOrContractMonth": "20240621",
              "active_from_utc": "2024-03-13T22:00:00Z", "active_to_utc": "2024-06-19T17:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "ESU4", "lastTradeDateOrContractMonth": "20240920",
+            {"conId": 568550526, "localSymbol": "ESU4", "lastTradeDateOrContractMonth": "20240920",
              "active_from_utc": "2024-06-19T22:00:00Z", "active_to_utc": "2024-09-18T21:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "ESZ4", "lastTradeDateOrContractMonth": "20241220",
+            {"conId": 495512557, "localSymbol": "ESZ4", "lastTradeDateOrContractMonth": "20241220",
              "active_from_utc": "2024-09-18T22:00:00Z", "active_to_utc": "2024-12-18T22:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "ESH5", "lastTradeDateOrContractMonth": "20250321",
+            {"conId": 603558932, "localSymbol": "ESH5", "lastTradeDateOrContractMonth": "20250321",
              "active_from_utc": "2024-12-18T23:00:00Z", "active_to_utc": "2025-03-19T21:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "ESM5", "lastTradeDateOrContractMonth": "20250620",
+            {"conId": 620731015, "localSymbol": "ESM5", "lastTradeDateOrContractMonth": "20250620",
              "active_from_utc": "2025-03-19T22:00:00Z", "active_to_utc": "2025-06-18T21:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "ESU5", "lastTradeDateOrContractMonth": "20250919",
+            {"conId": 637533641, "localSymbol": "ESU5", "lastTradeDateOrContractMonth": "20250919",
              "active_from_utc": "2025-06-18T22:00:00Z", "active_to_utc": "2025-09-17T21:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "ESZ5", "lastTradeDateOrContractMonth": "20251219",
+            {"conId": 495512563, "localSymbol": "ESZ5", "lastTradeDateOrContractMonth": "20251219",
              "active_from_utc": "2025-09-17T22:00:00Z", "active_to_utc": "2025-12-17T22:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "ESH6", "lastTradeDateOrContractMonth": "20260320",
+            {"conId": 649180695, "localSymbol": "ESH6", "lastTradeDateOrContractMonth": "20260320",
              "active_from_utc": "2025-12-17T23:00:00Z", "active_to_utc": "2026-03-18T21:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "ESM6", "lastTradeDateOrContractMonth": "20260618",
+            {"conId": 649180678, "localSymbol": "ESM6", "lastTradeDateOrContractMonth": "20260618",
              "active_from_utc": "2026-03-18T22:00:00Z", "active_to_utc": "2026-06-16T21:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "ESU6", "lastTradeDateOrContractMonth": "20260918",
+            {"conId": 649180671, "localSymbol": "ESU6", "lastTradeDateOrContractMonth": "20260918",
              "active_from_utc": "2026-06-16T22:00:00Z", "active_to_utc": "2026-09-16T21:00:00Z"},
 
-            {"conId": PLACEHOLDER_CON_ID, "localSymbol": "ESZ6", "lastTradeDateOrContractMonth": "20261218",
+            {"conId": 515416632, "localSymbol": "ESZ6", "lastTradeDateOrContractMonth": "20261218",
              "active_from_utc": "2026-09-16T22:00:00Z", "active_to_utc": "2026-12-16T22:00:00Z"},
         ]
     },

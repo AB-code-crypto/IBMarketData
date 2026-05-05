@@ -45,7 +45,7 @@ from core.contract_utils import (
 # - "historical_probe"
 # - "historical_fetch"
 # - "realtime_probe"
-MODE = "contract_lookup"
+MODE = "registry_conid_lookup"
 
 # ==========================================================
 # НАСТРОЙКИ ПОДКЛЮЧЕНИЯ К IB
@@ -89,7 +89,7 @@ LOOKUP_PRINT_JSON = False
 # НАСТРОЙКИ МАССОВОГО ПОИСКА conId
 # ==========================================================
 # Пустой список означает: пройти все FUT-инструменты из contracts.py.
-CONID_LOOKUP_INSTRUMENT_CODES = ["MES", "ES"]
+CONID_LOOKUP_INSTRUMENT_CODES = []
 
 # Если True — ищем только строки, где conId отсутствует или равен PLACEHOLDER_CON_ID.
 CONID_LOOKUP_ONLY_MISSING_OR_PLACEHOLDER = True
