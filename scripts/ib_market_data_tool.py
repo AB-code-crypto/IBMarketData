@@ -1,83 +1,51 @@
 """
 Единый ручной инструмент для проверки работы с рыночными данными Interactive Brokers.
 
-Зачем нужен
------------
-Этот файл объединяет несколько разрозненных вспомогательных скриптов, которые раньше
-жили отдельно и частично дублировали один и тот же код подключения к IB,
-построения фьючерсного контракта и печати результатов.
+Назначение
+----------
+Скрипт нужен для ручной диагностики IB:
 
-Скрипт предназначен не для боевой загрузки истории и не для работы робота,
-а именно для ручной диагностики и разовых проверок:
-- найти conId и проверить, как IB распознаёт конкретный фьючерс;
-- проверить historical request по выбранному контракту и интервалу;
-- получить historical bars в более прикладном компактном виде;
+- найти conId и проверить, как IB распознаёт конкретный контракт;
+- массово пройтись по заглушкам conId=PLACEHOLDER_CON_ID в contracts.py;
+- проверить historical request по выбранному инструменту и интервалу;
+- получить historical bars в компактном виде;
 - проверить realtime bars по разным режимам whatToShow.
 
-Какие режимы есть
------------------
-Через переменную MODE вверху файла можно выбрать один из режимов:
+Скрипт не пишет данные в SQLite-БД и не используется основным роботом.
 
-1. contract_lookup
-   Поиск контракта в IB по localSymbol и дополнительным уточняющим полям.
-   Нужен, когда надо найти conId, проверить expiry, exchange, tradingClass,
-   multiplier и убедиться, что IB вообще видит нужный контракт.
-
-2. historical_probe
-   Диагностический режим historical data.
-   Делает запросы по списку WHAT_TO_SHOW_LIST, печатает параметры запроса,
-   количество баров и сами бары. Также считает ряд типовых IB historical ошибок
-   фатальными для теста.
-
-3. historical_fetch
-   Более спокойный режим historical data.
-   Делает один запрос по выбранному WHAT_TO_SHOW и возвращает результат как
-   компактный список баров, который удобно глазами проверить или использовать
-   как небольшой ручной fetch для отладки.
-
-4. realtime_probe
-   Подписывается на reqRealTimeBars по выбранным режимам whatToShow и в течение
-   заданного количества секунд печатает новые бары по мере их появления.
-
-Общий принцип работы
---------------------
-Для исторических и realtime режимов контракт берётся из contracts.py по паре:
-- INSTRUMENT_CODE
-- CONTRACT_LOCAL_SYMBOL
-
-Для режима contract_lookup контракт, наоборот, строится вручную из lookup-полей,
-чтобы можно было искать и старые, и неоднозначные фьючерсы даже без готового
-conId в contracts.py.
-
-Что этот скрипт не делает
--------------------------
-- не пишет данные в price DB;
-- не обновляет prepared DB;
-- не запускает торговую логику;
-- не используется внутри основного робота;
-- не предназначен для массовой исторической закачки продакшен-уровня.
-
-Это именно ручной инженерный инструмент для диагностики IB.
+Актуальная версия рассчитана на текущую архитектуру проекта:
+- contracts.py содержит FUT/CASH/CRYPTO инструменты;
+- conId=111 считается временной заглушкой и не передаётся в IB Contract;
+- построение контрактов делается через core.contract_utils;
+- FUT использует конкретный localSymbol;
+- CASH/CRYPTO используют логический код инструмента.
 """
 
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+from typing import Optional
 
 from ib_async import IB, Contract
 
-from contracts import Instrument
+from contracts import Instrument, PLACEHOLDER_CON_ID
+from core.contract_utils import (
+    build_instrument_contract,
+    get_contract_row_by_local_symbol,
+    get_contract_storage_name,
+)
 
 # ==========================================================
 # ОБЩИЙ РЕЖИМ РАБОТЫ
 # ==========================================================
 # Варианты:
 # - "contract_lookup"
+# - "registry_conid_lookup"
 # - "historical_probe"
 # - "historical_fetch"
 # - "realtime_probe"
-MODE = "historical_probe"
+MODE = "contract_lookup"
 
 # ==========================================================
 # НАСТРОЙКИ ПОДКЛЮЧЕНИЯ К IB
@@ -87,14 +55,25 @@ IB_PORT = 7496
 IB_CLIENT_ID = 201
 
 # ==========================================================
-# НАСТРОЙКИ ОБЩЕГО КОНТРАКТА ДЛЯ HISTORICAL/REALTIME РЕЖИМОВ
+# НАСТРОЙКИ ИНСТРУМЕНТА ИЗ contracts.py
 # ==========================================================
+# Для FUT обязательно указываем CONTRACT_LOCAL_SYMBOL.
+# Для CASH/CRYPTO CONTRACT_LOCAL_SYMBOL не используется.
 INSTRUMENT_CODE = "MES"
 CONTRACT_LOCAL_SYMBOL = "MESH6"
 
 # ==========================================================
 # НАСТРОЙКИ CONTRACT LOOKUP
 # ==========================================================
+# LOOKUP_SOURCE:
+# - "registry" — строить lookup-контракт из contracts.py;
+# - "manual"   — строить lookup-контракт из LOOKUP_* полей ниже.
+LOOKUP_SOURCE = "registry"
+
+LOOKUP_INSTRUMENT_CODE = "MES"
+LOOKUP_CONTRACT_LOCAL_SYMBOL = "MESH6"
+
+LOOKUP_CON_ID = None
 LOOKUP_LOCAL_SYMBOL = "MESH6"
 LOOKUP_SEC_TYPE = "FUT"
 LOOKUP_INCLUDE_EXPIRED = True
@@ -107,6 +86,18 @@ LOOKUP_EXPIRY = ""
 LOOKUP_PRINT_JSON = False
 
 # ==========================================================
+# НАСТРОЙКИ МАССОВОГО ПОИСКА conId
+# ==========================================================
+# Пустой список означает: пройти все FUT-инструменты из contracts.py.
+CONID_LOOKUP_INSTRUMENT_CODES = ["MES", "ES"]
+
+# Если True — ищем только строки, где conId отсутствует или равен PLACEHOLDER_CON_ID.
+CONID_LOOKUP_ONLY_MISSING_OR_PLACEHOLDER = True
+
+# Пауза между запросами contract details, чтобы не спамить IB.
+CONID_LOOKUP_DELAY_SECONDS = 0.5
+
+# ==========================================================
 # НАСТРОЙКИ HISTORICAL РЕЖИМОВ
 # ==========================================================
 # Интервал задаётся в UTC.
@@ -117,6 +108,8 @@ HISTORICAL_BAR_SIZE_SETTING = "5 secs"
 HISTORICAL_USE_RTH = False
 
 # Для historical_probe проверяем несколько whatToShow подряд.
+# Для FX/CRYPTO иногда полезнее начинать с MIDPOINT/TRADES,
+# но BID/ASK тоже оставлены для проверки совместимости с основной БД.
 HISTORICAL_PROBE_WHAT_TO_SHOW_LIST = ["TRADES", "MIDPOINT", "BID", "ASK", "BID_ASK"]
 
 # Для historical_fetch берём один whatToShow.
@@ -151,6 +144,7 @@ REALTIME_BAR_SIZE = 5
 REALTIME_USE_RTH = False
 SECONDS_PER_MODE = 15
 PRINT_UTC_TIME = True
+
 
 # ==========================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -199,43 +193,80 @@ def build_duration_str(start_dt, end_dt, bar_size_setting):
     return f"{total_seconds} S"
 
 
-def get_contract_row_from_registry(instrument_code, contract_local_symbol):
-    instrument_row = Instrument[instrument_code]
+def get_instrument_row(instrument_code):
+    if instrument_code not in Instrument:
+        raise ValueError(f"Инструмент {instrument_code} не найден в contracts.py")
 
-    for row in instrument_row["contracts"]:
-        if row["localSymbol"] == contract_local_symbol:
-            return instrument_row, row
+    return Instrument[instrument_code]
 
-    raise ValueError(
-        f"Контракт {contract_local_symbol} не найден в Instrument['{instrument_code}']['contracts']"
+
+def get_registry_contract_context(
+        instrument_code,
+        contract_local_symbol: Optional[str] = None,
+):
+    instrument_row = get_instrument_row(instrument_code)
+    sec_type = instrument_row["secType"]
+
+    if sec_type == "FUT":
+        if not contract_local_symbol:
+            raise ValueError(
+                f"Для FUT-инструмента {instrument_code} нужно указать CONTRACT_LOCAL_SYMBOL"
+            )
+        contract_row = get_contract_row_by_local_symbol(
+            instrument_row,
+            contract_local_symbol,
+        )
+    elif sec_type in ("CASH", "CRYPTO"):
+        contract_row = None
+    else:
+        raise ValueError(
+            f"Неподдерживаемый secType={sec_type} для инструмента {instrument_code}"
+        )
+
+    contract = build_instrument_contract(
+        instrument_code=instrument_code,
+        instrument_row=instrument_row,
+        contract_row=contract_row,
+    )
+    contract_name = get_contract_storage_name(
+        instrument_code=instrument_code,
+        instrument_row=instrument_row,
+        contract_row=contract_row,
     )
 
+    return instrument_row, contract_row, contract, contract_name
 
-def build_registry_contract(instrument_code, contract_local_symbol):
-    instrument_row, contract_row = get_contract_row_from_registry(
+
+def build_registry_contract(instrument_code, contract_local_symbol=None):
+    _, _, contract, _ = get_registry_contract_context(
         instrument_code=instrument_code,
         contract_local_symbol=contract_local_symbol,
     )
+    return contract
 
-    return Contract(
-        secType=instrument_row["secType"],
-        symbol=instrument_code,
-        exchange=instrument_row["exchange"],
-        currency=instrument_row["currency"],
-        tradingClass=instrument_row["tradingClass"],
-        multiplier=str(instrument_row["multiplier"]),
-        conId=contract_row["conId"],
-        localSymbol=contract_row["localSymbol"],
-        lastTradeDateOrContractMonth=contract_row["lastTradeDateOrContractMonth"],
+
+def build_lookup_contract_from_registry():
+    _, _, contract, _ = get_registry_contract_context(
+        instrument_code=LOOKUP_INSTRUMENT_CODE,
+        contract_local_symbol=LOOKUP_CONTRACT_LOCAL_SYMBOL,
     )
 
+    # Для lookup включаем includeExpired, чтобы удобно искать старые квартальные фьючерсы.
+    contract.includeExpired = LOOKUP_INCLUDE_EXPIRED
+    return contract
 
-def build_lookup_contract():
+
+def build_manual_lookup_contract():
     kwargs = {
         "secType": LOOKUP_SEC_TYPE,
-        "localSymbol": LOOKUP_LOCAL_SYMBOL,
         "includeExpired": LOOKUP_INCLUDE_EXPIRED,
     }
+
+    if LOOKUP_CON_ID is not None:
+        kwargs["conId"] = int(LOOKUP_CON_ID)
+
+    if LOOKUP_LOCAL_SYMBOL:
+        kwargs["localSymbol"] = LOOKUP_LOCAL_SYMBOL
 
     if LOOKUP_SYMBOL:
         kwargs["symbol"] = LOOKUP_SYMBOL
@@ -258,9 +289,20 @@ def build_lookup_contract():
     return Contract(**kwargs)
 
 
+def build_lookup_contract():
+    if LOOKUP_SOURCE == "registry":
+        return build_lookup_contract_from_registry()
+
+    if LOOKUP_SOURCE == "manual":
+        return build_manual_lookup_contract()
+
+    raise ValueError(f"Неподдерживаемый LOOKUP_SOURCE: {LOOKUP_SOURCE}")
+
+
 def contract_to_dict(contract):
     return {
         "conId": getattr(contract, "conId", None),
+        "secType": getattr(contract, "secType", None),
         "symbol": getattr(contract, "symbol", None),
         "localSymbol": getattr(contract, "localSymbol", None),
         "lastTradeDateOrContractMonth": getattr(contract, "lastTradeDateOrContractMonth", None),
@@ -277,6 +319,7 @@ def print_contract(contract, index=None):
         print(f"Инструмент #{index}")
 
     print(f"  conId       : {getattr(contract, 'conId', None)}")
+    print(f"  secType     : {getattr(contract, 'secType', None)}")
     print(f"  symbol      : {getattr(contract, 'symbol', None)}")
     print(f"  localSymbol : {getattr(contract, 'localSymbol', None)}")
     print(f"  expiry      : {getattr(contract, 'lastTradeDateOrContractMonth', None)}")
@@ -287,41 +330,46 @@ def print_contract(contract, index=None):
     print(f"  currency    : {getattr(contract, 'currency', None)}")
 
 
-def print_registry_contract_info(contract, bar_size=None, use_rth=None, what_to_show_list=None):
+def print_registry_contract_info(contract, instrument_code, contract_name, bar_size=None, use_rth=None, what_to_show_list=None):
     print("=" * 100)
     print("ПАРАМЕТРЫ ТЕСТА")
     print("=" * 100)
-    print(f"symbol                      : {INSTRUMENT_CODE}")
-    print(f"localSymbol                 : {contract.localSymbol}")
-    print(f"conId                       : {contract.conId}")
-    print(f"lastTradeDateOrContractMonth: {contract.lastTradeDateOrContractMonth}")
-    print(f"exchange                    : {contract.exchange}")
-    print(f"currency                    : {contract.currency}")
-    print(f"tradingClass                : {contract.tradingClass}")
-    print(f"multiplier                  : {contract.multiplier}")
+    print(f"instrument_code             : {instrument_code}")
+    print(f"contract_name               : {contract_name}")
+    print(f"secType                     : {getattr(contract, 'secType', None)}")
+    print(f"symbol                      : {getattr(contract, 'symbol', None)}")
+    print(f"localSymbol                 : {getattr(contract, 'localSymbol', None)}")
+    print(f"conId                       : {getattr(contract, 'conId', None)}")
+    print(f"lastTradeDateOrContractMonth: {getattr(contract, 'lastTradeDateOrContractMonth', None)}")
+    print(f"exchange                    : {getattr(contract, 'exchange', None)}")
+    print(f"currency                    : {getattr(contract, 'currency', None)}")
+    print(f"tradingClass                : {getattr(contract, 'tradingClass', None)}")
+    print(f"multiplier                  : {getattr(contract, 'multiplier', None)}")
 
     if bar_size is not None:
-        print(f"barSize                      : {bar_size}")
+        print(f"barSize                     : {bar_size}")
 
     if use_rth is not None:
-        print(f"useRTH                       : {use_rth}")
+        print(f"useRTH                      : {use_rth}")
 
     if what_to_show_list is not None:
-        print(f"whatToShow list              : {what_to_show_list}")
+        print(f"whatToShow list             : {what_to_show_list}")
 
     print()
 
 
-def print_historical_request_info(contract, start_dt, end_dt, duration_str, what_to_show_list):
+def print_historical_request_info(contract, instrument_code, contract_name, start_dt, end_dt, duration_str, what_to_show_list):
     print_registry_contract_info(
         contract=contract,
+        instrument_code=instrument_code,
+        contract_name=contract_name,
         bar_size=HISTORICAL_BAR_SIZE_SETTING,
         use_rth=HISTORICAL_USE_RTH,
         what_to_show_list=what_to_show_list,
     )
-    print(f"start_utc                   : {start_dt}")
-    print(f"end_utc                     : {end_dt}")
-    print(f"durationStr                 : {duration_str}")
+    print(f"start_utc                  : {start_dt}")
+    print(f"end_utc                    : {end_dt}")
+    print(f"durationStr                : {duration_str}")
     print()
 
 
@@ -466,13 +514,13 @@ async def connect_ib_async():
 
 
 async def request_historical_once(
-    ib,
-    contract,
-    start_dt,
-    end_dt,
-    what_to_show,
-    bar_size_setting,
-    use_rth,
+        ib,
+        contract,
+        start_dt,
+        end_dt,
+        what_to_show,
+        bar_size_setting,
+        use_rth,
 ):
     duration_str = build_duration_str(start_dt, end_dt, bar_size_setting)
 
@@ -506,6 +554,25 @@ async def print_new_realtime_bars_for_period(bars, what_to_show, seconds_to_watc
 
     return printed_count
 
+
+def should_lookup_contract_row(contract_row):
+    if not CONID_LOOKUP_ONLY_MISSING_OR_PLACEHOLDER:
+        return True
+
+    con_id = contract_row.get("conId")
+    return con_id is None or con_id == PLACEHOLDER_CON_ID
+
+
+def build_contract_for_conid_lookup(instrument_code, instrument_row, contract_row):
+    contract = build_instrument_contract(
+        instrument_code=instrument_code,
+        instrument_row=instrument_row,
+        contract_row=contract_row,
+    )
+    contract.includeExpired = LOOKUP_INCLUDE_EXPIRED
+    return contract
+
+
 # ==========================================================
 # РЕЖИМЫ
 # ==========================================================
@@ -518,6 +585,10 @@ async def run_contract_lookup_mode(ib):
         print("[NOT FOUND] Ничего не найдено.")
         print()
         print("Текущие параметры поиска:")
+        print(f"  LOOKUP_SOURCE={LOOKUP_SOURCE}")
+        print(f"  LOOKUP_INSTRUMENT_CODE={LOOKUP_INSTRUMENT_CODE}")
+        print(f"  LOOKUP_CONTRACT_LOCAL_SYMBOL={LOOKUP_CONTRACT_LOCAL_SYMBOL}")
+        print(f"  LOOKUP_CON_ID={LOOKUP_CON_ID}")
         print(f"  LOOKUP_LOCAL_SYMBOL={LOOKUP_LOCAL_SYMBOL}")
         print(f"  LOOKUP_SEC_TYPE={LOOKUP_SEC_TYPE}")
         print(f"  LOOKUP_INCLUDE_EXPIRED={LOOKUP_INCLUDE_EXPIRED}")
@@ -545,18 +616,90 @@ async def run_contract_lookup_mode(ib):
 
     if len(contracts) == 1:
         print("Найден единственный контракт.")
+        print("Готовая строка для contracts.py:")
+        c = contracts[0]
+        print(
+            f'{{"conId": {c.conId}, "localSymbol": "{c.localSymbol}", '
+            f'"lastTradeDateOrContractMonth": "{c.lastTradeDateOrContractMonth}"}}'
+        )
     else:
         print("Выше выведены все найденные варианты. Можно выбрать нужный conId вручную.")
+
+
+async def run_registry_conid_lookup_mode(ib):
+    target_codes = CONID_LOOKUP_INSTRUMENT_CODES or list(Instrument.keys())
+    printed_any = False
+
+    for instrument_code in target_codes:
+        instrument_row = get_instrument_row(instrument_code)
+
+        if instrument_row["secType"] != "FUT":
+            continue
+
+        print("=" * 100)
+        print(f"ПОИСК conId ДЛЯ {instrument_code}")
+        print("=" * 100)
+
+        for contract_row in instrument_row["contracts"]:
+            if not should_lookup_contract_row(contract_row):
+                continue
+
+            printed_any = True
+            local_symbol = contract_row["localSymbol"]
+            lookup_contract = build_contract_for_conid_lookup(
+                instrument_code=instrument_code,
+                instrument_row=instrument_row,
+                contract_row=contract_row,
+            )
+
+            print()
+            print(f"[{instrument_code}] {local_symbol}: ищу contract details...")
+            details = await ib.reqContractDetailsAsync(lookup_contract)
+
+            if not details:
+                print("  [NOT FOUND]")
+                await asyncio.sleep(CONID_LOOKUP_DELAY_SECONDS)
+                continue
+
+            contracts = [item.contract for item in details]
+
+            if len(contracts) == 1:
+                c = contracts[0]
+                print(
+                    f'  OK: {local_symbol} -> conId={c.conId}, '
+                    f'expiry={c.lastTradeDateOrContractMonth}, '
+                    f'tradingClass={c.tradingClass}, multiplier={c.multiplier}'
+                )
+                print(
+                    f'  Для contracts.py: {{"conId": {c.conId}, '
+                    f'"localSymbol": "{c.localSymbol}", '
+                    f'"lastTradeDateOrContractMonth": "{c.lastTradeDateOrContractMonth}"}}'
+                )
+            else:
+                print(f"  Найдено вариантов: {len(contracts)}")
+                for i, c in enumerate(contracts, start=1):
+                    print_contract(c, index=i)
+                    print()
+
+            await asyncio.sleep(CONID_LOOKUP_DELAY_SECONDS)
+
+    if not printed_any:
+        print("Нет FUT-контрактов, подходящих под условия CONID_LOOKUP_*.")
 
 
 async def run_historical_probe_mode(ib):
     start_dt = parse_utc(HISTORICAL_START_UTC)
     end_dt = parse_utc(HISTORICAL_END_UTC)
     duration_str = build_duration_str(start_dt, end_dt, HISTORICAL_BAR_SIZE_SETTING)
-    contract = build_registry_contract(INSTRUMENT_CODE, CONTRACT_LOCAL_SYMBOL)
+    _, _, contract, contract_name = get_registry_contract_context(
+        INSTRUMENT_CODE,
+        CONTRACT_LOCAL_SYMBOL,
+    )
 
     print_historical_request_info(
         contract=contract,
+        instrument_code=INSTRUMENT_CODE,
+        contract_name=contract_name,
         start_dt=start_dt,
         end_dt=end_dt,
         duration_str=duration_str,
@@ -576,7 +719,7 @@ async def run_historical_probe_mode(ib):
 
     try:
         server_time = await ib.reqCurrentTimeAsync()
-        print(f"Соединение с IB установлено")
+        print("Соединение с IB установлено")
         print(f"Время сервера IB: {format_server_time(server_time)}")
         print()
 
@@ -620,10 +763,15 @@ async def run_historical_fetch_mode(ib):
     start_dt = parse_utc(HISTORICAL_START_UTC)
     end_dt = parse_utc(HISTORICAL_END_UTC)
     duration_str = build_duration_str(start_dt, end_dt, HISTORICAL_BAR_SIZE_SETTING)
-    contract = build_registry_contract(INSTRUMENT_CODE, CONTRACT_LOCAL_SYMBOL)
+    _, _, contract, contract_name = get_registry_contract_context(
+        INSTRUMENT_CODE,
+        CONTRACT_LOCAL_SYMBOL,
+    )
 
     print_historical_request_info(
         contract=contract,
+        instrument_code=INSTRUMENT_CODE,
+        contract_name=contract_name,
         start_dt=start_dt,
         end_dt=end_dt,
         duration_str=duration_str,
@@ -631,7 +779,7 @@ async def run_historical_fetch_mode(ib):
     )
 
     server_time = await ib.reqCurrentTimeAsync()
-    print(f"Соединение с IB установлено")
+    print("Соединение с IB установлено")
     print(f"Время сервера IB: {format_server_time(server_time)}")
     print()
 
@@ -669,10 +817,15 @@ async def run_historical_fetch_mode(ib):
 
 
 async def run_realtime_probe_mode(ib):
-    contract = build_registry_contract(INSTRUMENT_CODE, CONTRACT_LOCAL_SYMBOL)
+    _, _, contract, contract_name = get_registry_contract_context(
+        INSTRUMENT_CODE,
+        CONTRACT_LOCAL_SYMBOL,
+    )
 
     print_registry_contract_info(
         contract=contract,
+        instrument_code=INSTRUMENT_CODE,
+        contract_name=contract_name,
         bar_size=REALTIME_BAR_SIZE,
         use_rth=REALTIME_USE_RTH,
         what_to_show_list=REALTIME_WHAT_TO_SHOW_LIST,
@@ -714,12 +867,15 @@ async def run_realtime_probe_mode(ib):
 
 
 async def main():
-    if MODE not in {
+    supported_modes = {
         "contract_lookup",
+        "registry_conid_lookup",
         "historical_probe",
         "historical_fetch",
         "realtime_probe",
-    }:
+    }
+
+    if MODE not in supported_modes:
         raise ValueError(f"Неподдерживаемый MODE: {MODE}")
 
     ib = await connect_ib_async()
@@ -727,6 +883,8 @@ async def main():
     try:
         if MODE == "contract_lookup":
             await run_contract_lookup_mode(ib)
+        elif MODE == "registry_conid_lookup":
+            await run_registry_conid_lookup_mode(ib)
         elif MODE == "historical_probe":
             await run_historical_probe_mode(ib)
         elif MODE == "historical_fetch":
