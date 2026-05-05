@@ -365,7 +365,7 @@ from core.contract_utils import (
 # - "history_start_lookup"
 # - "registry_history_start_lookup"
 # - "realtime_probe"
-MODE = "history_start_lookup"
+MODE = "historical_probe"
 
 # ==========================================================
 # НАСТРОЙКИ ПОДКЛЮЧЕНИЯ К IB
@@ -379,7 +379,7 @@ IB_CLIENT_ID = 201
 # ==========================================================
 # Для FUT обязательно указываем CONTRACT_LOCAL_SYMBOL.
 # Для CASH/CRYPTO CONTRACT_LOCAL_SYMBOL не используется.
-INSTRUMENT_CODE = "MES"
+INSTRUMENT_CODE = "BTCUSD"
 CONTRACT_LOCAL_SYMBOL = "MESH6"
 
 # ==========================================================
@@ -421,8 +421,8 @@ CONID_LOOKUP_DELAY_SECONDS = 0.5
 # НАСТРОЙКИ HISTORICAL РЕЖИМОВ
 # ==========================================================
 # Интервал задаётся в UTC.
-HISTORICAL_START_UTC = "2026-03-12 17:00:00"
-HISTORICAL_END_UTC = "2026-03-12 17:05:00"
+HISTORICAL_START_UTC = "2025-09-15 01:00:00"
+HISTORICAL_END_UTC = "2025-09-15 02:00:00"
 
 HISTORICAL_BAR_SIZE_SETTING = "5 secs"
 HISTORICAL_USE_RTH = False
@@ -430,7 +430,7 @@ HISTORICAL_USE_RTH = False
 # Для historical_probe проверяем несколько whatToShow подряд.
 # Для FX/CRYPTO иногда полезнее начинать с MIDPOINT/TRADES,
 # но BID/ASK тоже оставлены для проверки совместимости с основной БД.
-HISTORICAL_PROBE_WHAT_TO_SHOW_LIST = ["TRADES", "MIDPOINT", "BID", "ASK", "BID_ASK"]
+HISTORICAL_PROBE_WHAT_TO_SHOW_LIST = ["BID", "ASK"]
 
 # Для historical_fetch берём один whatToShow.
 HISTORICAL_FETCH_WHAT_TO_SHOW = "MIDPOINT"
