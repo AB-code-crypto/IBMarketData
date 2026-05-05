@@ -356,7 +356,7 @@ async def _shutdown_app(*, ib, shutdown_message: str, tasks: Optional[Background
 
 
 async def main():
-    shutdown_message = "Стоп робота"
+    shutdown_message = "===========\nСтоп робота.\n==========="
     background_tasks: Optional[BackgroundTasks] = None
     runtime_status = RuntimeStatus()
 
