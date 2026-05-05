@@ -338,6 +338,7 @@
    Он только печатает найденные conId и даты доступности.
    Все изменения в contracts.py вносятся руками после проверки.
 """
+
 import asyncio
 import json
 import logging
@@ -420,7 +421,7 @@ CONID_LOOKUP_DELAY_SECONDS = 0.5
 # НАСТРОЙКИ HISTORICAL РЕЖИМОВ
 # ==========================================================
 # Интервал задаётся в UTC.
-HISTORICAL_START_UTC = "2024-03-13 22:00:00"
+HISTORICAL_START_UTC = "2026-03-12 17:00:00"
 HISTORICAL_END_UTC = "2026-03-12 17:05:00"
 
 HISTORICAL_BAR_SIZE_SETTING = "5 secs"
@@ -462,6 +463,13 @@ FATAL_HISTORICAL_ERROR_CODES = {
 HISTORY_START_LOOKUP_INSTRUMENT_CODE = "ES"
 HISTORY_START_LOOKUP_CONTRACT_LOCAL_SYMBOL = "ESM4"
 
+# Опциональные ручные границы поиска для MODE = "history_start_lookup".
+# Если оставить пустыми строками, скрипт возьмёт active_from_utc / active_to_utc
+# из contracts.py для выбранного контракта и ограничит правую границу временем IB.
+# Формат: "YYYY-MM-DD HH:MM:SS" в UTC.
+HISTORY_START_LOOKUP_FROM_UTC = ""
+HISTORY_START_LOOKUP_TO_UTC = ""
+
 # Для массового прогона используем MODE = "registry_history_start_lookup".
 # Пустой список означает: пройти все FUT-инструменты из contracts.py.
 # MNQ по умолчанию не включён, потому что история по нему уже есть.
@@ -481,7 +489,7 @@ HISTORY_START_LOOKUP_COARSE_STEP_DAYS = 7
 HISTORY_START_LOOKUP_PRECISION_SECONDS = 3600
 
 # Пауза между historical-запросами. Если ловишь pacing violation, увеличь до 11.
-HISTORY_START_LOOKUP_DELAY_SECONDS = 5
+HISTORY_START_LOOKUP_DELAY_SECONDS = 3
 
 # Если True — печатать подробности каждого тестового запроса.
 HISTORY_START_LOOKUP_VERBOSE = False
@@ -489,12 +497,11 @@ HISTORY_START_LOOKUP_VERBOSE = False
 # ==========================================================
 # НАСТРОЙКИ REALTIME РЕЖИМА
 # ==========================================================
-REALTIME_WHAT_TO_SHOW_LIST = ["BID", "ASK"]
+REALTIME_WHAT_TO_SHOW_LIST = ["TRADES", "MIDPOINT", "BID", "ASK"]
 REALTIME_BAR_SIZE = 5
 REALTIME_USE_RTH = False
 SECONDS_PER_MODE = 15
 PRINT_UTC_TIME = True
-
 
 # ==========================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -864,13 +871,13 @@ async def connect_ib_async():
 
 
 async def request_historical_once(
-        ib,
-        contract,
-        start_dt,
-        end_dt,
-        what_to_show,
-        bar_size_setting,
-        use_rth,
+    ib,
+    contract,
+    start_dt,
+    end_dt,
+    what_to_show,
+    bar_size_setting,
+    use_rth,
 ):
     duration_str = build_duration_str(start_dt, end_dt, bar_size_setting)
 
@@ -924,13 +931,13 @@ def build_contract_for_conid_lookup(instrument_code, instrument_row, contract_ro
 
 
 async def request_historical_with_error_capture(
-        ib,
-        contract,
-        start_dt,
-        end_dt,
-        what_to_show,
-        bar_size_setting,
-        use_rth,
+    ib,
+    contract,
+    start_dt,
+    end_dt,
+    what_to_show,
+    bar_size_setting,
+    use_rth,
 ):
     # Выполняем historical request и отдельно собираем фатальные IB errorEvent.
     current_request_errors = []
@@ -999,11 +1006,11 @@ async def has_historical_bars_at_ts(ib, contract, start_ts, what_to_show):
 
 
 async def find_first_history_ts_for_what_to_show(
-        ib,
-        contract,
-        search_start_ts,
-        search_end_ts,
-        what_to_show,
+    ib,
+    contract,
+    search_start_ts,
+    search_end_ts,
+    what_to_show,
 ):
     # Ищем самую раннюю дату, где IB отдаёт бары для конкретного whatToShow.
     # Алгоритм:
@@ -1056,36 +1063,74 @@ async def find_first_history_ts_for_what_to_show(
     return high_ts
 
 
-def get_contract_search_bounds(contract_row, server_time):
-    # Берём рабочее окно из contracts.py и ограничиваем правую границу текущим временем IB.
-    active_from_ts = int(datetime.strptime(
-        contract_row["active_from_utc"],
+def parse_optional_lookup_boundary(text):
+    # Пустая строка означает: граница не задана вручную.
+    text = str(text).strip()
+    if not text:
+        return None
+
+    return int(parse_utc(text).timestamp())
+
+
+def parse_contract_utc_boundary(text):
+    return int(datetime.strptime(
+        text,
         "%Y-%m-%dT%H:%M:%SZ",
     ).replace(tzinfo=timezone.utc).timestamp())
 
-    active_to_ts = int(datetime.strptime(
-        contract_row["active_to_utc"],
-        "%Y-%m-%dT%H:%M:%SZ",
-    ).replace(tzinfo=timezone.utc).timestamp())
+
+def get_contract_search_bounds(
+        contract_row,
+        server_time,
+        from_utc="",
+        to_utc="",
+):
+    # По умолчанию берём рабочее окно из contracts.py.
+    # Для одиночного режима границы можно переопределить вручную
+    # через HISTORY_START_LOOKUP_FROM_UTC / HISTORY_START_LOOKUP_TO_UTC.
+    active_from_ts = parse_contract_utc_boundary(contract_row["active_from_utc"])
+    active_to_ts = parse_contract_utc_boundary(contract_row["active_to_utc"])
+
+    manual_from_ts = parse_optional_lookup_boundary(from_utc)
+    manual_to_ts = parse_optional_lookup_boundary(to_utc)
+
+    search_start_ts = manual_from_ts if manual_from_ts is not None else active_from_ts
+    search_end_ts = manual_to_ts if manual_to_ts is not None else active_to_ts
 
     server_ts = int(server_time.astimezone(timezone.utc).timestamp())
-    return active_from_ts, min(active_to_ts, server_ts)
+    return search_start_ts, min(search_end_ts, server_ts)
 
 
-async def lookup_contract_history_start(ib, instrument_code, instrument_row, contract_row, server_time):
+async def lookup_contract_history_start(
+        ib,
+        instrument_code,
+        instrument_row,
+        contract_row,
+        server_time,
+        from_utc="",
+        to_utc="",
+):
     contract = build_contract_for_conid_lookup(
         instrument_code=instrument_code,
         instrument_row=instrument_row,
         contract_row=contract_row,
     )
     contract_name = contract_row["localSymbol"]
-    search_start_ts, search_end_ts = get_contract_search_bounds(contract_row, server_time)
+    search_start_ts, search_end_ts = get_contract_search_bounds(
+        contract_row=contract_row,
+        server_time=server_time,
+        from_utc=from_utc,
+        to_utc=to_utc,
+    )
 
     print("=" * 100)
     print(f"{instrument_code} / {contract_name}")
     print("=" * 100)
     print(f"active_from_utc : {contract_row['active_from_utc']}")
     print(f"active_to_utc   : {contract_row['active_to_utc']}")
+    if from_utc or to_utc:
+        print(f"manual_from_utc : {from_utc or '-'}")
+        print(f"manual_to_utc   : {to_utc or '-'}")
     print(f"search_start    : {format_utc(datetime.fromtimestamp(search_start_ts, tz=timezone.utc))}")
     print(f"search_end      : {format_utc(datetime.fromtimestamp(search_end_ts, tz=timezone.utc))}")
 
@@ -1145,7 +1190,6 @@ async def lookup_contract_history_start(ib, instrument_code, instrument_row, con
         "reliable_start_ts": reliable_start_ts,
         "by_what_to_show": by_what_to_show,
     }
-
 
 # ==========================================================
 # РЕЖИМЫ
@@ -1440,6 +1484,7 @@ async def run_realtime_probe_mode(ib):
             await asyncio.sleep(2)
 
 
+
 async def run_history_start_lookup_mode(ib):
     server_time = await ib.reqCurrentTimeAsync()
     print("Соединение с IB установлено")
@@ -1461,6 +1506,8 @@ async def run_history_start_lookup_mode(ib):
         instrument_row=instrument_row,
         contract_row=contract_row,
         server_time=server_time,
+        from_utc=HISTORY_START_LOOKUP_FROM_UTC,
+        to_utc=HISTORY_START_LOOKUP_TO_UTC,
     )
 
 
@@ -1547,7 +1594,6 @@ async def run_registry_history_start_lookup_mode(ib):
             f"{item['instrument_code']:>6} / {item['contract_name']:<8} | "
             f"{item['status']:<20} | {reliable_text}"
         )
-
 
 async def main():
     supported_modes = {
