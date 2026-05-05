@@ -56,7 +56,7 @@ def get_recent_backfill_sync_ts(first_bid_ts, first_ask_ts):
     return first_bid_ts
 
 
-def get_instrument_left_boundary_ts(instrument_code, instrument_row, contract_row, sync_ts):
+def get_instrument_left_boundary_ts(instrument_row, contract_row, sync_ts):
     # Левая граница, левее которой недавний добор заходить не должен.
     if instrument_row["secType"] == "FUT":
         return parse_utc_iso_to_ts(contract_row["active_from_utc"])
@@ -84,7 +84,6 @@ def get_recent_backfill_range(instrument_code, contract_local_symbol, sync_ts):
         )
 
     left_boundary_ts = get_instrument_left_boundary_ts(
-        instrument_code=instrument_code,
         instrument_row=instrument_row,
         contract_row=contract_row,
         sync_ts=sync_ts,

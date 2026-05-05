@@ -79,14 +79,3 @@ def build_active_instruments(server_time_text):
         )
 
     return active_instruments
-
-
-def build_active_futures(server_time_text):
-    # Обратная совместимость для старого имени функции.
-    # Возвращает только FUT-инструменты.
-    active_instruments = build_active_instruments(server_time_text)
-    return {
-        instrument_code: active_name
-        for instrument_code, active_name in active_instruments.items()
-        if Instrument[instrument_code]["secType"] == "FUT"
-    }

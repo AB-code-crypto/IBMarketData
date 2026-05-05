@@ -27,7 +27,6 @@ async def load_history_bid_ask_once(
         ib_health,
         contract,
         contract_name,
-        sec_type,
         db_path,
         table_name,
         start_dt,
@@ -132,7 +131,6 @@ async def load_quotes_segment(
         chunk_end_dt = datetime.fromtimestamp(chunk_end_ts, tz=timezone.utc)
 
         if not should_load_history_chunk(
-                sec_type=sec_type,
                 session_model=session_model,
                 chunk_start_ts=chunk_start_ts,
                 chunk_end_ts=chunk_end_ts,
@@ -158,7 +156,6 @@ async def load_quotes_segment(
             ib_health=ib_health,
             contract=contract,
             contract_name=contract_name,
-            sec_type=sec_type,
             db_path=db_path,
             table_name=table_name,
             start_dt=chunk_start_dt,

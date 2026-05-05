@@ -63,7 +63,7 @@ def should_load_fx_hour_chunk(chunk_start_ts, chunk_end_ts):
     return True
 
 
-def should_load_history_chunk(sec_type, session_model, chunk_start_ts, chunk_end_ts):
+def should_load_history_chunk(session_model, chunk_start_ts, chunk_end_ts):
     # Единая точка принятия решения, стоит ли запрашивать historical chunk.
     if session_model == "CME_EQUITY_INDEX":
         return should_load_futures_hour_chunk(chunk_start_ts, chunk_end_ts)
