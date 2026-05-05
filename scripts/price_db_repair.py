@@ -81,7 +81,7 @@ from zoneinfo import ZoneInfo
 
 from ib_async import Contract
 
-from config import settings_for_gap as settings
+from config import settings_live as settings
 from contracts import Instrument
 from core.db_sql import create_quotes_table_sql, upsert_quotes_sql
 from core.ib_connector import connect_ib, disconnect_ib
