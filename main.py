@@ -387,7 +387,7 @@ async def main():
         )
 
     except asyncio.CancelledError:
-        shutdown_message = "Стоп робота: остановлен пользователем\n=================================\n"
+        shutdown_message = "===========\nСтоп робота: остановлен пользователем\n==========="
         raise
 
     finally:
