@@ -77,8 +77,13 @@ class Settings:
     ib_port: int = 7496  # 7497 - демо счёт, 7496 - реальный счёт
     ib_client_id: int = 200
 
-    # Файл SQLite БД.
-    price_db_path: str = str(BASE_DIR / "data" / "price.sqlite3")
+    # Каталог с SQLite-БД цен.
+    # Внутри него каждый логический инструмент хранится в своём файле:
+    # data/prices/MNQ.sqlite3, data/prices/MES.sqlite3 и т.д.
+    price_db_dir: str = str(BASE_DIR / "data" / "prices")
+
+    # Старый путь оставляем только для разовой миграции MNQ из прежней схемы.
+    legacy_price_db_path: str = str(BASE_DIR / "data" / "price.sqlite3")
 
     # Telegram-бот, техническая группа и опциональная тема внутри группы.
     telegram_bot_token: str = get_required_env("TELEGRAM_BOT_TOKEN")

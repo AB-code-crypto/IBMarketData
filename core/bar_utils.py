@@ -1,9 +1,13 @@
 from datetime import timezone
 
-# Размер куска для 5-секундной истории фьючерсов.
-# Для IB historical data по фьючерсам работаем часовыми кусками,
+# Размер куска для 5-секундной истории.
+# Для IB historical data работаем часовыми кусками,
 # чтобы не упираться в pacing limits и не получать слишком тяжёлые ответы.
-FUTURES_5_SECS_CHUNK_SECONDS = 3600
+DEFAULT_5_SECS_CHUNK_SECONDS = 3600
+
+# Безопасный lookback по умолчанию для новых single-contract инструментов,
+# если в contracts.py не задан history_lookback_days.
+DEFAULT_HISTORY_LOOKBACK_DAYS = 14
 
 
 def build_duration_str(start_dt, end_dt):
@@ -27,8 +31,10 @@ def get_bar_size_seconds(bar_size_setting):
 
 def get_chunk_seconds(sec_type, bar_size_setting):
     # Возвращаем размер одного historical chunk для заданного типа инструмента.
-    if sec_type == "FUT" and bar_size_setting == "5 secs":
-        return FUTURES_5_SECS_CHUNK_SECONDS
+    # Пока все поддерживаемые инструменты работают на 5-секундных барах
+    # и часовых historical-запросах.
+    if sec_type in ("FUT", "CASH", "CRYPTO") and bar_size_setting == "5 secs":
+        return DEFAULT_5_SECS_CHUNK_SECONDS
 
     raise ValueError(
         f"Не задан размер куска для secType={sec_type}, barSizeSetting={bar_size_setting}"
@@ -61,3 +67,8 @@ def get_current_aligned_ts(server_dt, bar_size_seconds):
     # Это нужно, чтобы не пытаться докачивать ещё не закрытый текущий бар.
     raw_ts = int(server_dt.astimezone(timezone.utc).timestamp())
     return align_timestamp_down(raw_ts, bar_size_seconds)
+
+
+def get_history_lookback_start_ts(current_aligned_ts, lookback_days):
+    # Строит левую границу истории по lookback_days.
+    return current_aligned_ts - int(lookback_days) * 86400

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from config import settings_live as settings
-from core.active_futures import build_active_futures
+from core.active_futures import build_active_instruments
 from core.db_initializer import initialize_databases_sync
 from core.ib_connector import (
     connect_ib,
@@ -22,7 +22,6 @@ from core.logger import (
     setup_telegram_logging,
     wait_telegram_logging,
 )
-from core.runtime_state import RecentBackfillState
 from core.telegram_sender import TelegramSender
 
 setup_logging()
@@ -44,17 +43,17 @@ class BackgroundTasks:
         return self.realtime, self.heartbeat, self.monitor
 
 
-def _log_connection_details(*, server_time_text: str, active_futures: dict) -> None:
+def _log_connection_details(*, server_time_text: str, active_instruments: dict) -> None:
     log_info(logger, "IBMarketData data-service started", to_telegram=True)
     log_info(logger, f"Host: {settings.ib_host}", to_telegram=False)
     log_info(logger, f"Port: {settings.ib_port}", to_telegram=False)
     log_info(logger, f"Client ID: {settings.ib_client_id}", to_telegram=True)
     log_info(logger, f"Время сервера IB: {server_time_text}", to_telegram=True)
-    log_info(logger, f"Активные фьючерсы на старте: {active_futures}", to_telegram=False)
-    log_info(logger, f"Price DB: {settings.price_db_path}", to_telegram=False)
+    log_info(logger, f"Активные инструменты на старте: {active_instruments}", to_telegram=False)
+    log_info(logger, f"Price DB dir: {settings.price_db_dir}", to_telegram=False)
 
 
-def _start_background_tasks(*, ib, ib_health, active_futures: dict, recent_backfill_state: RecentBackfillState):
+def _start_background_tasks(*, ib, ib_health, active_instruments: dict):
     monitor_task = asyncio.create_task(
         monitor_ib_connection(ib, settings, ib_health),
         name="monitor_ib_connection",
@@ -68,8 +67,7 @@ def _start_background_tasks(*, ib, ib_health, active_futures: dict, recent_backf
             ib=ib,
             ib_health=ib_health,
             settings=settings,
-            active_futures=active_futures,
-            recent_backfill_state=recent_backfill_state,
+            active_instruments=active_instruments,
         ),
         name="load_realtime_task",
     )
@@ -120,17 +118,16 @@ async def _shutdown_app(*, ib, shutdown_message: str, tasks: Optional[Background
 async def main():
     shutdown_message = "IBMarketData data-service завершает работу"
     background_tasks: Optional[BackgroundTasks] = None
-    recent_backfill_state = RecentBackfillState()
 
     ib, ib_health = await connect_ib(settings)
 
     try:
         server_time_text = await get_ib_server_time_text(ib)
-        active_futures = build_active_futures(server_time_text)
+        active_instruments = build_active_instruments(server_time_text)
 
         _log_connection_details(
             server_time_text=server_time_text,
-            active_futures=active_futures,
+            active_instruments=active_instruments,
         )
 
         initialize_databases_sync(settings)
@@ -139,8 +136,7 @@ async def main():
         background_tasks = _start_background_tasks(
             ib=ib,
             ib_health=ib_health,
-            active_futures=active_futures,
-            recent_backfill_state=recent_backfill_state,
+            active_instruments=active_instruments,
         )
 
         await background_tasks.realtime

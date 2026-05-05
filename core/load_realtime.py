@@ -6,10 +6,11 @@ from datetime import timezone
 from contracts import Instrument
 from core.cme_session import is_expected_realtime_flow_now
 from core.contract_utils import (
-    build_futures_contract,
-    build_table_name,
+    build_instrument_contract,
     get_contract_row_by_local_symbol,
+    get_contract_storage_name,
 )
+from core.instrument_db import get_instrument_db_path, get_instrument_table_name
 from core.logger import get_logger, log_info, log_warning
 from core.price_validation import validate_positive_price
 from core.realtime_db import open_quotes_db, write_realtime_bar_to_sqlite
@@ -32,10 +33,6 @@ from core.runtime_state import RecentBackfillState, RealtimeMonitorState
 from core.time_utils import format_utc
 
 logger = get_logger(__name__)
-
-# В realtime сейчас работаем только с одним активным фьючерсом.
-# Сам активный контракт приходит снаружи в виде словаря ACTIVE_FUTURES,
-# например: {"MNQ": "MNQM6"}.
 
 # Какие потоки данных хотим получать в realtime.
 # Для нашей схемы нужны отдельные бары по BID и ASK,
@@ -64,37 +61,38 @@ def get_realtime_instrument_row(instrument_code):
 
     instrument_row = Instrument[instrument_code]
 
-    if instrument_row["secType"] != "FUT":
+    if instrument_row["secType"] not in ("FUT", "CASH", "CRYPTO"):
         raise ValueError(
-            f"Realtime loader сейчас поддерживает только FUT, получено: {instrument_row['secType']}"
+            f"Realtime loader не поддерживает secType={instrument_row['secType']}"
         )
 
     if instrument_row["barSizeSetting"] != "5 secs":
         raise ValueError(
-            f"Realtime loader ожидает barSizeSetting='5 secs', получено: {instrument_row['barSizeSetting']}"
+            f"Realtime loader ожидает barSizeSetting='5 secs', "
+            f"получено: {instrument_row['barSizeSetting']}"
         )
 
     return instrument_row
 
 
-def get_realtime_active_future(active_futures):
-    # Для realtime сейчас ожидаем ровно один активный фьючерс.
-    # Снаружи нам передают словарь вида {"MNQ": "MNQM6"}.
-    if not isinstance(active_futures, dict):
-        raise ValueError("ACTIVE_FUTURES должен быть словарём")
+def get_realtime_contract_context(instrument_code, active_contract_name):
+    # Возвращает всё, что нужно realtime-loader'у для одного инструмента.
+    instrument_row = get_realtime_instrument_row(instrument_code)
+    sec_type = instrument_row["secType"]
 
-    if len(active_futures) == 0:
-        raise ValueError("ACTIVE_FUTURES пуст: нет активного фьючерса для realtime")
+    if sec_type == "FUT":
+        contract_row = get_contract_row_by_local_symbol(instrument_row, active_contract_name)
+    else:
+        contract_row = None
 
-    instrument_code, contract_local_symbol = next(iter(active_futures.items()))
+    contract = build_instrument_contract(
+        instrument_code=instrument_code,
+        instrument_row=instrument_row,
+        contract_row=contract_row,
+    )
+    contract_name = get_contract_storage_name(instrument_code, instrument_row, contract_row)
 
-    if not isinstance(instrument_code, str) or not instrument_code:
-        raise ValueError("Некорректный ключ в ACTIVE_FUTURES")
-
-    if not isinstance(contract_local_symbol, str) or not contract_local_symbol:
-        raise ValueError("Некорректное значение localSymbol в ACTIVE_FUTURES")
-
-    return instrument_code, contract_local_symbol
+    return instrument_row, contract_row, contract, contract_name
 
 
 async def wait_for_realtime_ready(ib, ib_health):
@@ -160,7 +158,7 @@ def validate_price_value(value, field_name, stream_name, contract_name, bar_time
     )
 
 
-def validate_realtime_bar(contract, what_to_show, bar):
+def validate_realtime_bar(contract_name, what_to_show, bar):
     # Проверяем весь realtime-бар целиком.
     bar_time_text = format_utc(bar.time)
 
@@ -174,7 +172,7 @@ def validate_realtime_bar(contract, what_to_show, bar):
             value=field_value,
             field_name=field_name,
             stream_name=what_to_show,
-            contract_name=contract.localSymbol,
+            contract_name=contract_name,
             bar_time_text=bar_time_text,
         )
         if validation_error is not None:
@@ -183,14 +181,14 @@ def validate_realtime_bar(contract, what_to_show, bar):
     return None
 
 
-def format_realtime_bar_message(contract, what_to_show, bar):
+def format_realtime_bar_message(contract_name, what_to_show, bar):
     # Собираем одну строку лога по новому 5-секундному бару.
     # В лог обязательно добавляем тип потока,
     # чтобы сразу было видно, это BID-бар или ASK-бар.
     bar_time_text = format_utc(bar.time)
 
     return (
-        f"RT BAR {contract.localSymbol} | {what_to_show} | {bar_time_text} | "
+        f"RT BAR {contract_name} | {what_to_show} | {bar_time_text} | "
         f"O={bar.open_} H={bar.high} L={bar.low} C={bar.close} "
         f"V={bar.volume} WAP={bar.wap} COUNT={bar.count}"
     )
@@ -201,7 +199,7 @@ def maybe_start_recent_backfill_task(
         ib_health,
         settings,
         instrument_code,
-        contract_local_symbol,
+        contract_name,
         recent_backfill_state,
         what_to_show,
         bar_time_ts,
@@ -238,7 +236,7 @@ def maybe_start_recent_backfill_task(
                 ib_health=ib_health,
                 settings=settings,
                 instrument_code=instrument_code,
-                contract_local_symbol=contract_local_symbol,
+                contract_local_symbol=contract_name,
                 sync_ts=sync_ts,
             )
 
@@ -251,7 +249,8 @@ def maybe_start_recent_backfill_task(
         except Exception as exc:
             log_warning(
                 logger,
-                f"Разовая докачка последнего часа завершилась ошибкой: {exc}",
+                f"Разовая докачка последнего часа завершилась ошибкой "
+                f"для {contract_name}: {exc}",
                 to_telegram=False,
             )
 
@@ -266,9 +265,8 @@ def build_realtime_update_handler(
         ib_health,
         settings,
         instrument_code,
-        contract_local_symbol,
+        contract_name,
         recent_backfill_state,
-        contract,
         what_to_show,
         conn,
         table_name,
@@ -287,7 +285,7 @@ def build_realtime_update_handler(
                 return
 
             bar = bars[-1]
-            validation_error = validate_realtime_bar(contract, what_to_show, bar)
+            validation_error = validate_realtime_bar(contract_name, what_to_show, bar)
 
             if validation_error is not None:
                 log_warning(
@@ -300,14 +298,14 @@ def build_realtime_update_handler(
             write_realtime_bar_to_sqlite(
                 conn=conn,
                 table_name=table_name,
-                contract_name=contract.localSymbol,
+                contract_name=contract_name,
                 what_to_show=what_to_show,
                 bar=bar,
             )
 
             log_info(
                 logger,
-                format_realtime_bar_message(contract, what_to_show, bar),
+                format_realtime_bar_message(contract_name, what_to_show, bar),
                 to_telegram=False,
             )
 
@@ -318,7 +316,7 @@ def build_realtime_update_handler(
                 ib_health=ib_health,
                 settings=settings,
                 instrument_code=instrument_code,
-                contract_local_symbol=contract_local_symbol,
+                contract_name=contract_name,
                 recent_backfill_state=recent_backfill_state,
                 what_to_show=what_to_show,
                 bar_time_ts=bar_time_ts,
@@ -328,7 +326,7 @@ def build_realtime_update_handler(
             log_warning(
                 logger,
                 f"Ошибка в realtime update handler "
-                f"({contract.localSymbol}, {what_to_show}): {exc}\n"
+                f"({contract_name}, {what_to_show}): {exc}\n"
                 f"{traceback.format_exc()}",
                 to_telegram=False,
             )
@@ -336,44 +334,34 @@ def build_realtime_update_handler(
     return on_bar_update
 
 
-async def load_realtime_task(
+async def load_realtime_instrument_task(
         ib,
         ib_health,
         settings,
-        active_futures,
-        recent_backfill_state: RecentBackfillState,
+        instrument_code,
+        active_contract_name,
 ):
-    # Текущая realtime-версия loader-а:
-    # - берём один активный контракт из ACTIVE_FUTURES;
-    # - открываем отдельные подписки на BID и ASK 5-second bars;
-    # - пишем новые бары в SQLite в таблицу вида MNQ_5s;
-    # - BID и ASK пишем независимо по мере их прихода;
-    # - при reconnect умеем переподписываться на realtime BID/ASK;
-    # - при зависании потока умеем предупредить и попробовать переподписаться.
-    instrument_code, contract_local_symbol = get_realtime_active_future(active_futures)
-
-    instrument_row = get_realtime_instrument_row(instrument_code)
-    contract_row = get_contract_row_by_local_symbol(instrument_row, contract_local_symbol)
-    contract = build_futures_contract(
+    # Realtime loader для одного логического инструмента.
+    instrument_row, _, contract, contract_name = get_realtime_contract_context(
         instrument_code=instrument_code,
-        instrument_row=instrument_row,
-        contract_row=contract_row,
+        active_contract_name=active_contract_name,
     )
 
     use_rth = instrument_row["useRTH"]
-    table_name = build_table_name(instrument_code, instrument_row["barSizeSetting"])
-    db_path = settings.price_db_path
+    table_name = get_instrument_table_name(instrument_code, instrument_row)
+    db_path = get_instrument_db_path(settings, instrument_code, instrument_row)
+    session_model = instrument_row.get("session_model", "")
     db_conn = None
 
+    recent_backfill_state = RecentBackfillState()
     realtime_monitor_state = RealtimeMonitorState()
-    # Храним все открытые подписки и их обработчики,
-    # чтобы в finally корректно всё снять и отменить.
     current_subscriptions = []
 
     try:
         log_info(
             logger,
-            f"Запускаю realtime loader для {instrument_code}",
+            f"Запускаю realtime loader для {instrument_code}: "
+            f"contract={contract_name}, secType={instrument_row['secType']}",
             to_telegram=False,
         )
 
@@ -393,8 +381,8 @@ async def load_realtime_task(
             for what_to_show in REALTIME_WHAT_TO_SHOW_LIST:
                 log_info(
                     logger,
-                    f"Realtime loader: открываю подписку на {contract.localSymbol} "
-                    f"(conId={contract.conId}), whatToShow={what_to_show}, useRTH={use_rth}",
+                    f"Realtime loader: открываю подписку на {contract_name}, "
+                    f"whatToShow={what_to_show}, useRTH={use_rth}",
                     to_telegram=False,
                 )
 
@@ -410,9 +398,8 @@ async def load_realtime_task(
                     ib_health=ib_health,
                     settings=settings,
                     instrument_code=instrument_code,
-                    contract_local_symbol=contract_local_symbol,
+                    contract_name=contract_name,
                     recent_backfill_state=recent_backfill_state,
-                    contract=contract,
                     what_to_show=what_to_show,
                     conn=db_conn,
                     table_name=table_name,
@@ -431,19 +418,13 @@ async def load_realtime_task(
 
                 log_info(
                     logger,
-                    f"Подписался на real-time 5-second bars: {contract.localSymbol} "
-                    f"(conId={contract.conId}), whatToShow={what_to_show}, useRTH={use_rth}",
+                    f"Подписался на real-time 5-second bars: {contract_name}, "
+                    f"whatToShow={what_to_show}, useRTH={use_rth}",
                     to_telegram=False,
                 )
 
         subscribe_all_realtime_streams()
 
-        # Дальше просто держим подписки живыми и ждём новые бары.
-        #
-        # Если realtime ready-состояние пропало, сбрасываем состояние разовой
-        # докачки последнего часа. После восстановления и появления нового
-        # первого синхронного BID/ASK бара сервис сможет снова один раз
-        # дозагрузить последний час.
         was_realtime_ready = is_realtime_ready_now(ib, ib_health)
         if was_realtime_ready:
             realtime_monitor_state.last_restore_monotonic = time.monotonic()
@@ -476,7 +457,7 @@ async def load_realtime_task(
                 realtime_monitor_state.last_stall_warning_monotonic = None
                 realtime_monitor_state.last_ok_telegram_monotonic = None
 
-            if realtime_ready_now and is_expected_realtime_flow_now():
+            if realtime_ready_now and is_expected_realtime_flow_now(session_model):
                 last_bar_monotonic = realtime_monitor_state.last_bar_monotonic
                 last_restore_monotonic = realtime_monitor_state.last_restore_monotonic
 
@@ -530,6 +511,42 @@ async def load_realtime_task(
             except Exception as exc:
                 log_warning(
                     logger,
-                    f"Не удалось закрыть SQLite-соединение realtime loader-а: {exc}",
+                    f"Не удалось закрыть SQLite-соединение realtime loader-а "
+                    f"для {instrument_code}: {exc}",
                     to_telegram=False,
                 )
+
+
+async def load_realtime_task(
+        ib,
+        ib_health,
+        settings,
+        active_instruments,
+):
+    # Запускаем realtime loader по всем активным инструментам.
+    if not isinstance(active_instruments, dict) or not active_instruments:
+        raise ValueError("active_instruments должен быть непустым словарём")
+
+    tasks = []
+
+    for instrument_code, active_contract_name in active_instruments.items():
+        task = asyncio.create_task(
+            load_realtime_instrument_task(
+                ib=ib,
+                ib_health=ib_health,
+                settings=settings,
+                instrument_code=instrument_code,
+                active_contract_name=active_contract_name,
+            ),
+            name=f"load_realtime_{instrument_code}",
+        )
+        tasks.append(task)
+
+    try:
+        await asyncio.gather(*tasks)
+
+    finally:
+        for task in tasks:
+            task.cancel()
+
+        await asyncio.gather(*tasks, return_exceptions=True)

@@ -29,3 +29,16 @@ core/db_initializer.py      Создание таблиц SQLite
 core/db_sql.py              SQL-схемы и SQL-запросы
 core/logger.py              Логирование
 core/telegram_sender.py     Отправка технических текстовых сообщений в Telegram
+
+## Базы данных по инструментам
+
+Сервис хранит цены каждого логического инструмента в отдельной SQLite-БД:
+
+```text
+data/prices/MNQ.sqlite3
+data/prices/MES.sqlite3
+data/prices/EURUSD.sqlite3
+data/prices/BTCUSD.sqlite3
+```
+
+Формат таблиц остаётся единым для всех инструментов: `bar_time_ts`, человекочитаемые datetime-поля, `contract`, BID/ASK OHLC и резервные поля `volume`, `average`, `bar_count`.

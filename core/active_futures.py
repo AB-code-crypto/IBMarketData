@@ -26,39 +26,67 @@ def parse_contract_utc_text(utc_text):
     return dt
 
 
-def build_active_futures(server_time_text):
-    # Возвращаем словарь активных фьючерсов по всем FUT-инструментам.
+def get_active_futures_local_symbol(instrument_code, instrument_row, current_utc, server_time_text):
+    # Возвращает localSymbol активного фьючерсного контракта.
+    current_local_symbol = None
+
+    for contract_row in instrument_row["contracts"]:
+        active_from_utc = parse_contract_utc_text(contract_row["active_from_utc"])
+        active_to_utc = parse_contract_utc_text(contract_row["active_to_utc"])
+
+        if active_from_utc <= current_utc < active_to_utc:
+            current_local_symbol = contract_row["localSymbol"]
+            break
+
+    if current_local_symbol is None:
+        error_text = (
+            f"Текущий контракт не найден: instrument={instrument_code}, "
+            f"server_time_utc={server_time_text}"
+        )
+        log_warning(logger, error_text, to_telegram=True)
+        raise RuntimeError(error_text)
+
+    return current_local_symbol
+
+
+def build_active_instruments(server_time_text):
+    # Возвращает словарь активных инструментов для realtime.
     #
-    # Ключ словаря результата — ключ из Instrument, например MNQ или NQ.
-    # Значение — localSymbol текущего активного фьючерса.
+    # Для FUT значение — localSymbol текущего активного фьючерса.
+    # Для CASH/CRYPTO значение — сам код инструмента, потому что rollover отсутствует.
     current_utc = parse_server_time_text(server_time_text)
-    active_futures = {}
+    active_instruments = {}
 
     for instrument_code, instrument_row in Instrument.items():
-        if instrument_row["secType"] != "FUT":
-            raise ValueError(
-                f"Неподдерживаемый secType для active futures: "
-                f"instrument={instrument_code}, secType={instrument_row['secType']}"
+        sec_type = instrument_row["secType"]
+
+        if sec_type == "FUT":
+            active_instruments[instrument_code] = get_active_futures_local_symbol(
+                instrument_code=instrument_code,
+                instrument_row=instrument_row,
+                current_utc=current_utc,
+                server_time_text=server_time_text,
             )
+            continue
 
-        current_local_symbol = None
+        if sec_type in ("CASH", "CRYPTO"):
+            active_instruments[instrument_code] = instrument_code
+            continue
 
-        for contract_row in instrument_row["contracts"]:
-            active_from_utc = parse_contract_utc_text(contract_row["active_from_utc"])
-            active_to_utc = parse_contract_utc_text(contract_row["active_to_utc"])
+        raise ValueError(
+            f"Неподдерживаемый secType для active instruments: "
+            f"instrument={instrument_code}, secType={sec_type}"
+        )
 
-            if active_from_utc <= current_utc < active_to_utc:
-                current_local_symbol = contract_row["localSymbol"]
-                break
+    return active_instruments
 
-        if current_local_symbol is None:
-            error_text = (
-                f"Текущий контракт не найден: instrument={instrument_code}, "
-                f"server_time_utc={server_time_text}"
-            )
-            log_warning(logger, error_text, to_telegram=True)
-            raise RuntimeError(error_text)
 
-        active_futures[instrument_code] = current_local_symbol
-
-    return active_futures
+def build_active_futures(server_time_text):
+    # Обратная совместимость для старого имени функции.
+    # Возвращает только FUT-инструменты.
+    active_instruments = build_active_instruments(server_time_text)
+    return {
+        instrument_code: active_name
+        for instrument_code, active_name in active_instruments.items()
+        if Instrument[instrument_code]["secType"] == "FUT"
+    }
