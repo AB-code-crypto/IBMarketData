@@ -26,7 +26,7 @@ FUT_DEFAULTS: InstrumentRow = {
 
 FX_DEFAULTS: InstrumentRow = {
     "history_enabled": True,
-    "realtime_enabled": False,
+    "realtime_enabled": True,
     "secType": "CASH",
     "exchange": "IDEALPRO",
     "barSizeSetting": "5 secs",
@@ -56,6 +56,8 @@ Instrument: Registry = {
         "tradingClass": "MNQ",
         "multiplier": 2.0,
         "db_filename": "MNQ.sqlite3",
+        "history_enabled": True,
+        "realtime_enabled": True,
         "contracts": [
             {"conId": 620730945, "localSymbol": "MNQM4", "lastTradeDateOrContractMonth": "20240621",
              "active_from_utc": "2024-03-13T22:00:00Z", "active_to_utc": "2024-06-19T17:00:00Z"},
