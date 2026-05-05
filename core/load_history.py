@@ -110,12 +110,6 @@ async def process_instrument_history_target(
 
     log_info(
         logger,
-        f"Начинаю закачку истории по инструменту {contract_name}. Не хватает: {missing_text}",
-        to_telegram=True,
-    )
-
-    log_info(
-        logger,
         f"Инструмент {contract_name}: в БД сейчас есть "
         f"{format_utc_ts(db_min_ts) if db_min_ts is not None else '-'} -> "
         f"{format_utc_ts(coverage['loaded_until_ts']) if coverage['loaded_until_ts'] is not None else '-'}; "

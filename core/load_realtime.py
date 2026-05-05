@@ -495,12 +495,6 @@ async def load_realtime_instrument_task(
                 if bar_is_recent:
                     last_ok = realtime_monitor_state.last_ok_telegram_monotonic
                     if last_ok is None or (now_mono - last_ok) >= REALTIME_OK_TELEGRAM_INTERVAL_SECONDS:
-                        log_info(
-                            logger,
-                            f"Realtime loader: поток {instrument_code} работает штатно, "
-                            f"новые BID/ASK бары продолжают поступать.",
-                            to_telegram=True,
-                        )
                         realtime_monitor_state.last_ok_telegram_monotonic = now_mono
 
             was_realtime_ready = realtime_ready_now

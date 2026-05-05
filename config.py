@@ -12,7 +12,7 @@ ENV_PATH = BASE_DIR / ".env"
 # encoding="utf-8-sig" нужен на случай, если файл сохранён в Windows с BOM.
 load_dotenv(ENV_PATH, encoding="utf-8-sig")
 
-telegram_message_thread_id_tech_env = os.getenv("TELEGRAM_MESSAGE_THREAD_ID_TECH")
+telegram_thread_id_connect_env = os.getenv("TELEGRAM_THREAD_ID_CONNECT")
 
 
 @dataclass
@@ -26,12 +26,12 @@ class Settings:
     # data/prices/MNQ.sqlite3, data/prices/MES.sqlite3 и т.д.
     price_db_dir: str = str(BASE_DIR / "data" / "prices")
 
-    # Telegram-бот, техническая группа и опциональная тема внутри группы.
+    # Telegram-бот, группа и тема для сообщений о подключении/состоянии.
     telegram_bot_token: str = os.environ["TELEGRAM_BOT_TOKEN"].strip()
-    telegram_chat_id_tech: int = int(os.environ["TELEGRAM_CHAT_ID_TECH"])
+    telegram_chat_id_tech: int = int(os.environ["TELEGRAM_CHAT_ID"])
     telegram_message_thread_id_tech: Optional[int] = (
-        int(telegram_message_thread_id_tech_env)
-        if telegram_message_thread_id_tech_env
+        int(telegram_thread_id_connect_env)
+        if telegram_thread_id_connect_env
         else None
     )
 
