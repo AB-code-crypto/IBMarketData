@@ -1,28 +1,343 @@
 """
-Единый ручной инструмент для проверки работы с рыночными данными Interactive Brokers.
+Единый ручной инструмент для диагностики рыночных данных Interactive Brokers.
 
 Назначение
 ----------
-Скрипт нужен для ручной диагностики IB:
+Скрипт нужен для ручной проверки IB-контрактов и доступности данных:
 
 - найти conId и проверить, как IB распознаёт конкретный контракт;
-- массово пройтись по заглушкам conId=PLACEHOLDER_CON_ID в contracts.py;
+- массово найти conId для фьючерсов из contracts.py;
 - проверить historical request по выбранному инструменту и интервалу;
-- получить historical bars в компактном виде;
-- найти самую раннюю доступную дату historical data;
-- массово проверить доступность historical data по фьючерсам из contracts.py;
-- проверить realtime bars по разным режимам whatToShow.
+- получить небольшой historical-фрагмент в компактном виде;
+- проверить realtime bars по разным режимам whatToShow;
+- найти самую раннюю дату, с которой IB реально отдаёт historical bars;
+- массово проверить, какие фьючерсные контракты из contracts.py ещё доступны по истории.
 
 Скрипт не пишет данные в SQLite-БД и не используется основным роботом.
+Это ручной инженерный инструмент для диагностики IB.
 
-Актуальная версия рассчитана на текущую архитектуру проекта:
-- contracts.py содержит FUT/CASH/CRYPTO инструменты;
-- conId=111 считается временной заглушкой и не передаётся в IB Contract;
-- построение контрактов делается через core.contract_utils;
-- FUT использует конкретный localSymbol;
-- CASH/CRYPTO используют логический код инструмента.
+Режимы работы
+-------------
+
+1. contract_lookup
+
+   Поиск одного контракта через IB reqContractDetailsAsync.
+
+   Используется, когда нужно:
+   - найти conId по localSymbol;
+   - проверить expiry;
+   - проверить exchange;
+   - проверить tradingClass;
+   - проверить multiplier;
+   - убедиться, что IB вообще видит нужный контракт.
+
+   Контракт можно строить двумя способами:
+
+   LOOKUP_SOURCE = "registry"
+       Контракт берётся из contracts.py по:
+       - LOOKUP_INSTRUMENT_CODE
+       - LOOKUP_CONTRACT_LOCAL_SYMBOL
+
+   LOOKUP_SOURCE = "manual"
+       Контракт строится вручную из LOOKUP_* полей:
+       - LOOKUP_LOCAL_SYMBOL
+       - LOOKUP_SEC_TYPE
+       - LOOKUP_EXCHANGE
+       - LOOKUP_CURRENCY
+       - LOOKUP_TRADING_CLASS
+       - LOOKUP_MULTIPLIER
+       - LOOKUP_EXPIRY
+       - LOOKUP_CON_ID
+
+   Для старых фьючерсов обычно нужно:
+       LOOKUP_INCLUDE_EXPIRED = True
+
+   Пример:
+       MODE = "contract_lookup"
+       LOOKUP_SOURCE = "registry"
+       LOOKUP_INSTRUMENT_CODE = "MES"
+       LOOKUP_CONTRACT_LOCAL_SYMBOL = "MESH6"
+
+
+2. registry_conid_lookup
+
+   Массовый поиск conId для фьючерсных контрактов из contracts.py.
+
+   Используется, когда в contracts.py у новых фьючерсов стоят заглушки:
+
+       "conId": PLACEHOLDER_CON_ID
+
+   или conId вообще отсутствует.
+
+   Скрипт проходит по выбранным FUT-инструментам, делает
+   reqContractDetailsAsync по каждому контракту и печатает готовые строки
+   для вставки в contracts.py.
+
+   Основные настройки:
+       CONID_LOOKUP_INSTRUMENT_CODES = ["MES", "ES", "NQ"]
+
+   Если список пустой:
+       CONID_LOOKUP_INSTRUMENT_CODES = []
+
+   тогда скрипт пройдёт все FUT-инструменты из contracts.py.
+
+   Если нужно искать только отсутствующие conId и заглушки:
+       CONID_LOOKUP_ONLY_MISSING_OR_PLACEHOLDER = True
+
+   Если нужно перепроверить вообще все контракты:
+       CONID_LOOKUP_ONLY_MISSING_OR_PLACEHOLDER = False
+
+   Пример:
+       MODE = "registry_conid_lookup"
+       CONID_LOOKUP_INSTRUMENT_CODES = ["NQ"]
+       CONID_LOOKUP_ONLY_MISSING_OR_PLACEHOLDER = True
+
+
+3. historical_probe
+
+   Диагностическая проверка historical data по одному инструменту
+   и одному короткому временному интервалу.
+
+   Скрипт делает несколько historical-запросов подряд по списку:
+
+       HISTORICAL_PROBE_WHAT_TO_SHOW_LIST
+
+   Например:
+       ["TRADES", "MIDPOINT", "BID", "ASK", "BID_ASK"]
+
+   Используется, когда нужно понять:
+   - какие whatToShow доступны по инструменту;
+   - отдаёт ли IB 5-секундные бары на выбранном интервале;
+   - есть ли ошибки historical data;
+   - как выглядят сами бары.
+
+   Для текущей BID/ASK-БД особенно важны:
+       ["BID", "ASK"]
+
+   Основные настройки:
+       INSTRUMENT_CODE
+       CONTRACT_LOCAL_SYMBOL
+       HISTORICAL_START_UTC
+       HISTORICAL_END_UTC
+       HISTORICAL_BAR_SIZE_SETTING
+       HISTORICAL_USE_RTH
+       HISTORICAL_PROBE_WHAT_TO_SHOW_LIST
+
+   Для FUT:
+       CONTRACT_LOCAL_SYMBOL обязателен.
+
+   Для CASH/CRYPTO:
+       CONTRACT_LOCAL_SYMBOL не используется.
+
+   Пример:
+       MODE = "historical_probe"
+       INSTRUMENT_CODE = "NQ"
+       CONTRACT_LOCAL_SYMBOL = "NQH6"
+       HISTORICAL_START_UTC = "2026-03-12 17:00:00"
+       HISTORICAL_END_UTC = "2026-03-12 17:05:00"
+       HISTORICAL_PROBE_WHAT_TO_SHOW_LIST = ["BID", "ASK"]
+
+
+4. historical_fetch
+
+   Одиночный historical-запрос по одному whatToShow.
+
+   В отличие от historical_probe, этот режим не перебирает разные типы данных.
+   Он делает один запрос:
+
+       HISTORICAL_FETCH_WHAT_TO_SHOW
+
+   и печатает компактный список баров.
+
+   Используется, когда нужно:
+   - быстро получить маленький кусок истории;
+   - глазами проверить цены;
+   - проверить формат bar.date / open / high / low / close / volume;
+   - отладить конкретный historical-запрос.
+
+   Основные настройки:
+       INSTRUMENT_CODE
+       CONTRACT_LOCAL_SYMBOL
+       HISTORICAL_START_UTC
+       HISTORICAL_END_UTC
+       HISTORICAL_FETCH_WHAT_TO_SHOW
+
+   Пример:
+       MODE = "historical_fetch"
+       INSTRUMENT_CODE = "EURUSD"
+       CONTRACT_LOCAL_SYMBOL = ""
+       HISTORICAL_START_UTC = "2026-05-01 10:00:00"
+       HISTORICAL_END_UTC = "2026-05-01 10:05:00"
+       HISTORICAL_FETCH_WHAT_TO_SHOW = "MIDPOINT"
+
+
+5. realtime_probe
+
+   Проверка realtime bars через reqRealTimeBars.
+
+   Скрипт последовательно подписывается на режимы из:
+
+       REALTIME_WHAT_TO_SHOW_LIST
+
+   Например:
+       ["TRADES", "MIDPOINT", "BID", "ASK"]
+
+   По каждому режиму подписка держится:
+
+       SECONDS_PER_MODE
+
+   секунд, и новые бары печатаются в консоль.
+
+   Используется, когда нужно:
+   - проверить, идёт ли realtime-поток;
+   - проверить какие whatToShow доступны;
+   - проверить BID/ASK realtime;
+   - увидеть фактические значения open/high/low/close;
+   - проверить, не пустой ли поток в текущую торговую сессию.
+
+   Основные настройки:
+       INSTRUMENT_CODE
+       CONTRACT_LOCAL_SYMBOL
+       REALTIME_WHAT_TO_SHOW_LIST
+       REALTIME_BAR_SIZE
+       REALTIME_USE_RTH
+       SECONDS_PER_MODE
+
+   Пример:
+       MODE = "realtime_probe"
+       INSTRUMENT_CODE = "BTCUSD"
+       CONTRACT_LOCAL_SYMBOL = ""
+       REALTIME_WHAT_TO_SHOW_LIST = ["TRADES", "MIDPOINT", "BID", "ASK"]
+       SECONDS_PER_MODE = 15
+
+
+6. history_start_lookup
+
+   Поиск самой ранней доступной historical-даты для одного конкретного контракта.
+
+   Скрипт берёт заданный инструмент и контракт, затем ищет первую дату,
+   с которой IB реально отдаёт бары.
+
+   Используется, когда нужно понять:
+   - можно ли качать старый квартальный контракт;
+   - доступен ли контракт с active_from_utc;
+   - с какой даты начинать закачку, если контракт доступен не полностью.
+
+   Алгоритм:
+   - берётся диапазон поиска;
+   - проверяется маленькое окно HISTORY_START_LOOKUP_WINDOW_SECONDS;
+   - сначала идёт грубый поиск шагом HISTORY_START_LOOKUP_COARSE_STEP_DAYS;
+   - затем начало уточняется бинарным поиском до HISTORY_START_LOOKUP_PRECISION_SECONDS;
+   - поиск выполняется по каждому whatToShow из HISTORY_START_LOOKUP_WHAT_TO_SHOW_LIST.
+
+   Для текущей БД важнее всего:
+       HISTORY_START_LOOKUP_WHAT_TO_SHOW_LIST = ["BID", "ASK"]
+
+   Основные настройки:
+       HISTORY_START_LOOKUP_INSTRUMENT_CODE
+       HISTORY_START_LOOKUP_CONTRACT_LOCAL_SYMBOL
+       HISTORY_START_LOOKUP_FROM_UTC
+       HISTORY_START_LOOKUP_TO_UTC
+       HISTORY_START_LOOKUP_WHAT_TO_SHOW_LIST
+
+   Пример:
+       MODE = "history_start_lookup"
+       HISTORY_START_LOOKUP_INSTRUMENT_CODE = "NQ"
+       HISTORY_START_LOOKUP_CONTRACT_LOCAL_SYMBOL = "NQH6"
+       HISTORY_START_LOOKUP_FROM_UTC = "2025-12-17 23:00:00"
+       HISTORY_START_LOOKUP_TO_UTC = "2026-03-18 21:00:00"
+       HISTORY_START_LOOKUP_WHAT_TO_SHOW_LIST = ["BID", "ASK"]
+
+
+7. registry_history_start_lookup
+
+   Массовый поиск начала доступной historical-истории по фьючерсным контрактам
+   из contracts.py.
+
+   Это основной режим, если нужно понять:
+   - какие старые контракты ещё доступны;
+   - какие контракты уже можно удалить из contracts.py;
+   - с какого контракта реально можно начинать stitched-историю;
+   - есть ли BID и ASK с начала active_from_utc.
+
+   Скрипт проходит по выбранным FUT-инструментам:
+
+       HISTORY_START_LOOKUP_INSTRUMENT_CODES
+
+   Например:
+       ["MES", "ES", "NQ"]
+
+   Если список пустой:
+       HISTORY_START_LOOKUP_INSTRUMENT_CODES = []
+
+   тогда будут проверены все FUT-инструменты из contracts.py.
+
+   Для каждого контракта берутся:
+   - active_from_utc
+   - active_to_utc
+   - localSymbol
+   - conId, если он есть и не равен PLACEHOLDER_CON_ID
+
+   Скрипт ищет первую дату, где IB отдаёт бары по каждому whatToShow
+   из HISTORY_START_LOOKUP_WHAT_TO_SHOW_LIST.
+
+   Для текущей BID/ASK-БД ставить:
+       HISTORY_START_LOOKUP_WHAT_TO_SHOW_LIST = ["BID", "ASK"]
+
+   Итоговые статусы:
+
+   ok_from_active_from
+       Контракт доступен с самого начала active_from_utc.
+       Его можно качать полностью по заданному рабочему окну.
+
+   partial
+       Контракт доступен, но не с начала active_from_utc.
+       Его можно качать только начиная с найденной даты.
+
+   unavailable
+       Скрипт не нашёл historical bars в рабочем окне.
+       Такой контракт, скорее всего, уже недоступен для 5-секундной истории
+       и его можно убрать из contracts.py, если он не нужен для других целей.
+
+   Пример:
+       MODE = "registry_history_start_lookup"
+       HISTORY_START_LOOKUP_INSTRUMENT_CODES = ["MES", "ES", "NQ"]
+       HISTORY_START_LOOKUP_WHAT_TO_SHOW_LIST = ["BID", "ASK"]
+       HISTORY_START_LOOKUP_WINDOW_SECONDS = 300
+       HISTORY_START_LOOKUP_COARSE_STEP_DAYS = 7
+       HISTORY_START_LOOKUP_PRECISION_SECONDS = 3600
+       HISTORY_START_LOOKUP_DELAY_SECONDS = 3
+
+   Если IB начинает ругаться на pacing violation, увеличить:
+       HISTORY_START_LOOKUP_DELAY_SECONDS = 11
+
+
+Общие замечания
+---------------
+
+1. Для FUT-инструментов CONTRACT_LOCAL_SYMBOL обязателен в одиночных режимах.
+
+2. Для CASH и CRYPTO CONTRACT_LOCAL_SYMBOL не используется.
+
+3. Для старых фьючерсов обычно нужно:
+       LOOKUP_INCLUDE_EXPIRED = True
+
+4. Для текущей price DB важнее всего BID/ASK:
+       ["BID", "ASK"]
+
+5. BID_ASK в IB может считаться как два historical-запроса, поэтому для массовых
+   проверок лучше использовать отдельно:
+       ["BID", "ASK"]
+
+6. Не стоит делать слишком частые historical-запросы на 5-секундных барах.
+   Если появляются pacing errors, увеличивай задержку:
+       HISTORY_START_LOOKUP_DELAY_SECONDS
+       CONID_LOOKUP_DELAY_SECONDS
+
+7. Скрипт не изменяет contracts.py автоматически.
+   Он только печатает найденные conId и даты доступности.
+   Все изменения в contracts.py вносятся руками после проверки.
 """
-
 import asyncio
 import json
 import logging
@@ -49,7 +364,7 @@ from core.contract_utils import (
 # - "history_start_lookup"
 # - "registry_history_start_lookup"
 # - "realtime_probe"
-MODE = "contract_lookup"
+MODE = "history_start_lookup"
 
 # ==========================================================
 # НАСТРОЙКИ ПОДКЛЮЧЕНИЯ К IB
@@ -105,7 +420,7 @@ CONID_LOOKUP_DELAY_SECONDS = 0.5
 # НАСТРОЙКИ HISTORICAL РЕЖИМОВ
 # ==========================================================
 # Интервал задаётся в UTC.
-HISTORICAL_START_UTC = "2026-03-12 17:00:00"
+HISTORICAL_START_UTC = "2024-03-13 22:00:00"
 HISTORICAL_END_UTC = "2026-03-12 17:05:00"
 
 HISTORICAL_BAR_SIZE_SETTING = "5 secs"
@@ -144,8 +459,8 @@ FATAL_HISTORICAL_ERROR_CODES = {
 # НАСТРОЙКИ ПОИСКА НАЧАЛА ДОСТУПНОЙ ИСТОРИИ
 # ==========================================================
 # Для одного контракта используем MODE = "history_start_lookup".
-HISTORY_START_LOOKUP_INSTRUMENT_CODE = "MES"
-HISTORY_START_LOOKUP_CONTRACT_LOCAL_SYMBOL = "MESH6"
+HISTORY_START_LOOKUP_INSTRUMENT_CODE = "ES"
+HISTORY_START_LOOKUP_CONTRACT_LOCAL_SYMBOL = "ESM4"
 
 # Для массового прогона используем MODE = "registry_history_start_lookup".
 # Пустой список означает: пройти все FUT-инструменты из contracts.py.
@@ -174,7 +489,7 @@ HISTORY_START_LOOKUP_VERBOSE = False
 # ==========================================================
 # НАСТРОЙКИ REALTIME РЕЖИМА
 # ==========================================================
-REALTIME_WHAT_TO_SHOW_LIST = ["TRADES", "MIDPOINT", "BID", "ASK"]
+REALTIME_WHAT_TO_SHOW_LIST = ["BID", "ASK"]
 REALTIME_BAR_SIZE = 5
 REALTIME_USE_RTH = False
 SECONDS_PER_MODE = 15

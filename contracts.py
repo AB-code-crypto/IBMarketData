@@ -14,8 +14,8 @@ Registry = Dict[str, InstrumentRow]
 PLACEHOLDER_CON_ID = 111
 
 FUT_DEFAULTS: InstrumentRow = {
-    "history_enabled": True,
-    "realtime_enabled": True,
+    "history_enabled": False,
+    "realtime_enabled": False,
     "secType": "FUT",
     "exchange": "CME",
     "currency": "USD",
@@ -25,8 +25,8 @@ FUT_DEFAULTS: InstrumentRow = {
 }
 
 FX_DEFAULTS: InstrumentRow = {
-    "history_enabled": True,
-    "realtime_enabled": True,
+    "history_enabled": False,
+    "realtime_enabled": False,
     "secType": "CASH",
     "exchange": "IDEALPRO",
     "barSizeSetting": "5 secs",
@@ -36,8 +36,8 @@ FX_DEFAULTS: InstrumentRow = {
 }
 
 CRYPTO_DEFAULTS: InstrumentRow = {
-    "history_enabled": True,
-    "realtime_enabled": True,
+    "history_enabled": False,
+    "realtime_enabled": False,
     "secType": "CRYPTO",
     "currency": "USD",
     "barSizeSetting": "5 secs",
@@ -92,9 +92,9 @@ Instrument: Registry = {
         ]
     },
 
-
     "NQ": {
         **FUT_DEFAULTS,
+        "history_enabled": True,
         "tradingClass": "NQ",
         "multiplier": 20.0,
         "db_filename": "NQ.sqlite3",
