@@ -10,49 +10,51 @@
 - показать отчёт по проблемным интервалам;
 - при необходимости докачать найденные интервалы через Interactive Brokers.
 
-Скрипт актуализирован под текущую архитектуру проекта:
+Главная идея настроек
+---------------------
+В скрипте есть один целевой инструмент TARGET и одна стартовая дата CHECK_FROM_UTC.
 
-- БД хранится отдельно по каждому логическому инструменту:
-  data/prices/NQ.sqlite3, data/prices/MNQ.sqlite3, EURUSD.sqlite3 и т.д.;
-- путь к БД берётся через core.instrument_db;
-- таблица инструмента строится через get_instrument_table_name();
-- схема таблицы единая для FUT/CASH/CRYPTO;
-- bar_time_ts_ct больше не используется;
-- строки для записи строятся тем же путём, что и в основном history-loader;
-- ремонт выполняется через core.history_segment_loader.load_quotes_segment();
-- для FUT contract_name — localSymbol, например NQM6;
-- для CASH/CRYPTO contract_name — код инструмента, например EURUSD или BTCUSD.
+TARGET:
+    - для FUT указываем логический инструмент, например "MNQ", "NQ", "MES", "ES";
+    - для CASH/CRYPTO также указываем логический инструмент, например "EURUSD" или "BTCUSD".
+
+CHECK_FROM_UTC:
+    - дата, с которой сканируем БД;
+    - эта же дата является левой границей ремонта найденных проблем.
+
+Для фьючерсов БД уже содержит сшитую непрерывную историю инструмента.
+Скрипт сканирует всю таблицу инструмента целиком, а найденные ремонтные
+интервалы сам раскладывает на конкретные квартальные контракты по active_from_utc /
+active_to_utc из contracts.py.
 
 Режимы
 ------
-
 MODE = "SCAN"
     Только найти проблемные интервалы и напечатать отчёт.
     IB-соединение не открывается, БД не меняется.
 
 MODE = "REPAIR"
-    Найти проблемные интервалы и попытаться их докачать.
-    Если DRY_RUN=True, ремонт не выполняется, только печатается план.
-    Если DRY_RUN=False, скрипт подключается к IB и пишет данные в price DB.
-
-MODE = "MANUAL_INTERVAL"
-    Не сканировать БД, а докачать вручную заданный UTC-интервал.
-    Удобно, когда проблемный участок уже известен.
+    Найти проблемные интервалы и докачать их через IB.
+    В этом режиме скрипт подключается к IB и пишет данные в price DB.
 
 Важные ограничения
 ------------------
 1. Скрипт проверяет внутренние дырки по уже имеющимся строкам БД.
    Начало/конец всей истории лучше закрывает основной history-loader.
 
-2. Для рыночных пауз используется консервативная фильтрация:
+2. Если CHECK_FROM_UTC задан раньше первой найденной строки по инструменту,
+   скрипт считает разрыв от CHECK_FROM_UTC до первой строки потенциальной дыркой,
+   если этот интервал не попадает в ожидаемую рыночную паузу.
+
+3. Для рыночных пауз используется консервативная фильтрация:
    - для CME equity futures учитываются типовые maintenance/weekend/holiday gaps;
    - для FX пропускаются суббота и раннее воскресенье UTC;
    - crypto считается 24/7.
 
-3. Если BID/ASK по инструменту не отдаётся IB вообще, repair не сможет заполнить дырку.
+4. Если BID/ASK по инструменту не отдаётся IB вообще, repair не сможет заполнить дырку.
    В этом случае скрипт покажет попытку ремонта, но rows=0 или ошибку historical request.
 
-4. Скрипт не удаляет плохие строки. Он только UPSERT-ит заново загруженные BID/ASK-бары.
+5. Скрипт не удаляет плохие строки. Он только UPSERT-ит заново загруженные BID/ASK-бары.
 """
 
 import asyncio
@@ -70,7 +72,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from config import settings_live as settings
 from contracts import Instrument
-from core.bar_utils import get_bar_size_seconds
 from core.contract_utils import (
     build_instrument_contract,
     get_contract_row_by_local_symbol,
@@ -79,50 +80,29 @@ from core.contract_utils import (
 from core.history_segment_loader import load_quotes_segment
 from core.ib_connector import connect_ib, disconnect_ib
 from core.instrument_db import get_instrument_db_path, get_instrument_table_name
-from core.logger import get_logger, log_info, log_warning, setup_logging
+from core.logger import get_logger, log_warning, setup_logging
 from core.market_sessions import should_load_history_chunk
 from core.sqlite_utils import open_sqlite_connection
-from core.time_utils import format_utc_ts
+from core.time_utils import format_utc_ts, parse_utc_iso_to_ts
 
 # ============================================================
 # НАСТРОЙКИ РАЗОВОГО ЗАПУСКА
 # ============================================================
 
 # Режимы:
-# - "SCAN"            -> только найти проблемные интервалы;
-# - "REPAIR"          -> найти проблемные интервалы и докачать их;
-# - "MANUAL_INTERVAL" -> докачать вручную заданный UTC-интервал.
+# - "SCAN"   -> только найти проблемные интервалы;
+# - "REPAIR" -> найти проблемные интервалы и докачать их.
 MODE = "SCAN"
 
-# Предохранитель для MODE="REPAIR":
-# True  -> только показать, что будет чиниться;
-# False -> реально подключиться к IB и записать данные в БД.
-DRY_RUN = True
+# Логический инструмент, который проверяем.
+# Для фьючерсов указываем именно инструмент целиком, а не localSymbol контракта.
+TARGET = "MNQ"
 
-# Какой инструмент проверяем.
-INSTRUMENT_CODE = "NQ"
-
-# Какой contract проверяем.
-# Для FUT:
-#   "ALL"  -> все контракты инструмента из БД;
-#   "NQM6" -> только конкретный localSymbol.
-# Для CASH/CRYPTO обычно ставим код инструмента, например "EURUSD".
-CONTRACT_NAME = "ALL"
-
-# Для MANUAL_INTERVAL.
-# Для FUT обязательно указать конкретный localSymbol.
-MANUAL_CONTRACT_NAME = "NQM6"
-MANUAL_START_UTC = "2026-05-01 10:00:00"
-MANUAL_END_UTC = "2026-05-01 11:00:00"
-
-# Для SCAN/REPAIR можно ограничить диапазон поиска.
-# Если None — ищем по всей таблице/контракту.
+# С какой даты проверяем и, если включён REPAIR, с какой даты исправляем.
 # Форматы:
 #   "YYYY-MM-DD"
 #   "YYYY-MM-DD HH:MM:SS"
-# END_UTC_TEXT задаётся как правая граница НЕ включительно.
-START_UTC_TEXT = None
-END_UTC_TEXT = None
+CHECK_FROM_UTC = "2026-05-01 00:00:00"
 
 # Ожидаемый шаг 5-секундных баров.
 EXPECTED_STEP_SECONDS = 5
@@ -258,6 +238,7 @@ CME_IGNORED_GAP_RULES = [
     },
 ]
 
+
 # ============================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ============================================================
@@ -266,13 +247,10 @@ def parse_utc_datetime(text: str) -> datetime:
     return datetime.strptime(text, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
 
 
-def parse_optional_utc_text(value: Optional[str]) -> Optional[int]:
-    if value is None:
-        return None
-
+def parse_required_utc_text(value: str) -> int:
     value = str(value).strip()
     if not value:
-        return None
+        raise ValueError("CHECK_FROM_UTC должен быть задан")
 
     if len(value) == 10:
         dt = datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -302,7 +280,23 @@ def get_instrument_row(instrument_code: str):
     return instrument_row
 
 
-def get_contract_row_if_needed(instrument_code: str, instrument_row, contract_name: str):
+def resolve_target(target: str):
+    # TARGET всегда является кодом логического инструмента.
+    target = str(target).strip()
+    if not target:
+        raise ValueError("TARGET должен быть задан")
+
+    return target, get_instrument_row(target)
+
+
+def parse_contract_bounds(contract_row: dict) -> tuple[int, int]:
+    return (
+        parse_utc_iso_to_ts(contract_row["active_from_utc"]),
+        parse_utc_iso_to_ts(contract_row["active_to_utc"]),
+    )
+
+
+def get_contract_row_for_storage_name(instrument_row, contract_name: str):
     if instrument_row["secType"] != "FUT":
         return None
 
@@ -310,11 +304,7 @@ def get_contract_row_if_needed(instrument_code: str, instrument_row, contract_na
 
 
 def get_repair_contract_context(instrument_code: str, instrument_row, contract_name: str):
-    contract_row = get_contract_row_if_needed(
-        instrument_code=instrument_code,
-        instrument_row=instrument_row,
-        contract_name=contract_name,
-    )
+    contract_row = get_contract_row_for_storage_name(instrument_row, contract_name)
     contract = build_instrument_contract(
         instrument_code=instrument_code,
         instrument_row=instrument_row,
@@ -328,31 +318,6 @@ def get_repair_contract_context(instrument_code: str, instrument_row, contract_n
     return contract, storage_name
 
 
-def get_known_contract_names(conn, table_name: str) -> list[str]:
-    rows = conn.execute(
-        f"""
-        SELECT DISTINCT contract
-        FROM {table_name}
-        ORDER BY contract ASC
-        """
-    ).fetchall()
-    return [row["contract"] for row in rows]
-
-
-def get_target_contract_names(conn, table_name: str, instrument_code: str, instrument_row) -> list[str]:
-    if CONTRACT_NAME != "ALL":
-        return [CONTRACT_NAME]
-
-    names_from_db = get_known_contract_names(conn, table_name)
-    if names_from_db:
-        return names_from_db
-
-    if instrument_row["secType"] == "FUT":
-        return [row["localSymbol"] for row in instrument_row["contracts"]]
-
-    return [instrument_code]
-
-
 def ensure_table_exists(conn, db_path: str, table_name: str) -> None:
     row = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
@@ -361,33 +326,6 @@ def ensure_table_exists(conn, db_path: str, table_name: str) -> None:
 
     if row is None:
         raise ValueError(f"Таблица {table_name!r} не найдена в БД {db_path}")
-
-
-def build_sql_filters(
-        *,
-        start_ts: Optional[int],
-        end_ts: Optional[int],
-        contract_name: Optional[str],
-) -> tuple[str, list]:
-    where_parts = []
-    params = []
-
-    if contract_name is not None:
-        where_parts.append("contract = ?")
-        params.append(contract_name)
-
-    if start_ts is not None:
-        where_parts.append("bar_time_ts >= ?")
-        params.append(start_ts)
-
-    if end_ts is not None:
-        where_parts.append("bar_time_ts < ?")
-        params.append(end_ts)
-
-    if not where_parts:
-        return "", params
-
-    return "WHERE " + " AND ".join(where_parts), params
 
 
 def get_missing_bars_count(gap_start_ts: int, gap_end_ts: int) -> int:
@@ -470,6 +408,59 @@ def should_ignore_gap(
     )
 
 
+def split_interval_by_contracts(
+        *,
+        instrument_code: str,
+        instrument_row,
+        start_ts: int,
+        end_ts_exclusive: int,
+        source: str,
+) -> list[dict]:
+    # Разбивает найденную дырку логического инструмента на интервалы ремонта.
+    # Для FUT интервал раскладывается по active_from_utc / active_to_utc контрактов.
+    # Для CASH/CRYPTO всё ремонтируется как один single-contract инструмент.
+    if end_ts_exclusive <= start_ts:
+        return []
+
+    if instrument_row["secType"] != "FUT":
+        return [
+            {
+                "contract_name": instrument_code,
+                "start_ts": start_ts,
+                "end_ts_exclusive": end_ts_exclusive,
+                "sources": {source},
+            }
+        ]
+
+    intervals = []
+    for contract_row in instrument_row["contracts"]:
+        active_from_ts, active_to_ts = parse_contract_bounds(contract_row)
+        repair_start_ts = max(start_ts, active_from_ts)
+        repair_end_ts = min(end_ts_exclusive, active_to_ts)
+
+        if repair_end_ts <= repair_start_ts:
+            continue
+
+        intervals.append(
+            {
+                "contract_name": contract_row["localSymbol"],
+                "start_ts": repair_start_ts,
+                "end_ts_exclusive": repair_end_ts,
+                "sources": {source},
+            }
+        )
+
+    if not intervals:
+        log_warning(
+            logger,
+            f"Интервал {utc_text(start_ts)} -> {utc_text(end_ts_exclusive)} "
+            f"не попал ни в одно active-окно contracts.py для {instrument_code}. Пропускаю.",
+            to_telegram=False,
+        )
+
+    return intervals
+
+
 # ============================================================
 # ПОИСК ПРОБЛЕМНЫХ ИНТЕРВАЛОВ
 # ============================================================
@@ -478,38 +469,21 @@ def fetch_problem_rows(
         conn,
         table_name: str,
         *,
-        contract_name: str,
-        start_ts: Optional[int],
-        end_ts: Optional[int],
+        start_ts: int,
 ):
     null_condition = " OR ".join([f"{column} IS NULL" for column in PRICE_COLUMNS])
-    where_sql, params = build_sql_filters(
-        start_ts=start_ts,
-        end_ts=end_ts,
-        contract_name=contract_name,
-    )
 
-    if where_sql:
-        sql = f"""
-            SELECT
-                bar_time_ts,
-                contract
-            FROM {table_name}
-            {where_sql}
-              AND ({null_condition})
-            ORDER BY contract ASC, bar_time_ts ASC
-        """
-    else:
-        sql = f"""
-            SELECT
-                bar_time_ts,
-                contract
-            FROM {table_name}
-            WHERE {null_condition}
-            ORDER BY contract ASC, bar_time_ts ASC
-        """
+    sql = f"""
+        SELECT
+            bar_time_ts,
+            contract
+        FROM {table_name}
+        WHERE bar_time_ts >= ?
+          AND ({null_condition})
+        ORDER BY bar_time_ts ASC
+    """
 
-    return conn.execute(sql, tuple(params)).fetchall()
+    return conn.execute(sql, (start_ts,)).fetchall()
 
 
 def build_null_intervals(problem_rows) -> list[dict]:
@@ -520,7 +494,7 @@ def build_null_intervals(problem_rows) -> list[dict]:
     current_prev_ts = None
 
     for row in problem_rows:
-        bar_time_ts = row["bar_time_ts"]
+        bar_time_ts = int(row["bar_time_ts"])
         contract_name = row["contract"]
 
         if current_start_ts is None:
@@ -566,45 +540,72 @@ def fetch_bars_for_gap_scan(
         conn,
         table_name: str,
         *,
-        contract_name: str,
-        start_ts: Optional[int],
-        end_ts: Optional[int],
+        start_ts: int,
 ):
-    where_sql, params = build_sql_filters(
-        start_ts=start_ts,
-        end_ts=end_ts,
-        contract_name=contract_name,
-    )
-
     sql = f"""
         SELECT
             bar_time_ts,
             contract
         FROM {table_name}
-        {where_sql}
-        ORDER BY contract ASC, bar_time_ts ASC
+        WHERE bar_time_ts >= ?
+        ORDER BY bar_time_ts ASC
     """
 
-    return conn.execute(sql, tuple(params)).fetchall()
+    return conn.execute(sql, (start_ts,)).fetchall()
 
 
-def build_gap_intervals(sorted_rows, instrument_row) -> list[dict]:
+def maybe_build_leading_gap(
+        *,
+        sorted_rows,
+        instrument_code: str,
+        instrument_row,
+        start_ts: int,
+) -> list[dict]:
+    # Если первая строка в БД начинается позже CHECK_FROM_UTC,
+    # считаем этот интервал потенциальной дыркой.
+    if not sorted_rows:
+        return []
+
+    first_ts = int(sorted_rows[0]["bar_time_ts"])
+    if first_ts <= start_ts:
+        return []
+
+    if should_ignore_gap(
+            instrument_row=instrument_row,
+            gap_start_ts=start_ts,
+            gap_end_ts_exclusive=first_ts,
+    ):
+        return []
+
+    return split_interval_by_contracts(
+        instrument_code=instrument_code,
+        instrument_row=instrument_row,
+        start_ts=start_ts,
+        end_ts_exclusive=first_ts,
+        source="LEADING_GAP",
+    )
+
+
+def build_gap_intervals(sorted_rows, instrument_code: str, instrument_row, start_ts: int) -> list[dict]:
     intervals = []
 
     if not sorted_rows:
         return intervals
+
+    intervals.extend(
+        maybe_build_leading_gap(
+            sorted_rows=sorted_rows,
+            instrument_code=instrument_code,
+            instrument_row=instrument_row,
+            start_ts=start_ts,
+        )
+    )
 
     previous_row = sorted_rows[0]
 
     for current_row in sorted_rows[1:]:
         previous_ts = int(previous_row["bar_time_ts"])
         current_ts = int(current_row["bar_time_ts"])
-        previous_contract = previous_row["contract"]
-        current_contract = current_row["contract"]
-
-        if previous_contract != current_contract:
-            previous_row = current_row
-            continue
 
         delta_seconds = current_ts - previous_ts
 
@@ -620,20 +621,20 @@ def build_gap_intervals(sorted_rows, instrument_row) -> list[dict]:
                 previous_row = current_row
                 continue
 
-            intervals.append(
-                {
-                    "contract_name": previous_contract,
-                    "start_ts": gap_start_ts,
-                    "end_ts_exclusive": gap_end_ts_exclusive,
-                    "sources": {"GAP"},
-                }
+            intervals.extend(
+                split_interval_by_contracts(
+                    instrument_code=instrument_code,
+                    instrument_row=instrument_row,
+                    start_ts=gap_start_ts,
+                    end_ts_exclusive=gap_end_ts_exclusive,
+                    source="GAP",
+                )
             )
 
         elif delta_seconds < EXPECTED_STEP_SECONDS:
             log_warning(
                 logger,
                 "Найдена аномальная последовательность bar_time_ts: "
-                f"contract={previous_contract}, "
                 f"prev_utc={utc_text(previous_ts)}, "
                 f"curr_utc={utc_text(current_ts)}, "
                 f"delta={delta_seconds} сек",
@@ -696,33 +697,34 @@ def merge_intervals(intervals: Iterable[dict]) -> list[dict]:
 def find_repair_intervals(
         conn,
         table_name: str,
+        instrument_code: str,
         instrument_row,
         *,
-        contract_name: str,
-        start_ts: Optional[int],
-        end_ts: Optional[int],
+        start_ts: int,
 ) -> dict:
     problem_rows = fetch_problem_rows(
         conn=conn,
         table_name=table_name,
-        contract_name=contract_name,
         start_ts=start_ts,
-        end_ts=end_ts,
     )
     null_intervals = build_null_intervals(problem_rows)
 
     gap_rows = fetch_bars_for_gap_scan(
         conn=conn,
         table_name=table_name,
-        contract_name=contract_name,
         start_ts=start_ts,
-        end_ts=end_ts,
     )
-    gap_intervals = build_gap_intervals(gap_rows, instrument_row)
+    gap_intervals = build_gap_intervals(
+        sorted_rows=gap_rows,
+        instrument_code=instrument_code,
+        instrument_row=instrument_row,
+        start_ts=start_ts,
+    )
 
     merged_intervals = merge_intervals(null_intervals + gap_intervals)
 
     return {
+        "rows_count": len(gap_rows),
         "problem_rows_count": len(problem_rows),
         "null_intervals": null_intervals,
         "gap_intervals": gap_intervals,
@@ -812,10 +814,6 @@ async def repair_intervals(
         instrument_code: str,
         instrument_row,
 ) -> int:
-    if DRY_RUN:
-        print("DRY_RUN=True: ремонт не выполняется.")
-        return 0
-
     if not intervals:
         print("Нет интервалов для ремонта.")
         return 0
@@ -862,57 +860,41 @@ def collect_intervals_for_scan(
         table_name: str,
         instrument_code: str,
         instrument_row,
-        start_ts: Optional[int],
-        end_ts: Optional[int],
+        start_ts: int,
 ) -> list[dict]:
     ensure_table_exists(conn, db_path, table_name)
 
-    contract_names = get_target_contract_names(
+    print(f"TARGET     : {TARGET}")
+    print(f"instrument : {instrument_code}")
+    print(f"DB         : {db_path}")
+    print(f"table      : {table_name}")
+    print(f"check from : {utc_text(start_ts)}")
+    print()
+
+    result = find_repair_intervals(
         conn=conn,
         table_name=table_name,
         instrument_code=instrument_code,
         instrument_row=instrument_row,
+        start_ts=start_ts,
     )
 
-    print(f"Инструмент: {instrument_code}")
-    print(f"DB         : {db_path}")
-    print(f"table      : {table_name}")
-    print(f"contracts  : {contract_names}")
-    print(f"range UTC  : {utc_text(start_ts)} -> {utc_text(end_ts)}")
-    print()
+    print(
+        f"rows={result['rows_count']}, "
+        f"NULL rows={result['problem_rows_count']}, "
+        f"NULL intervals={len(result['null_intervals'])}, "
+        f"GAP intervals={len(result['gap_intervals'])}, "
+        f"merged={len(result['merged_intervals'])}"
+    )
 
-    all_intervals = []
-
-    for contract_name in contract_names:
-        result = find_repair_intervals(
-            conn=conn,
-            table_name=table_name,
-            instrument_row=instrument_row,
-            contract_name=contract_name,
-            start_ts=start_ts,
-            end_ts=end_ts,
-        )
-
-        print(
-            f"contract={contract_name}: "
-            f"NULL rows={result['problem_rows_count']}, "
-            f"NULL intervals={len(result['null_intervals'])}, "
-            f"GAP intervals={len(result['gap_intervals'])}, "
-            f"merged={len(result['merged_intervals'])}"
-        )
-
-        all_intervals.extend(result["merged_intervals"])
-
-    return merge_intervals(all_intervals)
+    return result["merged_intervals"]
 
 
 async def run_scan_or_repair_mode() -> None:
-    instrument_row = get_instrument_row(INSTRUMENT_CODE)
-    db_path = get_instrument_db_path(settings, INSTRUMENT_CODE, instrument_row)
-    table_name = get_instrument_table_name(INSTRUMENT_CODE, instrument_row)
-
-    start_ts = parse_optional_utc_text(START_UTC_TEXT)
-    end_ts = parse_optional_utc_text(END_UTC_TEXT)
+    instrument_code, instrument_row = resolve_target(TARGET)
+    db_path = get_instrument_db_path(settings, instrument_code, instrument_row)
+    table_name = get_instrument_table_name(instrument_code, instrument_row)
+    start_ts = parse_required_utc_text(CHECK_FROM_UTC)
 
     conn = open_sqlite_connection(db_path, use_wal=False)
     conn.row_factory = sqlite3.Row
@@ -922,10 +904,9 @@ async def run_scan_or_repair_mode() -> None:
             conn=conn,
             db_path=db_path,
             table_name=table_name,
-            instrument_code=INSTRUMENT_CODE,
+            instrument_code=instrument_code,
             instrument_row=instrument_row,
             start_ts=start_ts,
-            end_ts=end_ts,
         )
     finally:
         conn.close()
@@ -948,46 +929,7 @@ async def run_scan_or_repair_mode() -> None:
         intervals=intervals,
         db_path=db_path,
         table_name=table_name,
-        instrument_code=INSTRUMENT_CODE,
-        instrument_row=instrument_row,
-    )
-    print()
-    print(f"Ремонт завершён. Всего записано строк: {total_rows_written}")
-
-
-async def run_manual_interval_mode() -> None:
-    if not MANUAL_START_UTC or not MANUAL_END_UTC:
-        raise ValueError("Для MANUAL_INTERVAL нужно задать MANUAL_START_UTC и MANUAL_END_UTC")
-
-    instrument_row = get_instrument_row(INSTRUMENT_CODE)
-    db_path = get_instrument_db_path(settings, INSTRUMENT_CODE, instrument_row)
-    table_name = get_instrument_table_name(INSTRUMENT_CODE, instrument_row)
-
-    start_ts = int(parse_utc_datetime(MANUAL_START_UTC).timestamp())
-    end_ts = int(parse_utc_datetime(MANUAL_END_UTC).timestamp())
-
-    if end_ts <= start_ts:
-        raise ValueError("MANUAL_END_UTC должен быть строго больше MANUAL_START_UTC")
-
-    contract_name = MANUAL_CONTRACT_NAME
-    if instrument_row["secType"] != "FUT":
-        contract_name = INSTRUMENT_CODE
-
-    interval = {
-        "contract_name": contract_name,
-        "start_ts": start_ts,
-        "end_ts_exclusive": end_ts,
-        "sources": {"MANUAL"},
-    }
-
-    print("MANUAL_INTERVAL:")
-    print_intervals([interval])
-
-    total_rows_written = await repair_intervals(
-        intervals=[interval],
-        db_path=db_path,
-        table_name=table_name,
-        instrument_code=INSTRUMENT_CODE,
+        instrument_code=instrument_code,
         instrument_row=instrument_row,
     )
     print()
@@ -995,14 +937,10 @@ async def run_manual_interval_mode() -> None:
 
 
 async def main() -> None:
-    if MODE not in {"SCAN", "REPAIR", "MANUAL_INTERVAL"}:
+    if MODE not in {"SCAN", "REPAIR"}:
         raise ValueError(f"Неподдерживаемый MODE: {MODE}")
 
-    if MODE in {"SCAN", "REPAIR"}:
-        await run_scan_or_repair_mode()
-        return
-
-    await run_manual_interval_mode()
+    await run_scan_or_repair_mode()
 
 
 if __name__ == "__main__":
