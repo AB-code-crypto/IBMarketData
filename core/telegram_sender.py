@@ -1,3 +1,5 @@
+import re
+
 import aiohttp
 
 # Лимит обычного текстового сообщения Telegram.
@@ -8,6 +10,9 @@ TELEGRAM_REQUEST_TIMEOUT_SECONDS = 20
 
 class TelegramSender:
     def __init__(self, settings):
+        # Имя робота для маркировки Telegram-сообщений.
+        self.robot_name = getattr(settings, "robot_name", "IBMarketData")
+        self.robot_hashtag = self._build_robot_hashtag(self.robot_name)
         # Токен бота Telegram.
         self.bot_token = settings.telegram_bot_token
         # Группа или канал по умолчанию для технических сообщений и логов.
@@ -22,6 +27,31 @@ class TelegramSender:
         self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
         # HTTP-сессия создаётся лениво при первом запросе.
         self.session = None
+
+    def _build_robot_hashtag(self, robot_name):
+        # Превращаем имя робота в безопасный Telegram-хештег.
+        # Например: "IBMarketData" -> "#IBMarketData".
+        tag = str(robot_name).strip()
+        if not tag:
+            tag = "IBMarketData"
+
+        tag = re.sub(r"\W+", "_", tag, flags=re.UNICODE).strip("_")
+        if not tag:
+            tag = "IBMarketData"
+
+        return f"#{tag}"
+
+    def _add_robot_hashtag(self, text):
+        # Каждое Telegram-сообщение помечаем хештегом робота,
+        # чтобы в общей группе было понятно, от какого сервиса пришло сообщение.
+        text = str(text).strip()
+        if not text:
+            return ""
+
+        if text.startswith(self.robot_hashtag):
+            return text
+
+        return f"{self.robot_hashtag}\n{text}"
 
     async def close(self):
         # Корректно закрываем HTTP-сессию при завершении программы.
@@ -122,7 +152,9 @@ class TelegramSender:
 
         # Если текст длиннее лимита Telegram, режем на части
         # и отправляем последовательно.
-        chunks = self._split_text(text, TELEGRAM_TEXT_LIMIT)
+        hashtag_prefix_length = len(self.robot_hashtag) + 1
+        chunk_limit = max(1, TELEGRAM_TEXT_LIMIT - hashtag_prefix_length)
+        chunks = self._split_text(text, chunk_limit)
         if not chunks:
             return False
 
@@ -130,7 +162,7 @@ class TelegramSender:
         for chunk in chunks:
             payload = {
                 "chat_id": resolved_chat_id,
-                "text": chunk,
+                "text": self._add_robot_hashtag(chunk),
             }
 
             if resolved_message_thread_id is not None:

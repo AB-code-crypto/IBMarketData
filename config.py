@@ -17,6 +17,9 @@ telegram_thread_id_connect_env = os.getenv("TELEGRAM_THREAD_ID_CONNECT")
 
 @dataclass
 class Settings:
+    # Имя робота для Telegram-сообщений и логической идентификации сервиса.
+    robot_name: str = "IBMarketData"
+
     ib_host: str = "127.0.0.1"
     ib_port: int = 7496  # 7497 - демо счёт, 7496 - реальный счёт
     ib_client_id: int = 200
