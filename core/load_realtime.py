@@ -46,6 +46,10 @@ REALTIME_READY_WAIT_SECONDS = 1
 # Через сколько секунд без новых баров считаем realtime-поток подозрительно зависшим.
 REALTIME_STALL_WARNING_SECONDS = 30
 
+# Через сколько секунд непрерывной недоступности realtime отправлять Telegram-предупреждение.
+# Короткие reconnect-всплески не должны засорять Telegram.
+REALTIME_UNAVAILABLE_TELEGRAM_DELAY_SECONDS = 15
+
 # Как часто слать Telegram-сообщение о штатной работе realtime-потока.
 REALTIME_OK_TELEGRAM_INTERVAL_SECONDS = 600
 
@@ -441,30 +445,51 @@ async def load_realtime_instrument_task(
         if was_realtime_ready:
             realtime_monitor_state.last_restore_monotonic = time.monotonic()
 
+        unavailable_since_monotonic = None
+        unavailable_telegram_sent = False
+
         while True:
             realtime_ready_now = is_realtime_ready_now(ib, ib_health)
             now_mono = time.monotonic()
 
             if was_realtime_ready and not realtime_ready_now:
                 reset_recent_backfill_state(recent_backfill_state)
+                unavailable_since_monotonic = now_mono
+                unavailable_telegram_sent = False
 
                 log_warning(
                     logger,
                     f"Realtime loader: поток {instrument_code} временно недоступен. "
                     f"Сбрасываю состояние recent backfill и жду восстановления подписок.",
-                    to_telegram=True,
+                    to_telegram=False,
                 )
+
+            if not realtime_ready_now and unavailable_since_monotonic is not None:
+                unavailable_seconds = now_mono - unavailable_since_monotonic
+                if (
+                        not unavailable_telegram_sent
+                        and unavailable_seconds >= REALTIME_UNAVAILABLE_TELEGRAM_DELAY_SECONDS
+                ):
+                    log_warning(
+                        logger,
+                        f"Realtime недоступен: {instrument_code}. "
+                        f"Нет соединения/backend/market data уже {int(unavailable_seconds)} сек.",
+                        to_telegram=True,
+                    )
+                    unavailable_telegram_sent = True
 
             elif not was_realtime_ready and realtime_ready_now:
                 log_info(
                     logger,
                     f"Realtime loader: соединение/market data восстановлены, "
                     f"переподписываюсь на realtime {instrument_code}",
-                    to_telegram=True,
+                    to_telegram=unavailable_telegram_sent,
                 )
 
                 subscribe_all_realtime_streams()
 
+                unavailable_since_monotonic = None
+                unavailable_telegram_sent = False
                 realtime_monitor_state.last_restore_monotonic = now_mono
                 realtime_monitor_state.last_stall_warning_monotonic = None
                 realtime_monitor_state.last_ok_telegram_monotonic = None

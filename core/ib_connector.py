@@ -43,7 +43,7 @@ async def connect_ib(settings):
     # Последний текст ошибки, чтобы не дублировать одно и то же слишком часто.
     last_error_text = None
 
-    log_info(logger, "Подключаюсь к IB...")
+    log_info(logger, "Подключаюсь к IB...", to_telegram=False)
 
     # Бесконечно пытаемся подключиться, пока соединение не будет установлено
     # или пока пользователь сам не остановит робота.
@@ -73,6 +73,7 @@ async def connect_ib(settings):
             log_info(
                 logger,
                 f"Соединение с IB установлено после {connect_attempt} попыток за {connect_duration} сек",
+                to_telegram=False,
             )
 
             # Возвращаем и сам объект IB, и объект состояния здоровья.
@@ -248,6 +249,7 @@ async def heartbeat_ib_connection(ib, ib_health):
                 logger,
                 f"Робот работает в штатном режиме. API-соединение с TWS активно. "
                 f"Время сервера IB: {server_time_text}",
+                to_telegram=False,
             )
             continue
 
@@ -258,4 +260,5 @@ async def heartbeat_ib_connection(ib, ib_health):
             f"Робот работает, но состояние IB нештатное. "
             f"Время сервера IB: {server_time_text}. "
             f"{build_ib_health_text(ib_health)}",
+            to_telegram=False,
         )

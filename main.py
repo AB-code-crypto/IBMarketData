@@ -8,6 +8,7 @@ from config import settings_live as settings
 from contracts import Instrument
 from core.active_instruments import build_active_instruments
 from core.db_initializer import initialize_databases_sync
+from core.ib_health import build_ib_health_text
 from core.ib_connector import (
     connect_ib,
     disconnect_ib,
@@ -71,8 +72,13 @@ def _format_uptime(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
-def _format_runtime_status(runtime_status: RuntimeStatus) -> str:
-    # Собираем короткий статус сервиса для Telegram.
+def _format_runtime_status(
+        runtime_status: RuntimeStatus,
+        ib,
+        ib_health,
+        server_time_text: str,
+) -> str:
+    # Собираем единый статус сервиса для Telegram.
     if runtime_status.history_instrument is None:
         history_text = "нет активной закачки истории"
     else:
@@ -85,23 +91,49 @@ def _format_runtime_status(runtime_status: RuntimeStatus) -> str:
         realtime_text = "нет активных realtime-инструментов"
 
     uptime_text = _format_uptime(time.monotonic() - runtime_status.started_monotonic)
+    api_text = "подключено" if ib.isConnected() else "нет подключения"
+
+    ib_ok = (
+            ib.isConnected()
+            and ib_health.ib_backend_ok
+            and ib_health.market_data_ok
+            and ib_health.hmds_ok
+    )
+    status_title = "Статус: всё нормально работает" if ib_ok else "Статус: есть проблемы"
 
     return (
-        "Статус: всё нормально работает\n"
+        f"{status_title}\n"
         f"Uptime: {uptime_text}\n"
+        f"IB API: {api_text}\n"
+        f"Время сервера IB: {server_time_text}\n"
+        f"{build_ib_health_text(ib_health)}\n"
         f"Закачиваем историю: {history_text}\n"
         f"Получаем рыночные данные: {realtime_text}\n"
         f"Realtime-инструментов: {realtime_count}"
     )
 
 
-async def _status_reporter(runtime_status: RuntimeStatus) -> None:
+async def _status_reporter(runtime_status: RuntimeStatus, ib, ib_health) -> None:
     # Раз в 10 минут отправляем в Telegram общий статус сервиса.
+    # Это единственное регулярное штатное Telegram-сообщение.
     while True:
         await asyncio.sleep(STATUS_TELEGRAM_INTERVAL_SECONDS)
+
+        server_time_text = "не получено"
+        if ib.isConnected():
+            try:
+                server_time_text = await get_ib_server_time_text(ib)
+            except Exception as exc:
+                server_time_text = f"не получено ({exc})"
+
         log_info(
             logger,
-            _format_runtime_status(runtime_status),
+            _format_runtime_status(
+                runtime_status=runtime_status,
+                ib=ib,
+                ib_health=ib_health,
+                server_time_text=server_time_text,
+            ),
             to_telegram=True,
         )
 
@@ -132,7 +164,7 @@ def _start_infrastructure_tasks(*, ib, ib_health, runtime_status: RuntimeStatus)
         name="heartbeat_ib_connection",
     )
     status_task = asyncio.create_task(
-        _status_reporter(runtime_status),
+        _status_reporter(runtime_status, ib, ib_health),
         name="telegram_status_reporter",
     )
 

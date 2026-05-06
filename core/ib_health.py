@@ -104,6 +104,7 @@ def register_ib_health_handlers(ib, ib_health):
                 log_warning(
                     logger,
                     f"IB backend недоступен: code={error_code}, message={error_string}",
+                    to_telegram=False,
                 )
 
             ib_health.ib_backend_ok = False
@@ -118,6 +119,7 @@ def register_ib_health_handlers(ib, ib_health):
                 log_info(
                     logger,
                     f"IB backend снова доступен: code={error_code}, message={error_string}",
+                    to_telegram=False,
                 )
             return
 
@@ -147,6 +149,7 @@ def register_ib_health_handlers(ib, ib_health):
                     logger,
                     f"Market data farm снова доступен: code={error_code}, "
                     f"farm={farm_name}, message={error_string}",
+                    to_telegram=False,
                 )
             return
 
@@ -176,6 +179,7 @@ def register_ib_health_handlers(ib, ib_health):
                     logger,
                     f"HMDS снова доступен: code={error_code}, "
                     f"farm={farm_name}, message={error_string}",
+                    to_telegram=False,
                 )
             return
 
