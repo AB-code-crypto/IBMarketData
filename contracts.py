@@ -94,6 +94,59 @@ Instrument: Registry = {
         ]
     },
 
+    "EURUSD": {
+        **FX_DEFAULTS,
+        "symbol": "EUR",
+        "currency": "USD",
+        "db_filename": "EURUSD.sqlite3",
+        "history_start_utc": "2025-09-22T01:00:00Z",
+    },
+
+    "MES": {
+        **FUT_DEFAULTS,
+        "history_enabled": True,
+        "realtime_enabled": True,
+        "tradingClass": "MES",
+        "multiplier": 5.0,
+        "db_filename": "MES.sqlite3",
+        # Для нового инструмента ограничиваем начальную загрузку двумя неделями.
+        # Если нужна более длинная история, увеличь history_lookback_days вручную.
+        "contracts": [
+            {"conId": 620731036, "localSymbol": "MESM4", "lastTradeDateOrContractMonth": "20240621",
+             "active_from_utc": "2024-03-13T22:00:00Z", "active_to_utc": "2024-06-19T17:00:00Z"},
+
+            {"conId": 637533398, "localSymbol": "MESU4", "lastTradeDateOrContractMonth": "20240920",
+             "active_from_utc": "2024-06-19T22:00:00Z", "active_to_utc": "2024-09-18T21:00:00Z"},
+
+            {"conId": 654503314, "localSymbol": "MESZ4", "lastTradeDateOrContractMonth": "20241220",
+             "active_from_utc": "2024-09-18T22:00:00Z", "active_to_utc": "2024-12-18T22:00:00Z"},
+
+            {"conId": 672387462, "localSymbol": "MESH5", "lastTradeDateOrContractMonth": "20250321",
+             "active_from_utc": "2024-12-18T23:00:00Z", "active_to_utc": "2025-03-19T21:00:00Z"},
+
+            {"conId": 691171673, "localSymbol": "MESM5", "lastTradeDateOrContractMonth": "20250620",
+             "active_from_utc": "2025-03-19T22:00:00Z", "active_to_utc": "2025-06-18T21:00:00Z"},
+
+            {"conId": 711280067, "localSymbol": "MESU5", "lastTradeDateOrContractMonth": "20250919",
+             "active_from_utc": "2025-06-18T22:00:00Z", "active_to_utc": "2025-09-17T21:00:00Z"},
+
+            {"conId": 730283085, "localSymbol": "MESZ5", "lastTradeDateOrContractMonth": "20251219",
+             "active_from_utc": "2025-09-17T22:00:00Z", "active_to_utc": "2025-12-17T22:00:00Z"},
+
+            {"conId": 750150186, "localSymbol": "MESH6", "lastTradeDateOrContractMonth": "20260320",
+             "active_from_utc": "2025-12-17T23:00:00Z", "active_to_utc": "2026-03-18T21:00:00Z"},
+
+            {"conId": 770561194, "localSymbol": "MESM6", "lastTradeDateOrContractMonth": "20260618",
+             "active_from_utc": "2026-03-18T22:00:00Z", "active_to_utc": "2026-06-16T21:00:00Z"},
+
+            {"conId": 793356217, "localSymbol": "MESU6", "lastTradeDateOrContractMonth": "20260918",
+             "active_from_utc": "2026-06-16T22:00:00Z", "active_to_utc": "2026-09-16T21:00:00Z"},
+
+            {"conId": 815824257, "localSymbol": "MESZ6", "lastTradeDateOrContractMonth": "20261218",
+             "active_from_utc": "2026-09-16T22:00:00Z", "active_to_utc": "2026-12-16T22:00:00Z"},
+        ]
+    },
+
     "NQ": {
         **FUT_DEFAULTS,
         # "history_enabled": True,
@@ -135,51 +188,6 @@ Instrument: Registry = {
              "active_from_utc": "2026-06-16T22:00:00Z", "active_to_utc": "2026-09-16T21:00:00Z"},
 
             {"conId": 563947726, "localSymbol": "NQZ6", "lastTradeDateOrContractMonth": "20261218",
-             "active_from_utc": "2026-09-16T22:00:00Z", "active_to_utc": "2026-12-16T22:00:00Z"},
-        ]
-    },
-
-    "MES": {
-        **FUT_DEFAULTS,
-        # "history_enabled": True,
-        "tradingClass": "MES",
-        "multiplier": 5.0,
-        "db_filename": "MES.sqlite3",
-        # Для нового инструмента ограничиваем начальную загрузку двумя неделями.
-        # Если нужна более длинная история, увеличь history_lookback_days вручную.
-        # "history_lookback_days": 14,
-        "contracts": [
-            {"conId": 620731036, "localSymbol": "MESM4", "lastTradeDateOrContractMonth": "20240621",
-             "active_from_utc": "2024-03-13T22:00:00Z", "active_to_utc": "2024-06-19T17:00:00Z"},
-
-            {"conId": 637533398, "localSymbol": "MESU4", "lastTradeDateOrContractMonth": "20240920",
-             "active_from_utc": "2024-06-19T22:00:00Z", "active_to_utc": "2024-09-18T21:00:00Z"},
-
-            {"conId": 654503314, "localSymbol": "MESZ4", "lastTradeDateOrContractMonth": "20241220",
-             "active_from_utc": "2024-09-18T22:00:00Z", "active_to_utc": "2024-12-18T22:00:00Z"},
-
-            {"conId": 672387462, "localSymbol": "MESH5", "lastTradeDateOrContractMonth": "20250321",
-             "active_from_utc": "2024-12-18T23:00:00Z", "active_to_utc": "2025-03-19T21:00:00Z"},
-
-            {"conId": 691171673, "localSymbol": "MESM5", "lastTradeDateOrContractMonth": "20250620",
-             "active_from_utc": "2025-03-19T22:00:00Z", "active_to_utc": "2025-06-18T21:00:00Z"},
-
-            {"conId": 711280067, "localSymbol": "MESU5", "lastTradeDateOrContractMonth": "20250919",
-             "active_from_utc": "2025-06-18T22:00:00Z", "active_to_utc": "2025-09-17T21:00:00Z"},
-
-            {"conId": 730283085, "localSymbol": "MESZ5", "lastTradeDateOrContractMonth": "20251219",
-             "active_from_utc": "2025-09-17T22:00:00Z", "active_to_utc": "2025-12-17T22:00:00Z"},
-
-            {"conId": 750150186, "localSymbol": "MESH6", "lastTradeDateOrContractMonth": "20260320",
-             "active_from_utc": "2025-12-17T23:00:00Z", "active_to_utc": "2026-03-18T21:00:00Z"},
-
-            {"conId": 770561194, "localSymbol": "MESM6", "lastTradeDateOrContractMonth": "20260618",
-             "active_from_utc": "2026-03-18T22:00:00Z", "active_to_utc": "2026-06-16T21:00:00Z"},
-
-            {"conId": 793356217, "localSymbol": "MESU6", "lastTradeDateOrContractMonth": "20260918",
-             "active_from_utc": "2026-06-16T22:00:00Z", "active_to_utc": "2026-09-16T21:00:00Z"},
-
-            {"conId": 815824257, "localSymbol": "MESZ6", "lastTradeDateOrContractMonth": "20261218",
              "active_from_utc": "2026-09-16T22:00:00Z", "active_to_utc": "2026-12-16T22:00:00Z"},
         ]
     },
@@ -226,14 +234,6 @@ Instrument: Registry = {
             {"conId": 515416632, "localSymbol": "ESZ6", "lastTradeDateOrContractMonth": "20261218",
              "active_from_utc": "2026-09-16T22:00:00Z", "active_to_utc": "2026-12-16T22:00:00Z"},
         ]
-    },
-
-    "EURUSD": {
-        **FX_DEFAULTS,
-        "symbol": "EUR",
-        "currency": "USD",
-        "db_filename": "EURUSD.sqlite3",
-        "history_start_utc": "2025-09-22T01:00:00Z",
     },
 
     "BTCUSD": {
