@@ -21,6 +21,11 @@ logger = get_logger(__name__)
 # чтобы не упереться в pacing limits.
 HISTORICAL_REQUEST_DELAY_SECONDS = 11
 
+# Сколько подряд запрошенных historical chunks могут вернуть 0 строк.
+# Если лимит достигнут, считаем текущий сегмент/контракт недоступным
+# на заданной глубине и прекращаем его обработку.
+MAX_CONSECUTIVE_EMPTY_HISTORY_CHUNKS = 3
+
 
 async def load_history_bid_ask_once(
         ib,
@@ -125,6 +130,7 @@ async def load_quotes_segment(
 
     chunk_seconds = get_chunk_seconds(sec_type, bar_size_setting)
     total_rows_written = 0
+    consecutive_empty_chunks = 0
 
     for chunk_start_ts, chunk_end_ts in iter_chunks(segment_start_ts, segment_end_ts, chunk_seconds):
         chunk_start_dt = datetime.fromtimestamp(chunk_start_ts, tz=timezone.utc)
@@ -172,5 +178,33 @@ async def load_quotes_segment(
             f"{format_utc(chunk_start_dt)} -> {format_utc(chunk_end_dt)}, rows={rows_written}",
             to_telegram=False,
         )
+
+        if rows_written == 0:
+            consecutive_empty_chunks += 1
+
+            log_warning(
+                logger,
+                f"Инструмент {contract_name}: {segment_kind}-chunk "
+                f"{format_utc(chunk_start_dt)} -> {format_utc(chunk_end_dt)} "
+                f"вернул 0 строк. Пустых chunks подряд: "
+                f"{consecutive_empty_chunks}/{MAX_CONSECUTIVE_EMPTY_HISTORY_CHUNKS}",
+                to_telegram=False,
+            )
+
+            if consecutive_empty_chunks >= MAX_CONSECUTIVE_EMPTY_HISTORY_CHUNKS:
+                log_warning(
+                    logger,
+                    f"Инструмент {contract_name}: "
+                    f"{MAX_CONSECUTIVE_EMPTY_HISTORY_CHUNKS} historical chunks подряд "
+                    f"вернули 0 строк. Прекращаю обработку текущего сегмента "
+                    f"{format_utc(datetime.fromtimestamp(segment_start_ts, tz=timezone.utc))} -> "
+                    f"{format_utc(datetime.fromtimestamp(segment_end_ts, tz=timezone.utc))}. "
+                    f"Вероятно, история недоступна на этой глубине или нет BID/ASK данных.",
+                    to_telegram=True,
+                )
+                break
+
+        else:
+            consecutive_empty_chunks = 0
 
     return total_rows_written
