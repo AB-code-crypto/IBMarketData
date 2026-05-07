@@ -5,7 +5,7 @@ from pathlib import Path
 
 from contracts import Instrument
 from core.state_db import is_signal_ready
-from ib_job_data.instruments import get_job_data_enabled_instrument_codes
+from core.instrument_filters import get_live_enabled_instrument_codes
 from ib_job_data.job_db_updater import append_new_mid_price_rows
 from ib_job_data.rebuild_mid_price import (
     get_instrument_feature_db_path,
@@ -95,7 +95,7 @@ def main() -> None:
     # 1. history_enabled=True — закачать историю;
     # 2. realtime_enabled=True — включить live-контур когда история закачалась;
     # 3. перезапустить run_market_data.py и run_job_data.py.
-    instrument_codes = get_job_data_enabled_instrument_codes()
+    instrument_codes = get_live_enabled_instrument_codes()
 
     if not instrument_codes:
         log_message("Нет инструментов для job-data сервиса: history_enabled=True и realtime_enabled=True не найдены.")
