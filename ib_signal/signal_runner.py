@@ -1,9 +1,25 @@
 import time
 
 from ib_signal.job_reader import get_job_db_status, get_last_job_bar_ts
+from datetime import datetime, timezone
+from core.time_utils import CT_TIMEZONE, MSK_TIMEZONE, SQLITE_DATETIME_FORMAT
 
 SIGNAL_LOOP_SLEEP_SECONDS = 1
 JOB_DB_WAIT_SECONDS = 5
+
+
+def format_ts_for_status(ts: int | None) -> str:
+    if ts is None:
+        return "-"
+
+    dt_utc = datetime.fromtimestamp(ts, tz=timezone.utc)
+    dt_msk = dt_utc.astimezone(MSK_TIMEZONE)
+    dt_ct = dt_utc.astimezone(CT_TIMEZONE)
+
+    return (
+        f"msk={dt_msk.strftime(SQLITE_DATETIME_FORMAT)}, "
+        f"ct={dt_ct.strftime(SQLITE_DATETIME_FORMAT)}"
+    )
 
 
 def format_job_db_status(status) -> str:
@@ -11,11 +27,8 @@ def format_job_db_status(status) -> str:
         f"ready={status.is_ready}, "
         f"reason={status.reason}, "
         f"rows={status.rows_count}, "
-        f"min_ts={status.min_bar_time_ts}, "
-        f"max_ts={status.max_bar_time_ts}, "
-        f"lag={status.last_bar_lag_seconds}, "
-        f"expected_flow={status.expected_realtime_flow}, "
-        f"db={status.job_db_path}"
+        f"last_time=({format_ts_for_status(status.last_bar_time_ts)}), "
+        f"lag={status.last_bar_lag_seconds}"
     )
 
 
@@ -44,8 +57,6 @@ def wait_for_job_dbs(instrument_codes: list[str], log_message) -> list[str]:
 
 
 def run_signal_loop(instrument_codes: list[str], log_message) -> None:
-    # Первый каркас signal-сервиса.
-    #
     # Пока не ищем Pearson и не пишем сигналы.
     # Только отслеживаем появление новых bar_time_ts в job DB.
     last_seen_ts_by_instrument: dict[str, int | None] = {
@@ -83,12 +94,5 @@ def run_signal_loop(instrument_codes: list[str], log_message) -> None:
                 f"{instrument_code}: появился новый job bar_time_ts={current_last_ts}. "
                 f"Дальше здесь будет расчёт сигнала."
             )
-
-            # Следующий этап:
-            # - построить SignalWindow;
-            # - прочитать back window;
-            # - найти Pearson-кандидатов;
-            # - агрегировать прогноз;
-            # - записать сигнал.
 
         time.sleep(SIGNAL_LOOP_SLEEP_SECONDS)
