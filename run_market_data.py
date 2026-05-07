@@ -189,7 +189,7 @@ def _iter_enabled_market_data_instruments():
 
 def _reset_signal_states_for_enabled_instruments() -> None:
     # Сбрасываем готовность IBSignal в самом начале run_market_data.
-    # Это защищает run_signal.py от stale signal_ready=1, оставшегося
+    # Это защищает run_job_data.py от stale signal_ready=1, оставшегося
     # от прошлого запуска.
     initialize_state_db()
 

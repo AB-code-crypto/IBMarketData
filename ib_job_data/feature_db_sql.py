@@ -2,7 +2,7 @@ MID_PRICE_TABLE_NAME = "mid_price_5s"
 
 
 def create_mid_price_table_sql() -> str:
-    # Таблица подготовленных mid/spread-цен для IBSignal и тестера.
+    # Таблица подготовленных mid/spread-цен для job-data сервиса и тестера.
     return f"""
     CREATE TABLE IF NOT EXISTS {quote_identifier(MID_PRICE_TABLE_NAME)} (
         bar_time_ts INTEGER PRIMARY KEY,

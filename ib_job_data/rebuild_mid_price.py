@@ -17,7 +17,7 @@ from config import settings_live as settings
 from contracts import Instrument
 from core.instrument_db import get_instrument_db_path, get_instrument_table_name
 from core.sqlite_utils import open_sqlite_connection
-from ib_signal.feature_db_sql import (
+from ib_job_data.feature_db_sql import (
     MID_PRICE_TABLE_NAME,
     create_mid_price_table_sql,
     insert_mid_price_from_attached_price_db_sql,
@@ -43,8 +43,8 @@ def get_feature_db_dir() -> Path:
 
 
 def get_instrument_feature_db_path(instrument_code: str, instrument_row: dict) -> Path:
-    # Price DB:   data/prices/MNQ.sqlite3
-    # Feature DB: data/features/mnq_job.sqlite3
+    # Price DB: data/prices/MNQ.sqlite3
+    # Job DB:   data/features/mnq_job.sqlite3
     price_db_filename = instrument_row.get("db_filename", f"{instrument_code}.sqlite3")
     feature_db_stem = Path(price_db_filename).stem.lower()
     feature_db_filename = f"{feature_db_stem}_job.sqlite3"
@@ -90,8 +90,8 @@ def rebuild_instrument_mid_price_features(instrument_code: str) -> None:
     print(f"Инструмент : {instrument_code}")
     print(f"Price DB   : {price_db_path}")
     print(f"Price table: {price_table_name}")
-    print(f"Feature DB : {feature_db_path}")
-    print(f"Feature tbl: {MID_PRICE_TABLE_NAME}")
+    print(f"Job DB     : {feature_db_path}")
+    print(f"Job table  : {MID_PRICE_TABLE_NAME}")
     print("=" * 80)
 
     conn = open_sqlite_connection(

@@ -4,13 +4,13 @@ from config import settings_live as settings
 from contracts import Instrument
 from core.instrument_db import get_instrument_db_path, get_instrument_table_name
 from core.sqlite_utils import open_sqlite_connection
-from ib_signal.feature_db_sql import (
+from ib_job_data.feature_db_sql import (
     MID_PRICE_TABLE_NAME,
     create_mid_price_table_sql,
     insert_new_mid_price_from_attached_price_db_sql,
     quote_identifier,
 )
-from ib_signal.rebuild_mid_price import get_instrument_feature_db_path
+from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 
 PRICE_DB_SCHEMA_NAME = "price_src"
 
@@ -41,7 +41,7 @@ def append_new_mid_price_rows(instrument_code: str) -> int:
     # - одним INSERT ... SELECT пишет их в mid_price_5s.
     #
     # Если realtime шёл без задержек, обычно добавится 1 строка.
-    # Если был freeze или run_signal отставал, добавится сразу блок строк.
+    # Если был freeze или run_job_data отставал, добавится сразу блок строк.
     if instrument_code not in Instrument:
         raise ValueError(f"Инструмент {instrument_code!r} не найден в contracts.py")
 

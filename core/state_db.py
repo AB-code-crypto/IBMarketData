@@ -176,7 +176,7 @@ def mark_first_synced_bid_ask(instrument_code: str, sync_ts: int) -> None:
 
 
 def mark_signal_ready(instrument_code: str, sync_ts: Optional[int] = None) -> None:
-    # Инструмент готов для IBSignal:
+    # Инструмент готов для job-data и будущих сигналов:
     # - history завершена;
     # - realtime стартовал;
     # - первый синхронный BID/ASK бар получен;
