@@ -28,11 +28,20 @@ def insert_mid_price_from_attached_price_db_sql(
         target_table_name: str = MID_PRICE_TABLE_NAME,
         attached_schema_name: str,
         source_table_name: str,
+        price_digits: int,
+        mid_price_digits: int,
 ) -> str:
     # Полностью заполняет feature-таблицу из attached price DB.
     #
     # В feature-БД попадают только полностью валидные бары,
     # где есть все нужные BID/ASK OHLC-значения.
+    #
+    # mid_* округляем по mid_price_digits, потому что там есть деление на 2.
+    # spread_* округляем по price_digits, потому что spread — это разница цен
+    # в той же исходной разрядности.
+    price_digits = int(price_digits)
+    mid_price_digits = int(mid_price_digits)
+
     source_table_ref = (
         f"{quote_identifier(attached_schema_name)}."
         f"{quote_identifier(source_table_name)}"
@@ -61,15 +70,15 @@ def insert_mid_price_from_attached_price_db_sql(
         bar_time_ct,
         bar_time_msk,
 
-        (bid_open + ask_open) / 2.0 AS mid_open,
-        (bid_high + ask_high) / 2.0 AS mid_high,
-        (bid_low + ask_low) / 2.0 AS mid_low,
-        (bid_close + ask_close) / 2.0 AS mid_close,
+        ROUND((bid_open + ask_open) / 2.0, {mid_price_digits}) AS mid_open,
+        ROUND((bid_high + ask_high) / 2.0, {mid_price_digits}) AS mid_high,
+        ROUND((bid_low + ask_low) / 2.0, {mid_price_digits}) AS mid_low,
+        ROUND((bid_close + ask_close) / 2.0, {mid_price_digits}) AS mid_close,
 
-        ask_open - bid_open AS spread_open,
-        ask_high - bid_high AS spread_high,
-        ask_low - bid_low AS spread_low,
-        ask_close - bid_close AS spread_close
+        ROUND(ask_open - bid_open, {price_digits}) AS spread_open,
+        ROUND(ask_high - bid_high, {price_digits}) AS spread_high,
+        ROUND(ask_low - bid_low, {price_digits}) AS spread_low,
+        ROUND(ask_close - bid_close, {price_digits}) AS spread_close
 
     FROM {source_table_ref}
     WHERE bid_open IS NOT NULL

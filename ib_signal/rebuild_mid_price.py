@@ -190,10 +190,15 @@ def rebuild_instrument_mid_price_features(instrument_code: str) -> None:
         conn.execute(f"DROP TABLE IF EXISTS {MID_PRICE_TABLE_NAME}")
         conn.execute(create_mid_price_table_sql(MID_PRICE_TABLE_NAME))
 
+        price_digits = instrument_row["price_digits"]
+        mid_price_digits = instrument_row["mid_price_digits"]
+
         insert_sql = insert_mid_price_from_attached_price_db_sql(
             target_table_name=MID_PRICE_TABLE_NAME,
             attached_schema_name=PRICE_DB_SCHEMA_NAME,
             source_table_name=price_table_name,
+            price_digits=price_digits,
+            mid_price_digits=mid_price_digits,
         )
         conn.execute(insert_sql)
 
