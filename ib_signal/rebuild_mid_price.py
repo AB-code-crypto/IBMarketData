@@ -56,9 +56,18 @@ def get_feature_db_dir() -> Path:
 
 
 def get_instrument_feature_db_path(instrument_code: str, instrument_row: dict) -> str:
-    # Строит путь к feature-БД конкретного логического инструмента.
-    db_filename = instrument_row.get("db_filename", f"{instrument_code}.sqlite3")
-    return str(get_feature_db_dir() / db_filename)
+    # Строит путь к рабочей feature-БД конкретного логического инструмента.
+    #
+    # Price DB остаётся в data/prices/MNQ.sqlite3.
+    # Feature/job DB создаём отдельно: data/features/mnq_job.sqlite3.
+    #
+    # Имя берём из db_filename, если оно есть, чтобы не расходиться
+    # с фактическим именем инструмента в contracts.py.
+    price_db_filename = instrument_row.get("db_filename", f"{instrument_code}.sqlite3")
+    feature_db_stem = Path(price_db_filename).stem.lower()
+    feature_db_filename = f"{feature_db_stem}_job.sqlite3"
+
+    return str(get_feature_db_dir() / feature_db_filename)
 
 
 # ============================================================
