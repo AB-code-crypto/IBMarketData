@@ -22,6 +22,8 @@ FUT_DEFAULTS: InstrumentRow = {
     "barSizeSetting": "5 secs",
     "useRTH": False,
     "session_model": "CME_EQUITY_INDEX",
+    "price_digits": 2,
+    "mid_price_digits": 3,
 }
 
 FX_DEFAULTS: InstrumentRow = {
@@ -33,6 +35,8 @@ FX_DEFAULTS: InstrumentRow = {
     "useRTH": False,
     "session_model": "FX_24_5",
     "history_lookback_days": 50,
+    "price_digits": 5,
+    "mid_price_digits": 6,
 }
 
 CRYPTO_DEFAULTS: InstrumentRow = {
@@ -44,6 +48,8 @@ CRYPTO_DEFAULTS: InstrumentRow = {
     "useRTH": False,
     "session_model": "CRYPTO_24_7",
     "history_lookback_days": 50,
+    "price_digits": 2,
+    "mid_price_digits": 3,
 }
 
 # ==============================

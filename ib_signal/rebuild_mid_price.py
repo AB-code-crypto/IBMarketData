@@ -34,7 +34,7 @@ from ib_signal.feature_db_sql import (
 #
 # Можно несколько:
 #   TARGETS = ["MNQ", "MES", "EURUSD"]
-TARGETS = ["MNQ"]
+TARGETS = ["MNQ", "EURUSD"]
 
 # Если True, перед сборкой печатаем план, но БД не меняем.
 DRY_RUN = False
