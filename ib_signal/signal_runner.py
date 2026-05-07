@@ -1,8 +1,22 @@
 import time
 
-from ib_signal.job_reader import get_last_job_bar_ts, is_job_db_ready
+from ib_signal.job_reader import get_job_db_status, get_last_job_bar_ts
 
 SIGNAL_LOOP_SLEEP_SECONDS = 1
+JOB_DB_WAIT_SECONDS = 5
+
+
+def format_job_db_status(status) -> str:
+    return (
+        f"ready={status.is_ready}, "
+        f"reason={status.reason}, "
+        f"rows={status.rows_count}, "
+        f"min_ts={status.min_bar_time_ts}, "
+        f"max_ts={status.max_bar_time_ts}, "
+        f"lag={status.last_bar_lag_seconds}, "
+        f"expected_flow={status.expected_realtime_flow}, "
+        f"db={status.job_db_path}"
+    )
 
 
 def wait_for_job_dbs(instrument_codes: list[str], log_message) -> list[str]:
@@ -13,16 +27,18 @@ def wait_for_job_dbs(instrument_codes: list[str], log_message) -> list[str]:
 
     while pending:
         for instrument_code in list(pending):
-            if not is_job_db_ready(instrument_code):
+            status = get_job_db_status(instrument_code)
+
+            if not status.is_ready:
+                log_message(f"{instrument_code}: job DB пока не готова: {format_job_db_status(status)}")
                 continue
 
-            log_message(f"{instrument_code}: job DB готова для signal-сервиса")
+            log_message(f"{instrument_code}: job DB готова: {format_job_db_status(status)}")
             ready.append(instrument_code)
             pending.remove(instrument_code)
 
         if pending:
-            log_message(f"Job DB пока не готовы: {sorted(pending)}")
-            time.sleep(5)
+            time.sleep(JOB_DB_WAIT_SECONDS)
 
     return ready
 
@@ -41,6 +57,12 @@ def run_signal_loop(instrument_codes: list[str], log_message) -> None:
 
     while True:
         for instrument_code in instrument_codes:
+            status = get_job_db_status(instrument_code)
+
+            if not status.is_ready:
+                log_message(f"{instrument_code}: пропускаю расчёт, job DB не готова: {format_job_db_status(status)}")
+                continue
+
             current_last_ts = get_last_job_bar_ts(instrument_code)
             previous_last_ts = last_seen_ts_by_instrument[instrument_code]
 
