@@ -24,12 +24,6 @@ from ib_job_data.feature_db_sql import (
     quote_identifier,
 )
 
-# ============================================================
-# НАСТРОЙКИ ЗАПУСКА
-# ============================================================
-
-TARGETS = ["MNQ", "EURUSD"]
-
 PRICE_DB_SCHEMA_NAME = "price_src"
 
 
@@ -127,15 +121,3 @@ def rebuild_instrument_mid_price_features(instrument_code: str) -> None:
             pass
 
         conn.close()
-
-
-def main() -> None:
-    if not TARGETS:
-        raise ValueError("TARGETS не должен быть пустым")
-
-    for instrument_code in TARGETS:
-        rebuild_instrument_mid_price_features(instrument_code)
-
-
-if __name__ == "__main__":
-    main()
