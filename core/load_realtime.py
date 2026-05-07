@@ -31,6 +31,7 @@ from core.recent_gaps_service import (
 )
 from core.runtime_state import RecentBackfillState, RealtimeMonitorState
 from core.time_utils import format_utc
+from core.state_db import mark_first_synced_bid_ask, mark_signal_ready
 
 logger = get_logger(__name__)
 
@@ -229,6 +230,7 @@ def maybe_start_recent_backfill_task(
         return
 
     sync_ts = get_recent_backfill_sync_ts(first_bid_ts, first_ask_ts)
+    mark_first_synced_bid_ask(instrument_code, sync_ts)
 
     if recent_backfill_state.last_backfill_completed_sync_ts == sync_ts:
         return
@@ -248,8 +250,8 @@ def maybe_start_recent_backfill_task(
                 sync_ts=sync_ts,
             )
 
-            if was_loaded:
-                recent_backfill_state.last_backfill_completed_sync_ts = sync_ts
+            recent_backfill_state.last_backfill_completed_sync_ts = sync_ts
+            mark_signal_ready(instrument_code, sync_ts)
 
         except asyncio.CancelledError:
             raise

@@ -31,6 +31,13 @@ from core.logger import (
     wait_telegram_logging,
 )
 from core.telegram_sender import TelegramSender
+from core.state_db import (
+    initialize_state_db,
+    mark_history_ready,
+    mark_instrument_error,
+    mark_realtime_started,
+    reset_instrument_state,
+)
 
 setup_logging()
 logger = get_logger(__name__)
@@ -257,6 +264,10 @@ async def _process_instrument_then_start_realtime(
     rows_written = 0
     history_enabled = is_instrument_history_enabled(instrument_row)
     realtime_enabled = _is_instrument_realtime_enabled(instrument_row)
+
+    if history_enabled and realtime_enabled:
+        reset_instrument_state(instrument_code)
+
     history_ok = True
 
     if history_enabled:
@@ -280,10 +291,16 @@ async def _process_instrument_then_start_realtime(
                 f"Получение исторических данных по инструменту {instrument_code} завершено",
                 to_telegram=True,
             )
+
+            if history_enabled and realtime_enabled:
+                mark_history_ready(instrument_code)
+
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             history_ok = False
+            if history_enabled and realtime_enabled:
+                mark_instrument_error(instrument_code, str(exc))
             log_warning(
                 logger,
                 f"Инструмент {instrument_code}: history-загрузка завершилась ошибкой. "
@@ -311,7 +328,7 @@ async def _process_instrument_then_start_realtime(
     if history_enabled and not history_ok:
         return rows_written
 
-    _start_realtime_for_instrument(
+    realtime_started = _start_realtime_for_instrument(
         ib=ib,
         ib_health=ib_health,
         active_instruments=active_instruments,
@@ -319,6 +336,10 @@ async def _process_instrument_then_start_realtime(
         runtime_status=runtime_status,
         instrument_code=instrument_code,
     )
+
+    if realtime_started and history_enabled and realtime_enabled:
+        mark_realtime_started(instrument_code)
+        
     return rows_written
 
 
@@ -404,6 +425,8 @@ async def main():
         )
 
         initialize_databases_sync(settings)
+        initialize_state_db()
+
         background_tasks = _start_infrastructure_tasks(
             ib=ib,
             ib_health=ib_health,
