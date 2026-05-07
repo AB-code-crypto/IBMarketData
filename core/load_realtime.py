@@ -230,7 +230,6 @@ def maybe_start_recent_backfill_task(
         return
 
     sync_ts = get_recent_backfill_sync_ts(first_bid_ts, first_ask_ts)
-    mark_first_synced_bid_ask(instrument_code, sync_ts)
 
     if recent_backfill_state.last_backfill_completed_sync_ts == sync_ts:
         return
@@ -238,6 +237,8 @@ def maybe_start_recent_backfill_task(
     backfill_task = recent_backfill_state.backfill_task
     if backfill_task is not None and not backfill_task.done():
         return
+
+    mark_first_synced_bid_ask(instrument_code, sync_ts)
 
     async def run_recent_backfill():
         try:
