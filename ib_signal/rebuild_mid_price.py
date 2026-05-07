@@ -106,7 +106,7 @@ def rebuild_instrument_mid_price_features(instrument_code: str) -> None:
             (str(price_db_path),),
         )
 
-        conn.execute(f"DROP TABLE IF EXISTS {MID_PRICE_TABLE_NAME}")
+        conn.execute(f"DROP TABLE IF EXISTS {quote_identifier(MID_PRICE_TABLE_NAME)}")
         conn.execute(create_mid_price_table_sql())
 
         insert_sql = insert_mid_price_from_attached_price_db_sql(
