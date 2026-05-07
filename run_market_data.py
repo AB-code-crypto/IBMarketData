@@ -30,7 +30,6 @@ from core.logger import (
     setup_telegram_logging,
     wait_telegram_logging,
 )
-from core.telegram_sender import TelegramSender
 from core.state_db import (
     initialize_state_db,
     mark_history_ready,
@@ -38,6 +37,7 @@ from core.state_db import (
     mark_realtime_started,
     reset_instrument_state,
 )
+from core.telegram_sender import TelegramSender
 
 setup_logging()
 logger = get_logger(__name__)
@@ -157,7 +157,45 @@ def _log_connection_details(*, server_time_text: str, active_instruments: dict) 
 
 def _is_instrument_realtime_enabled(instrument_row) -> bool:
     # Проверяем выключатель realtime-загрузки инструмента.
-    return instrument_row.get("realtime_enabled", True)
+    # По умолчанию считаем realtime выключенным, чтобы случайно не стартовать
+    # инструмент без явного realtime_enabled=True.
+    return instrument_row.get("realtime_enabled", False)
+
+
+def _is_market_data_enabled(instrument_row) -> bool:
+    # Инструмент участвует в market-data сервисе, если включена история
+    # или включён realtime.
+    return (
+            is_instrument_history_enabled(instrument_row)
+            or _is_instrument_realtime_enabled(instrument_row)
+    )
+
+
+def _is_signal_state_enabled(instrument_row) -> bool:
+    # State для IBSignal ведём только по инструментам, где включены обе части:
+    # history и realtime.
+    return (
+            is_instrument_history_enabled(instrument_row)
+            and _is_instrument_realtime_enabled(instrument_row)
+    )
+
+
+def _iter_enabled_market_data_instruments():
+    # Полностью выключенные инструменты пропускаем без логов.
+    for instrument_code, instrument_row in Instrument.items():
+        if _is_market_data_enabled(instrument_row):
+            yield instrument_code, instrument_row
+
+
+def _reset_signal_states_for_enabled_instruments() -> None:
+    # Сбрасываем готовность IBSignal в самом начале run_market_data.
+    # Это защищает run_signal.py от stale signal_ready=1, оставшегося
+    # от прошлого запуска.
+    initialize_state_db()
+
+    for instrument_code, instrument_row in Instrument.items():
+        if _is_signal_state_enabled(instrument_row):
+            reset_instrument_state(instrument_code)
 
 
 def _start_infrastructure_tasks(*, ib, ib_health, runtime_status: RuntimeStatus) -> BackgroundTasks:
@@ -255,19 +293,15 @@ async def _process_instrument_then_start_realtime(
         runtime_status: RuntimeStatus,
         instrument_code: str,
         instrument_row,
-) -> int:
+) -> None:
     # Последовательность по одному инструменту:
     # 1. если включена history-загрузка — докачиваем историю;
     # 2. если включён realtime — запускаем realtime-задачу;
     # 3. recent-backfill последнего часа запускается внутри realtime после первого
     #    синхронного BID/ASK бара.
-    rows_written = 0
     history_enabled = is_instrument_history_enabled(instrument_row)
     realtime_enabled = _is_instrument_realtime_enabled(instrument_row)
-
-    if history_enabled and realtime_enabled:
-        reset_instrument_state(instrument_code)
-
+    signal_state_enabled = history_enabled and realtime_enabled
     history_ok = True
 
     if history_enabled:
@@ -279,7 +313,7 @@ async def _process_instrument_then_start_realtime(
         )
 
         try:
-            rows_written = await process_instrument_history(
+            await process_instrument_history(
                 ib=ib,
                 ib_health=ib_health,
                 settings=settings,
@@ -292,15 +326,17 @@ async def _process_instrument_then_start_realtime(
                 to_telegram=True,
             )
 
-            if history_enabled and realtime_enabled:
+            if signal_state_enabled:
                 mark_history_ready(instrument_code)
 
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             history_ok = False
-            if history_enabled and realtime_enabled:
+
+            if signal_state_enabled:
                 mark_instrument_error(instrument_code, str(exc))
+
             log_warning(
                 logger,
                 f"Инструмент {instrument_code}: history-загрузка завершилась ошибкой. "
@@ -310,23 +346,12 @@ async def _process_instrument_then_start_realtime(
         finally:
             if runtime_status.history_instrument == instrument_code:
                 runtime_status.history_instrument = None
-    else:
-        log_info(
-            logger,
-            f"Инструмент {instrument_code}: history-загрузка выключена, пропускаю.",
-            to_telegram=False,
-        )
 
     if not realtime_enabled:
-        log_info(
-            logger,
-            f"Инструмент {instrument_code}: realtime-загрузка выключена, пропускаю.",
-            to_telegram=False,
-        )
-        return rows_written
+        return
 
     if history_enabled and not history_ok:
-        return rows_written
+        return
 
     realtime_started = _start_realtime_for_instrument(
         ib=ib,
@@ -337,10 +362,8 @@ async def _process_instrument_then_start_realtime(
         instrument_code=instrument_code,
     )
 
-    if realtime_started and history_enabled and realtime_enabled:
+    if realtime_started and signal_state_enabled:
         mark_realtime_started(instrument_code)
-        
-    return rows_written
 
 
 async def _process_all_instruments_then_keep_realtime(
@@ -356,10 +379,8 @@ async def _process_all_instruments_then_keep_realtime(
     # - realtime запускается сразу после готовности своего инструмента;
     # - уже запущенный realtime продолжает работать, пока история следующих
     #   инструментов ещё докачивается.
-    total_rows_written = 0
-
-    for instrument_code, instrument_row in Instrument.items():
-        total_rows_written += await _process_instrument_then_start_realtime(
+    for instrument_code, instrument_row in _iter_enabled_market_data_instruments():
+        await _process_instrument_then_start_realtime(
             ib=ib,
             ib_health=ib_health,
             active_instruments=active_instruments,
@@ -371,7 +392,7 @@ async def _process_all_instruments_then_keep_realtime(
 
     log_info(
         logger,
-        f"Обработка history по всем инструментам завершена. Всего записано строк: {total_rows_written}",
+        "Обработка включённых market-data инструментов завершена.",
         to_telegram=False,
     )
 
@@ -413,6 +434,8 @@ async def main():
     background_tasks: Optional[BackgroundTasks] = None
     runtime_status = RuntimeStatus()
 
+    _reset_signal_states_for_enabled_instruments()
+
     ib, ib_health = await connect_ib(settings)
 
     try:
@@ -425,7 +448,6 @@ async def main():
         )
 
         initialize_databases_sync(settings)
-        initialize_state_db()
 
         background_tasks = _start_infrastructure_tasks(
             ib=ib,
