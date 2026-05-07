@@ -53,6 +53,11 @@ def wait_for_signal_ready_instruments(instrument_codes: list[str]) -> list[str]:
 
 
 def main() -> None:
+    # IBSignal намеренно не подхватывает новые инструменты на лету.
+    # Чтобы добавить инструмент в сигнальный контур:
+    # 1. history_enabled=True — закачать историю;
+    # 2. realtime_enabled=True — включить live-контур когда история закачалась
+    # 3. перезапустить run_market_data.py и run_signal.py.
     instrument_codes = get_signal_enabled_instrument_codes()
 
     if not instrument_codes:
