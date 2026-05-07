@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from contracts import Instrument
+from ib_signal.instruments import get_signal_enabled_instrument_codes
 from ib_signal.rebuild_mid_price import (
     get_instrument_feature_db_path,
     rebuild_instrument_mid_price_features,
@@ -9,6 +10,7 @@ from ib_signal.rebuild_mid_price import (
 
 def ensure_job_db_exists(instrument_code: str) -> None:
     instrument_row = Instrument[instrument_code]
+
     job_db_path = Path(
         get_instrument_feature_db_path(
             instrument_code=instrument_code,
@@ -24,14 +26,19 @@ def ensure_job_db_exists(instrument_code: str) -> None:
     rebuild_instrument_mid_price_features(instrument_code)
 
 
-TARGETS = ["MNQ"]
-
-
 def main() -> None:
-    for instrument_code in TARGETS:
+    instrument_codes = get_signal_enabled_instrument_codes()
+
+    if not instrument_codes:
+        print("Нет инструментов для IBSignal: history_enabled=True и realtime_enabled=True не найдены.")
+        return
+
+    print(f"Инструменты IBSignal: {instrument_codes}")
+
+    for instrument_code in instrument_codes:
         ensure_job_db_exists(instrument_code)
 
-    print("Job DB готовы. Дальше запускаем сигнальную логику.")
+    print("Job DB готовы. Дальше будет запуск сигнальной логики.")
 
 
 if __name__ == "__main__":
