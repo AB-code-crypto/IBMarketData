@@ -1,14 +1,14 @@
 """
-Полный rebuild feature-БД с mid/spread-ценами.
+Полный rebuild рабочей БД с mid/spread-ценами.
 
-Что делает скрипт:
+Скрипт:
 1. Берёт исходную price DB инструмента из data/prices.
-2. Создаёт отдельную feature DB в data/features.
+2. Создаёт отдельную job DB в data/features.
 3. Полностью пересоздаёт таблицу mid_price_5s.
 4. Заполняет её mid/spread-ценами из BID/ASK OHLC.
 
 Price DB не меняется.
-Feature DB можно безопасно удалять и пересобирать заново.
+Job DB можно безопасно удалять и пересобирать заново.
 """
 
 from pathlib import Path
@@ -25,21 +25,11 @@ from ib_signal.feature_db_sql import (
 )
 
 # ============================================================
-# НАСТРОЙКИ РАЗОВОГО ЗАПУСКА
+# НАСТРОЙКИ ЗАПУСКА
 # ============================================================
 
-# Какие инструменты пересобираем.
-# Можно указать один:
-#   TARGETS = ["MNQ"]
-#
-# Можно несколько:
-#   TARGETS = ["MNQ", "MES", "EURUSD"]
 TARGETS = ["MNQ", "EURUSD"]
 
-# Если True, перед сборкой печатаем план, но БД не меняем.
-DRY_RUN = False
-
-# Имя attached-схемы для исходной price DB.
 PRICE_DB_SCHEMA_NAME = "price_src"
 
 
@@ -48,72 +38,18 @@ PRICE_DB_SCHEMA_NAME = "price_src"
 # ============================================================
 
 def get_feature_db_dir() -> Path:
-    # Feature-БД лежат рядом с data/prices, в data/features.
-    #
-    # Если settings.price_db_dir = "data/prices",
-    # то feature dir будет "data/features".
+    # Feature/job-БД лежат рядом с data/prices, в data/features.
     return Path(settings.price_db_dir).parent / "features"
 
 
-def get_instrument_feature_db_path(instrument_code: str, instrument_row: dict) -> str:
-    # Строит путь к рабочей feature-БД конкретного логического инструмента.
-    #
-    # Price DB остаётся в data/prices/MNQ.sqlite3.
-    # Feature/job DB создаём отдельно: data/features/mnq_job.sqlite3.
-    #
-    # Имя берём из db_filename, если оно есть, чтобы не расходиться
-    # с фактическим именем инструмента в contracts.py.
+def get_instrument_feature_db_path(instrument_code: str, instrument_row: dict) -> Path:
+    # Price DB:   data/prices/MNQ.sqlite3
+    # Feature DB: data/features/mnq_job.sqlite3
     price_db_filename = instrument_row.get("db_filename", f"{instrument_code}.sqlite3")
     feature_db_stem = Path(price_db_filename).stem.lower()
     feature_db_filename = f"{feature_db_stem}_job.sqlite3"
 
-    return str(get_feature_db_dir() / feature_db_filename)
-
-
-# ============================================================
-# SQL HELPERS
-# ============================================================
-
-def get_source_rows_count(conn, source_table_name: str) -> int:
-    table_ref = (
-        f"{quote_identifier(PRICE_DB_SCHEMA_NAME)}."
-        f"{quote_identifier(source_table_name)}"
-    )
-
-    row = conn.execute(f"SELECT COUNT(*) FROM {table_ref}").fetchone()
-    return int(row[0] or 0)
-
-
-def get_valid_source_rows_count(conn, source_table_name: str) -> int:
-    table_ref = (
-        f"{quote_identifier(PRICE_DB_SCHEMA_NAME)}."
-        f"{quote_identifier(source_table_name)}"
-    )
-
-    row = conn.execute(
-        f"""
-        SELECT COUNT(*)
-        FROM {table_ref}
-        WHERE bid_open IS NOT NULL
-          AND ask_open IS NOT NULL
-          AND bid_high IS NOT NULL
-          AND ask_high IS NOT NULL
-          AND bid_low IS NOT NULL
-          AND ask_low IS NOT NULL
-          AND bid_close IS NOT NULL
-          AND ask_close IS NOT NULL
-        """
-    ).fetchone()
-
-    return int(row[0] or 0)
-
-
-def get_feature_rows_count(conn) -> int:
-    row = conn.execute(
-        f"SELECT COUNT(*) FROM {MID_PRICE_TABLE_NAME}"
-    ).fetchone()
-
-    return int(row[0] or 0)
+    return get_feature_db_dir() / feature_db_filename
 
 
 # ============================================================
@@ -126,10 +62,12 @@ def rebuild_instrument_mid_price_features(instrument_code: str) -> None:
 
     instrument_row = Instrument[instrument_code]
 
-    price_db_path = get_instrument_db_path(
-        settings=settings,
-        instrument_code=instrument_code,
-        instrument_row=instrument_row,
+    price_db_path = Path(
+        get_instrument_db_path(
+            settings=settings,
+            instrument_code=instrument_code,
+            instrument_row=instrument_row,
+        )
     )
 
     price_table_name = get_instrument_table_name(
@@ -142,29 +80,22 @@ def rebuild_instrument_mid_price_features(instrument_code: str) -> None:
         instrument_row=instrument_row,
     )
 
-    price_db_path_obj = Path(price_db_path)
-    feature_db_path_obj = Path(feature_db_path)
+    if not price_db_path.is_file():
+        raise FileNotFoundError(f"Price DB не найдена: {price_db_path}")
 
-    if not price_db_path_obj.is_file():
-        raise FileNotFoundError(f"Price DB не найдена: {price_db_path_obj}")
+    feature_db_path.parent.mkdir(parents=True, exist_ok=True)
 
     print()
     print("=" * 80)
     print(f"Инструмент : {instrument_code}")
-    print(f"Price DB   : {price_db_path_obj}")
+    print(f"Price DB   : {price_db_path}")
     print(f"Price table: {price_table_name}")
-    print(f"Feature DB : {feature_db_path_obj}")
+    print(f"Feature DB : {feature_db_path}")
     print(f"Feature tbl: {MID_PRICE_TABLE_NAME}")
     print("=" * 80)
 
-    if DRY_RUN:
-        print("DRY_RUN=True: rebuild не выполняется.")
-        return
-
-    feature_db_path_obj.parent.mkdir(parents=True, exist_ok=True)
-
     conn = open_sqlite_connection(
-        str(feature_db_path_obj),
+        str(feature_db_path),
         create_parent_dir=True,
         use_wal=False,
     )
@@ -172,43 +103,23 @@ def rebuild_instrument_mid_price_features(instrument_code: str) -> None:
     try:
         conn.execute(
             f"ATTACH DATABASE ? AS {quote_identifier(PRICE_DB_SCHEMA_NAME)}",
-            (str(price_db_path_obj),),
+            (str(price_db_path),),
         )
-
-        source_rows_count = get_source_rows_count(
-            conn=conn,
-            source_table_name=price_table_name,
-        )
-        valid_source_rows_count = get_valid_source_rows_count(
-            conn=conn,
-            source_table_name=price_table_name,
-        )
-
-        print(f"Строк в price table всего      : {source_rows_count}")
-        print(f"Строк с полным BID/ASK OHLC   : {valid_source_rows_count}")
 
         conn.execute(f"DROP TABLE IF EXISTS {MID_PRICE_TABLE_NAME}")
         conn.execute(create_mid_price_table_sql(MID_PRICE_TABLE_NAME))
-
-        price_digits = instrument_row["price_digits"]
-        mid_price_digits = instrument_row["mid_price_digits"]
 
         insert_sql = insert_mid_price_from_attached_price_db_sql(
             target_table_name=MID_PRICE_TABLE_NAME,
             attached_schema_name=PRICE_DB_SCHEMA_NAME,
             source_table_name=price_table_name,
-            price_digits=price_digits,
-            mid_price_digits=mid_price_digits,
+            price_digits=instrument_row["price_digits"],
+            mid_price_digits=instrument_row["mid_price_digits"],
         )
         conn.execute(insert_sql)
 
         conn.commit()
-
-        feature_rows_count = get_feature_rows_count(conn)
-        skipped_rows_count = source_rows_count - feature_rows_count
-
-        print(f"Записано строк в feature table : {feature_rows_count}")
-        print(f"Пропущено строк                : {skipped_rows_count}")
+        print("Готово.")
 
     finally:
         try:

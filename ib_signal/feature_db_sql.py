@@ -1,10 +1,10 @@
 MID_PRICE_TABLE_NAME = "mid_price_5s"
 
 
-def create_mid_price_table_sql(table_name: str = MID_PRICE_TABLE_NAME) -> str:
+def create_mid_price_table_sql() -> str:
     # Таблица подготовленных mid/spread-цен для IBSignal и тестера.
     return f"""
-    CREATE TABLE IF NOT EXISTS {table_name} (
+    CREATE TABLE IF NOT EXISTS {quote_identifier(MID_PRICE_TABLE_NAME)} (
         bar_time_ts INTEGER PRIMARY KEY,
         bar_time TEXT NOT NULL,
         bar_time_ct TEXT NOT NULL,
@@ -25,16 +25,12 @@ def create_mid_price_table_sql(table_name: str = MID_PRICE_TABLE_NAME) -> str:
 
 def insert_mid_price_from_attached_price_db_sql(
         *,
-        target_table_name: str = MID_PRICE_TABLE_NAME,
         attached_schema_name: str,
         source_table_name: str,
         price_digits: int,
         mid_price_digits: int,
 ) -> str:
-    # Полностью заполняет feature-таблицу из attached price DB.
-    #
-    # В feature-БД попадают только полностью валидные бары,
-    # где есть все нужные BID/ASK OHLC-значения.
+    # Полностью заполняет mid_price_5s из attached price DB.
     #
     # mid_* округляем по mid_price_digits, потому что там есть деление на 2.
     # spread_* округляем по price_digits, потому что spread — это разница цен
@@ -42,13 +38,14 @@ def insert_mid_price_from_attached_price_db_sql(
     price_digits = int(price_digits)
     mid_price_digits = int(mid_price_digits)
 
+    target_table_ref = quote_identifier(MID_PRICE_TABLE_NAME)
     source_table_ref = (
         f"{quote_identifier(attached_schema_name)}."
         f"{quote_identifier(source_table_name)}"
     )
 
     return f"""
-    INSERT INTO {target_table_name} (
+    INSERT INTO {target_table_ref} (
         bar_time_ts,
         bar_time,
         bar_time_ct,
@@ -88,8 +85,7 @@ def insert_mid_price_from_attached_price_db_sql(
       AND bid_low IS NOT NULL
       AND ask_low IS NOT NULL
       AND bid_close IS NOT NULL
-      AND ask_close IS NOT NULL
-    ORDER BY bar_time_ts ASC;
+      AND ask_close IS NOT NULL;
     """
 
 
