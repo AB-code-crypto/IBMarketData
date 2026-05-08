@@ -6,7 +6,6 @@ from contracts import Instrument
 from core.sqlite_utils import open_sqlite_connection
 from ib_job_data.feature_db_sql import MID_PRICE_TABLE_NAME, quote_identifier
 from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
-from ib_signal import signal_config
 
 MIN_REQUIRED_ROWS = 1000
 
@@ -32,7 +31,10 @@ def get_signal_job_db_path(instrument_code: str) -> Path:
     )
 
 
-def get_job_db_status(instrument_code: str) -> JobDbStatus:
+def get_job_db_status(
+        instrument_code: str,
+        max_allowed_lag_seconds: int,
+) -> JobDbStatus:
     job_db_path = get_signal_job_db_path(instrument_code)
 
     if not job_db_path.is_file():
@@ -101,13 +103,15 @@ def get_job_db_status(instrument_code: str) -> JobDbStatus:
             )
 
         last_bar_lag_seconds = int(time.time()) - last_bar_time_ts
-        max_allowed_lag = signal_config.LAST_BAR_SAFETY_SECONDS
 
-        if last_bar_lag_seconds > max_allowed_lag:
+        if last_bar_lag_seconds > max_allowed_lag_seconds:
             return JobDbStatus(
                 instrument_code=instrument_code,
                 is_ready=False,
-                reason=f"last bar is stale: {last_bar_lag_seconds}s > {max_allowed_lag}s",
+                reason=(
+                    "last bar is stale: "
+                    f"{last_bar_lag_seconds}s > {max_allowed_lag_seconds}s"
+                ),
                 job_db_path=job_db_path,
                 rows_count=rows_count,
                 last_bar_time_ts=last_bar_time_ts,
@@ -128,10 +132,53 @@ def get_job_db_status(instrument_code: str) -> JobDbStatus:
         conn.close()
 
 
-def is_job_db_ready(instrument_code: str) -> bool:
-    return get_job_db_status(instrument_code).is_ready
+def is_job_db_ready(
+        instrument_code: str,
+        max_allowed_lag_seconds: int,
+) -> bool:
+    return get_job_db_status(
+        instrument_code=instrument_code,
+        max_allowed_lag_seconds=max_allowed_lag_seconds,
+    ).is_ready
 
 
 def get_last_job_bar_ts(instrument_code: str) -> int | None:
-    status = get_job_db_status(instrument_code)
-    return status.last_bar_time_ts
+    job_db_path = get_signal_job_db_path(instrument_code)
+
+    if not job_db_path.is_file():
+        return None
+
+    conn = open_sqlite_connection(
+        str(job_db_path),
+        require_existing_file=True,
+        use_wal=False,
+    )
+
+    try:
+        table_row = conn.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name = ?
+            """,
+            (MID_PRICE_TABLE_NAME,),
+        ).fetchone()
+
+        if table_row is None:
+            return None
+
+        row = conn.execute(
+            f"""
+            SELECT MAX(bar_time_ts) AS last_bar_time_ts
+            FROM {quote_identifier(MID_PRICE_TABLE_NAME)}
+            """
+        ).fetchone()
+
+        if row is None or row[0] is None:
+            return None
+
+        return int(row[0])
+
+    finally:
+        conn.close()

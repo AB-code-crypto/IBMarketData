@@ -1,17 +1,13 @@
 from core.instrument_filters import get_live_enabled_instrument_codes
 from core.logger import get_logger, log_info, log_warning, setup_logging
 from ib_signal.signal_runner import run_signal_loop, wait_for_job_dbs
+from ib_signal.signal_settings import SignalSettings
 
 setup_logging()
 logger = get_logger(__name__)
 
 
 def main() -> None:
-    # run_signal намеренно не подхватывает новые инструменты на лету.
-    # Чтобы добавить инструмент в signal-контур:
-    # 1. history_enabled=True — закачать историю;
-    # 2. realtime_enabled=True — включить live-контур когда история закачалась;
-    # 3. перезапустить run_market_data.py, run_job_data.py и run_signal.py.
     instrument_codes = get_live_enabled_instrument_codes()
 
     if not instrument_codes:
@@ -22,14 +18,23 @@ def main() -> None:
         )
         return
 
+    settings = SignalSettings.from_config()
+
     log_info(
         logger,
         f"Инструменты signal-сервиса: {instrument_codes}",
         to_telegram=False,
     )
 
-    ready_instrument_codes = wait_for_job_dbs(instrument_codes)
-    run_signal_loop(ready_instrument_codes)
+    ready_instrument_codes = wait_for_job_dbs(
+        instrument_codes=instrument_codes,
+        settings=settings,
+    )
+
+    run_signal_loop(
+        instrument_codes=ready_instrument_codes,
+        settings=settings,
+    )
 
 
 if __name__ == "__main__":

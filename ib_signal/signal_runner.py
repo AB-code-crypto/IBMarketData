@@ -2,6 +2,7 @@ import time
 
 from core.logger import get_logger, log_info, setup_logging
 from ib_signal.job_reader import get_job_db_status, get_last_job_bar_ts
+from ib_signal.signal_settings import SignalSettings
 
 setup_logging()
 logger = get_logger(__name__)
@@ -20,7 +21,7 @@ def format_job_db_status(status) -> str:
     )
 
 
-def wait_for_job_dbs(instrument_codes: list[str]) -> list[str]:
+def wait_for_job_dbs(instrument_codes: list[str], settings: SignalSettings, ) -> list[str]:
     pending = set(instrument_codes)
     ready = []
 
@@ -56,7 +57,7 @@ def wait_for_job_dbs(instrument_codes: list[str]) -> list[str]:
     return ready
 
 
-def run_signal_loop(instrument_codes: list[str]) -> None:
+def run_signal_loop(instrument_codes: list[str], settings: SignalSettings, ) -> None:
     # Пока не ищем Pearson и не пишем сигналы.
     # Только отслеживаем появление новых bar_time_ts в job DB.
     last_seen_ts_by_instrument: dict[str, int | None] = {
