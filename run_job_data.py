@@ -25,7 +25,7 @@ from ib_job_data.rebuild_mid_price import (
 setup_logging()
 logger = get_logger(__name__)
 
-telegram_sender = TelegramSender(settings)
+telegram_sender = TelegramSender(settings, robot_name="ib_job_data")
 setup_telegram_logging(telegram_sender)
 
 READY_WAIT_SECONDS = 5
@@ -36,7 +36,7 @@ READY_WAIT_SECONDS = 5
 JOB_DB_UPDATE_INTERVAL_SECONDS = 1
 
 
-def ensure_job_db_exists(instrument_code: str) -> None:
+def rebuild_job_db(instrument_code: str) -> None:
     instrument_row = Instrument[instrument_code]
 
     job_db_path = Path(
@@ -49,16 +49,16 @@ def ensure_job_db_exists(instrument_code: str) -> None:
     if job_db_path.is_file():
         log_info(
             logger,
-            f"{instrument_code}: Job DB уже есть: {job_db_path}",
-            to_telegram=False,
+            f"{instrument_code}: пересоздаю Job DB: {job_db_path}",
+            to_telegram=True,
         )
-        return
+    else:
+        log_info(
+            logger,
+            f"{instrument_code}: создаю Job DB: {job_db_path}",
+            to_telegram=True,
+        )
 
-    log_info(
-        logger,
-        f"{instrument_code}: Job DB не найдена, создаю: {job_db_path}",
-        to_telegram=True,
-    )
     rebuild_instrument_mid_price_features(instrument_code)
 
 
@@ -176,11 +176,11 @@ async def main() -> None:
         ready_instrument_codes = await wait_for_ready_instruments(instrument_codes)
 
         for instrument_code in ready_instrument_codes:
-            ensure_job_db_exists(instrument_code)
+            rebuild_job_db(instrument_code)
 
         log_info(
             logger,
-            f"Все Job DB готовы: {ready_instrument_codes}",
+            f"Все Job DB пересозданы: {ready_instrument_codes}",
             to_telegram=True,
         )
 

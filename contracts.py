@@ -27,8 +27,8 @@ FUT_DEFAULTS: InstrumentRow = {
 }
 
 FX_DEFAULTS: InstrumentRow = {
-    "history_enabled": True,
-    "realtime_enabled": True,
+    "history_enabled": False,
+    "realtime_enabled": False,
     "secType": "CASH",
     "exchange": "IDEALPRO",
     "barSizeSetting": "5 secs",

@@ -9,9 +9,10 @@ TELEGRAM_REQUEST_TIMEOUT_SECONDS = 20
 
 
 class TelegramSender:
-    def __init__(self, settings):
-        # Имя робота для маркировки Telegram-сообщений.
-        self.robot_name = getattr(settings, "robot_name", "IBMarketData")
+    def __init__(self, settings, robot_name=None):
+        # Имя робота/сервиса для маркировки Telegram-сообщений.
+        # Если явно не передано, берём общее имя из settings.
+        self.robot_name = robot_name or getattr(settings, "robot_name", "IBMarketData")
         self.robot_hashtag = self._build_robot_hashtag(self.robot_name)
         # Токен бота Telegram.
         self.bot_token = settings.telegram_bot_token
