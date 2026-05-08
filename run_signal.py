@@ -28,15 +28,8 @@ def main() -> None:
         to_telegram=False,
     )
 
-    ready_instrument_codes = wait_for_job_dbs(
-        instrument_codes=instrument_codes,
-        log_message=lambda message: log_info(logger, message, to_telegram=False),
-    )
-
-    run_signal_loop(
-        instrument_codes=ready_instrument_codes,
-        log_message=lambda message: log_info(logger, message, to_telegram=False),
-    )
+    ready_instrument_codes = wait_for_job_dbs(instrument_codes)
+    run_signal_loop(ready_instrument_codes)
 
 
 if __name__ == "__main__":

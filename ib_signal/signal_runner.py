@@ -1,25 +1,13 @@
 import time
 
+from core.logger import get_logger, log_info, setup_logging
 from ib_signal.job_reader import get_job_db_status, get_last_job_bar_ts
-from datetime import datetime, timezone
-from core.time_utils import CT_TIMEZONE, MSK_TIMEZONE, SQLITE_DATETIME_FORMAT
+
+setup_logging()
+logger = get_logger(__name__)
 
 SIGNAL_LOOP_SLEEP_SECONDS = 1
 JOB_DB_WAIT_SECONDS = 5
-
-
-def format_ts_for_status(ts: int | None) -> str:
-    if ts is None:
-        return "-"
-
-    dt_utc = datetime.fromtimestamp(ts, tz=timezone.utc)
-    dt_msk = dt_utc.astimezone(MSK_TIMEZONE)
-    dt_ct = dt_utc.astimezone(CT_TIMEZONE)
-
-    return (
-        f"msk={dt_msk.strftime(SQLITE_DATETIME_FORMAT)}, "
-        f"ct={dt_ct.strftime(SQLITE_DATETIME_FORMAT)}"
-    )
 
 
 def format_job_db_status(status) -> str:
@@ -27,26 +15,38 @@ def format_job_db_status(status) -> str:
         f"ready={status.is_ready}, "
         f"reason={status.reason}, "
         f"rows={status.rows_count}, "
-        f"last_time=({format_ts_for_status(status.last_bar_time_ts)}), "
+        f"last_ts={status.last_bar_time_ts}, "
         f"lag={status.last_bar_lag_seconds}"
     )
 
 
-def wait_for_job_dbs(instrument_codes: list[str], log_message) -> list[str]:
+def wait_for_job_dbs(instrument_codes: list[str]) -> list[str]:
     pending = set(instrument_codes)
     ready = []
 
-    log_message(f"Жду готовности job DB для signal-сервиса: {sorted(pending)}")
+    log_info(
+        logger,
+        f"Жду готовности job DB для signal-сервиса: {sorted(pending)}",
+        to_telegram=False,
+    )
 
     while pending:
         for instrument_code in list(pending):
             status = get_job_db_status(instrument_code)
 
             if not status.is_ready:
-                log_message(f"{instrument_code}: job DB пока не готова: {format_job_db_status(status)}")
+                log_info(
+                    logger,
+                    f"{instrument_code}: job DB пока не готова: {format_job_db_status(status)}",
+                    to_telegram=False,
+                )
                 continue
 
-            log_message(f"{instrument_code}: job DB готова: {format_job_db_status(status)}")
+            log_info(
+                logger,
+                f"{instrument_code}: job DB готова: {format_job_db_status(status)}",
+                to_telegram=False,
+            )
             ready.append(instrument_code)
             pending.remove(instrument_code)
 
@@ -56,7 +56,7 @@ def wait_for_job_dbs(instrument_codes: list[str], log_message) -> list[str]:
     return ready
 
 
-def run_signal_loop(instrument_codes: list[str], log_message) -> None:
+def run_signal_loop(instrument_codes: list[str]) -> None:
     # Пока не ищем Pearson и не пишем сигналы.
     # Только отслеживаем появление новых bar_time_ts в job DB.
     last_seen_ts_by_instrument: dict[str, int | None] = {
@@ -64,14 +64,22 @@ def run_signal_loop(instrument_codes: list[str], log_message) -> None:
         for instrument_code in instrument_codes
     }
 
-    log_message(f"Запускаю signal-loop для инструментов: {instrument_codes}")
+    log_info(
+        logger,
+        f"Запускаю signal-loop для инструментов: {instrument_codes}",
+        to_telegram=False,
+    )
 
     while True:
         for instrument_code in instrument_codes:
             status = get_job_db_status(instrument_code)
 
             if not status.is_ready:
-                log_message(f"{instrument_code}: пропускаю расчёт, job DB не готова: {format_job_db_status(status)}")
+                log_info(
+                    logger,
+                    f"{instrument_code}: пропускаю расчёт, job DB не готова: {format_job_db_status(status)}",
+                    to_telegram=False,
+                )
                 continue
 
             current_last_ts = get_last_job_bar_ts(instrument_code)
@@ -82,7 +90,11 @@ def run_signal_loop(instrument_codes: list[str], log_message) -> None:
 
             if previous_last_ts is None:
                 last_seen_ts_by_instrument[instrument_code] = current_last_ts
-                log_message(f"{instrument_code}: начальный последний bar_time_ts={current_last_ts}")
+                log_info(
+                    logger,
+                    f"{instrument_code}: начальный последний bar_time_ts={current_last_ts}",
+                    to_telegram=False,
+                )
                 continue
 
             if current_last_ts <= previous_last_ts:
@@ -90,9 +102,11 @@ def run_signal_loop(instrument_codes: list[str], log_message) -> None:
 
             last_seen_ts_by_instrument[instrument_code] = current_last_ts
 
-            log_message(
+            log_info(
+                logger,
                 f"{instrument_code}: появился новый job bar_time_ts={current_last_ts}. "
-                f"Дальше здесь будет расчёт сигнала."
+                f"Дальше здесь будет расчёт сигнала.",
+                to_telegram=False,
             )
 
         time.sleep(SIGNAL_LOOP_SLEEP_SECONDS)
