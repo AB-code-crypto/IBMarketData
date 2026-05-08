@@ -21,7 +21,10 @@ def format_job_db_status(status) -> str:
     )
 
 
-def wait_for_job_dbs(instrument_codes: list[str], settings: SignalSettings, ) -> list[str]:
+def wait_for_job_dbs(
+    instrument_codes: list[str],
+    settings: SignalSettings,
+) -> list[str]:
     pending = set(instrument_codes)
     ready = []
 
@@ -33,7 +36,10 @@ def wait_for_job_dbs(instrument_codes: list[str], settings: SignalSettings, ) ->
 
     while pending:
         for instrument_code in list(pending):
-            status = get_job_db_status(instrument_code)
+            status = get_job_db_status(
+                instrument_code=instrument_code,
+                max_allowed_lag_seconds=settings.last_bar_safety_seconds,
+            )
 
             if not status.is_ready:
                 log_info(
@@ -57,7 +63,10 @@ def wait_for_job_dbs(instrument_codes: list[str], settings: SignalSettings, ) ->
     return ready
 
 
-def run_signal_loop(instrument_codes: list[str], settings: SignalSettings, ) -> None:
+def run_signal_loop(
+    instrument_codes: list[str],
+    settings: SignalSettings,
+) -> None:
     # Пока не ищем Pearson и не пишем сигналы.
     # Только отслеживаем появление новых bar_time_ts в job DB.
     last_seen_ts_by_instrument: dict[str, int | None] = {
@@ -73,7 +82,10 @@ def run_signal_loop(instrument_codes: list[str], settings: SignalSettings, ) -> 
 
     while True:
         for instrument_code in instrument_codes:
-            status = get_job_db_status(instrument_code)
+            status = get_job_db_status(
+                instrument_code=instrument_code,
+                max_allowed_lag_seconds=settings.last_bar_safety_seconds,
+            )
 
             if not status.is_ready:
                 log_info(
