@@ -1,11 +1,21 @@
-import time
+import asyncio
 import traceback
 from pathlib import Path
 
+from config import settings_live as settings
 from contracts import Instrument
 from core.instrument_filters import get_live_enabled_instrument_codes
-from core.logger import get_logger, log_info, log_warning, setup_logging
+from core.logger import (
+    disable_telegram_logging,
+    get_logger,
+    log_info,
+    log_warning,
+    setup_logging,
+    setup_telegram_logging,
+    wait_telegram_logging,
+)
 from core.state_db import is_signal_ready
+from core.telegram_sender import TelegramSender
 from ib_job_data.job_db_updater import append_new_mid_price_rows
 from ib_job_data.rebuild_mid_price import (
     get_instrument_feature_db_path,
@@ -14,6 +24,9 @@ from ib_job_data.rebuild_mid_price import (
 
 setup_logging()
 logger = get_logger(__name__)
+
+telegram_sender = TelegramSender(settings)
+setup_telegram_logging(telegram_sender)
 
 READY_WAIT_SECONDS = 5
 
@@ -44,19 +57,19 @@ def ensure_job_db_exists(instrument_code: str) -> None:
     log_info(
         logger,
         f"{instrument_code}: Job DB не найдена, создаю: {job_db_path}",
-        to_telegram=False,
+        to_telegram=True,
     )
     rebuild_instrument_mid_price_features(instrument_code)
 
 
-def wait_for_ready_instruments(instrument_codes: list[str]) -> list[str]:
+async def wait_for_ready_instruments(instrument_codes: list[str]) -> list[str]:
     pending = set(instrument_codes)
     ready = []
 
     log_info(
         logger,
-        f"Жду готовности инструментов от run_market_data: {sorted(pending)}",
-        to_telegram=False,
+        f"Job-data сервис ждёт готовности инструментов от run_market_data: {sorted(pending)}",
+        to_telegram=True,
     )
 
     while pending:
@@ -66,19 +79,20 @@ def wait_for_ready_instruments(instrument_codes: list[str]) -> list[str]:
 
             log_info(
                 logger,
-                f"{instrument_code}: инструмент готов для job-data сервиса",
-                to_telegram=False,
+                f"{instrument_code}: Job DB стала доступна для подготовки рабочих данных",
+                to_telegram=True,
             )
             ready.append(instrument_code)
             pending.remove(instrument_code)
 
         if pending:
+            # В консоль пишем текущее ожидание, в Telegram не спамим.
             log_info(
                 logger,
-                f"Пока не готовы: {sorted(pending)}",
+                f"Job DB пока не готовы: {sorted(pending)}",
                 to_telegram=False,
             )
-            time.sleep(READY_WAIT_SECONDS)
+            await asyncio.sleep(READY_WAIT_SECONDS)
 
     return ready
 
@@ -100,56 +114,105 @@ def update_job_dbs_once(instrument_codes: list[str]) -> None:
                 logger,
                 f"{instrument_code}: ошибка обновления job DB: {exc}\n"
                 f"{traceback.format_exc()}",
-                to_telegram=False,
+                to_telegram=True,
             )
 
 
-def run_job_db_update_loop(instrument_codes: list[str]) -> None:
+async def run_job_db_update_loop(instrument_codes: list[str]) -> None:
     log_info(
         logger,
         f"Запускаю обновление job DB для инструментов: {instrument_codes}",
-        to_telegram=False,
+        to_telegram=True,
     )
 
     while True:
         update_job_dbs_once(instrument_codes)
-        time.sleep(JOB_DB_UPDATE_INTERVAL_SECONDS)
+        await asyncio.sleep(JOB_DB_UPDATE_INTERVAL_SECONDS)
 
 
-def main() -> None:
-    # run_job_data намеренно не подхватывает новые инструменты на лету.
-    # Чтобы добавить инструмент в job-data контур:
-    # 1. history_enabled=True — закачать историю;
-    # 2. realtime_enabled=True — включить live-контур когда история закачалась;
-    # 3. перезапустить run_market_data.py и run_job_data.py.
-    instrument_codes = get_live_enabled_instrument_codes()
+async def shutdown_app(shutdown_message: str) -> None:
+    log_info(logger, shutdown_message, to_telegram=True)
+    await wait_telegram_logging()
 
-    if not instrument_codes:
+    disable_telegram_logging()
+
+    try:
+        await telegram_sender.close()
+    except Exception:
+        pass
+
+
+async def main() -> None:
+    shutdown_message = "\n===========\nСтоп job-data сервиса.\n===========\n"
+
+    try:
+        # run_job_data намеренно не подхватывает новые инструменты на лету.
+        # Чтобы добавить инструмент в job-data контур:
+        # 1. history_enabled=True — закачать историю;
+        # 2. realtime_enabled=True — включить live-контур когда история закачалась;
+        # 3. перезапустить run_market_data.py и run_job_data.py.
+        instrument_codes = get_live_enabled_instrument_codes()
+
+        log_info(
+            logger,
+            "\n===========\nСтарт job-data сервиса.\n===========\n",
+            to_telegram=True,
+        )
+
+        if not instrument_codes:
+            log_warning(
+                logger,
+                "Нет инструментов для job-data сервиса: history_enabled=True и realtime_enabled=True не найдены.",
+                to_telegram=True,
+            )
+            return
+
+        log_info(
+            logger,
+            f"Инструменты job-data сервиса: {instrument_codes}",
+            to_telegram=True,
+        )
+
+        ready_instrument_codes = await wait_for_ready_instruments(instrument_codes)
+
+        for instrument_code in ready_instrument_codes:
+            ensure_job_db_exists(instrument_code)
+
+        log_info(
+            logger,
+            f"Все Job DB готовы: {ready_instrument_codes}",
+            to_telegram=True,
+        )
+
+        # Перед входом в основной цикл сразу один раз догоняем job DB.
+        update_job_dbs_once(ready_instrument_codes)
+
+        await run_job_db_update_loop(ready_instrument_codes)
+
+    except asyncio.CancelledError:
+        shutdown_message = "===========\nСтоп job-data сервиса: остановлен пользователем\n==========="
+        raise
+
+    except Exception as exc:
+        shutdown_message = (
+            "===========\n"
+            "Стоп job-data сервиса: аварийная ошибка\n"
+            f"{exc}\n"
+            "==========="
+        )
         log_warning(
             logger,
-            "Нет инструментов для job-data сервиса: history_enabled=True и realtime_enabled=True не найдены.",
-            to_telegram=False,
+            f"Job-data сервис завершился ошибкой: {exc}\n{traceback.format_exc()}",
+            to_telegram=True,
         )
-        return
+        raise
 
-    log_info(
-        logger,
-        f"Инструменты job-data сервиса: {instrument_codes}",
-        to_telegram=False,
-    )
-
-    ready_instrument_codes = wait_for_ready_instruments(instrument_codes)
-
-    for instrument_code in ready_instrument_codes:
-        ensure_job_db_exists(instrument_code)
-
-    log_info(logger, "Job DB готовы.", to_telegram=False)
-
-    # Перед входом в основной цикл сразу один раз догоняем job DB.
-    update_job_dbs_once(ready_instrument_codes)
-
-    run_job_db_update_loop(ready_instrument_codes)
+    finally:
+        await shutdown_app(shutdown_message)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
