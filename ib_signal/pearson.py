@@ -44,9 +44,6 @@ def calculate_centered_pearson(
 
 
 if __name__ == "__main__":
-    # Простой ручной запуск:
-    # python -m ib_signal.pearson
-
     left_values = [
         100.0, 100.3, 100.8, 101.2, 101.0,
         101.5, 102.1, 102.7, 102.4, 102.9,
