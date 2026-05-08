@@ -1,13 +1,9 @@
-from datetime import datetime
-
 from core.instrument_filters import get_live_enabled_instrument_codes
+from core.logger import get_logger, log_info, log_warning, setup_logging
 from ib_signal.signal_runner import run_signal_loop, wait_for_job_dbs
 
-
-def log_message(message: str) -> None:
-    # Минимальный консольный логер для signal-сервиса.
-    time_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"{time_text} | {message}", flush=True)
+setup_logging()
+logger = get_logger(__name__)
 
 
 def main() -> None:
@@ -19,19 +15,27 @@ def main() -> None:
     instrument_codes = get_live_enabled_instrument_codes()
 
     if not instrument_codes:
-        log_message("Нет инструментов для signal-сервиса: history_enabled=True и realtime_enabled=True не найдены.")
+        log_warning(
+            logger,
+            "Нет инструментов для signal-сервиса: history_enabled=True и realtime_enabled=True не найдены.",
+            to_telegram=False,
+        )
         return
 
-    log_message(f"Инструменты signal-сервиса: {instrument_codes}")
+    log_info(
+        logger,
+        f"Инструменты signal-сервиса: {instrument_codes}",
+        to_telegram=False,
+    )
 
     ready_instrument_codes = wait_for_job_dbs(
         instrument_codes=instrument_codes,
-        log_message=log_message,
+        log_message=lambda message: log_info(logger, message, to_telegram=False),
     )
 
     run_signal_loop(
         instrument_codes=ready_instrument_codes,
-        log_message=log_message,
+        log_message=lambda message: log_info(logger, message, to_telegram=False),
     )
 
 
