@@ -2,8 +2,8 @@ import asyncio
 import time
 
 from core.logger import get_logger, log_info, setup_logging
-from ib_signal.job_reader import get_job_db_status, get_last_job_bar_ts
-from ib_signal.signal_schedule import should_calculate_signal
+from ib_signal.job_reader import get_job_db_status
+from ib_signal.signal_schedule import get_due_signal_bar_ts
 from ib_signal.signal_settings import SignalSettings
 
 setup_logging()
@@ -24,8 +24,8 @@ def format_job_db_status(status) -> str:
 
 
 async def wait_for_job_dbs(
-        instrument_codes: list[str],
-        settings: SignalSettings,
+    instrument_codes: list[str],
+    settings: SignalSettings,
 ) -> list[str]:
     pending = set(instrument_codes)
     ready = []
@@ -66,8 +66,8 @@ async def wait_for_job_dbs(
 
 
 async def run_signal_loop(
-        instrument_codes: list[str],
-        settings: SignalSettings,
+    instrument_codes: list[str],
+    settings: SignalSettings,
 ) -> None:
     # last_seen нужен только для логирования появления нового бара.
     last_seen_ts_by_instrument: dict[str, int | None] = {
@@ -75,7 +75,7 @@ async def run_signal_loop(
         for instrument_code in instrument_codes
     }
 
-    # last_calculated защищает от повторного расчёта на одном и том же баре.
+    # last_calculated защищает от повторного расчёта одного и того же signal bar.
     last_calculated_ts_by_instrument: dict[str, int | None] = {
         instrument_code: None
         for instrument_code in instrument_codes
@@ -104,7 +104,7 @@ async def run_signal_loop(
                 )
                 continue
 
-            current_last_ts = get_last_job_bar_ts(instrument_code)
+            current_last_ts = status.last_bar_time_ts
             previous_last_ts = last_seen_ts_by_instrument[instrument_code]
 
             if current_last_ts is None:
@@ -126,25 +126,29 @@ async def run_signal_loop(
                     to_telegram=False,
                 )
 
-            if not should_calculate_signal(
-                    current_bar_ts=current_last_ts,
-                    now_ts=now_ts,
-                    settings=settings,
-                    last_calculated_bar_ts=last_calculated_ts_by_instrument[instrument_code],
-            ):
+            due_signal_bar_ts = get_due_signal_bar_ts(
+                current_bar_ts=current_last_ts,
+                now_ts=now_ts,
+                settings=settings,
+                last_calculated_bar_ts=last_calculated_ts_by_instrument[instrument_code],
+            )
+
+            if due_signal_bar_ts is None:
                 continue
 
-            last_calculated_ts_by_instrument[instrument_code] = current_last_ts
+            last_calculated_ts_by_instrument[instrument_code] = due_signal_bar_ts
 
             log_info(
                 logger,
-                f"{instrument_code}: пора считать сигнал, bar_time_ts={current_last_ts}, "
+                f"{instrument_code}: пора считать сигнал, "
+                f"signal_bar_time_ts={due_signal_bar_ts}, "
+                f"latest_job_bar_time_ts={current_last_ts}, "
                 f"mode={settings.signal_window_mode}",
                 to_telegram=False,
             )
 
             # Дальше здесь будет полный расчёт сигнала:
-            # 1. построение текущего окна;
+            # 1. построение текущего окна от signal_bar_time_ts;
             # 2. поиск исторических кандидатов;
             # 3. расчёт Pearson;
             # 4. фильтры;
