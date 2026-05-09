@@ -68,12 +68,12 @@ async def main() -> None:
             to_telegram=False,
         )
 
-        ready_instrument_codes = wait_for_job_dbs(
+        ready_instrument_codes = await wait_for_job_dbs(
             instrument_codes=instrument_codes,
             settings=signal_settings,
         )
 
-        run_signal_loop(
+        await run_signal_loop(
             instrument_codes=ready_instrument_codes,
             settings=signal_settings,
         )
