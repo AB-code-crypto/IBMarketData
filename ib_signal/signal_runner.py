@@ -1,4 +1,4 @@
-import time
+import asyncio
 
 from core.logger import get_logger, log_info, setup_logging
 from ib_signal.job_reader import get_job_db_status, get_last_job_bar_ts
@@ -21,9 +21,9 @@ def format_job_db_status(status) -> str:
     )
 
 
-def wait_for_job_dbs(
-    instrument_codes: list[str],
-    settings: SignalSettings,
+async def wait_for_job_dbs(
+        instrument_codes: list[str],
+        settings: SignalSettings,
 ) -> list[str]:
     pending = set(instrument_codes)
     ready = []
@@ -58,14 +58,14 @@ def wait_for_job_dbs(
             pending.remove(instrument_code)
 
         if pending:
-            time.sleep(JOB_DB_WAIT_SECONDS)
+            await asyncio.sleep(JOB_DB_WAIT_SECONDS)
 
     return ready
 
 
-def run_signal_loop(
-    instrument_codes: list[str],
-    settings: SignalSettings,
+async def run_signal_loop(
+        instrument_codes: list[str],
+        settings: SignalSettings,
 ) -> None:
     # Пока не ищем Pearson и не пишем сигналы.
     # Только отслеживаем появление новых bar_time_ts в job DB.
@@ -122,4 +122,4 @@ def run_signal_loop(
                 to_telegram=False,
             )
 
-        time.sleep(SIGNAL_LOOP_SLEEP_SECONDS)
+        await asyncio.sleep(SIGNAL_LOOP_SLEEP_SECONDS)
