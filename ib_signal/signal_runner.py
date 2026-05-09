@@ -1,7 +1,9 @@
 import asyncio
+import time
 
 from core.logger import get_logger, log_info, setup_logging
 from ib_signal.job_reader import get_job_db_status, get_last_job_bar_ts
+from ib_signal.signal_schedule import should_calculate_signal
 from ib_signal.signal_settings import SignalSettings
 
 setup_logging()
@@ -67,9 +69,14 @@ async def run_signal_loop(
         instrument_codes: list[str],
         settings: SignalSettings,
 ) -> None:
-    # Пока не ищем Pearson и не пишем сигналы.
-    # Только отслеживаем появление новых bar_time_ts в job DB.
+    # last_seen нужен только для логирования появления нового бара.
     last_seen_ts_by_instrument: dict[str, int | None] = {
+        instrument_code: None
+        for instrument_code in instrument_codes
+    }
+
+    # last_calculated защищает от повторного расчёта на одном и том же баре.
+    last_calculated_ts_by_instrument: dict[str, int | None] = {
         instrument_code: None
         for instrument_code in instrument_codes
     }
@@ -81,6 +88,8 @@ async def run_signal_loop(
     )
 
     while True:
+        now_ts = int(time.time())
+
         for instrument_code in instrument_codes:
             status = get_job_db_status(
                 instrument_code=instrument_code,
@@ -108,18 +117,37 @@ async def run_signal_loop(
                     f"{instrument_code}: начальный последний bar_time_ts={current_last_ts}",
                     to_telegram=False,
                 )
+
+            elif current_last_ts > previous_last_ts:
+                last_seen_ts_by_instrument[instrument_code] = current_last_ts
+                log_info(
+                    logger,
+                    f"{instrument_code}: появился новый job bar_time_ts={current_last_ts}",
+                    to_telegram=False,
+                )
+
+            if not should_calculate_signal(
+                    current_bar_ts=current_last_ts,
+                    now_ts=now_ts,
+                    settings=settings,
+                    last_calculated_bar_ts=last_calculated_ts_by_instrument[instrument_code],
+            ):
                 continue
 
-            if current_last_ts <= previous_last_ts:
-                continue
-
-            last_seen_ts_by_instrument[instrument_code] = current_last_ts
+            last_calculated_ts_by_instrument[instrument_code] = current_last_ts
 
             log_info(
                 logger,
-                f"{instrument_code}: появился новый job bar_time_ts={current_last_ts}. "
-                f"Дальше здесь будет расчёт сигнала.",
+                f"{instrument_code}: пора считать сигнал, bar_time_ts={current_last_ts}, "
+                f"mode={settings.signal_window_mode}",
                 to_telegram=False,
             )
+
+            # Дальше здесь будет полный расчёт сигнала:
+            # 1. построение текущего окна;
+            # 2. поиск исторических кандидатов;
+            # 3. расчёт Pearson;
+            # 4. фильтры;
+            # 5. принятие торгового решения.
 
         await asyncio.sleep(SIGNAL_LOOP_SLEEP_SECONDS)

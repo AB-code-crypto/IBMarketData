@@ -13,6 +13,10 @@ SIGNAL_WINDOW_MODE = "ROLLING"
 # если сейчас по инструменту ожидается realtime-поток.
 LAST_BAR_SAFETY_SECONDS = 15
 
+# Сколько секунд ждём после времени бара перед расчётом сигнала.
+# Нужна небольшая пауза, чтобы последний закрытый бар успел попасть в job DB.
+SIGNAL_CALCULATION_DELAY_SECONDS = 1
+
 # ============================================================
 # ROLLING-РЕЖИМ
 # ============================================================
@@ -23,7 +27,7 @@ LAST_BAR_SAFETY_SECONDS = 15
 #   trade_from = current_bar
 #   trade_to   = current_bar + ROLLING_TRADE_MINUTES
 
-ROLLING_SIGNAL_STEP_SECONDS = 60  # как часто считать новый сигнал в ROLLING
+ROLLING_SIGNAL_STEP_SECONDS = 60  # как часто проверять необходимость расчёта в ROLLING
 ROLLING_BACK_MINUTES = 30  # фиксированное окно анализа назад
 ROLLING_TRADE_MINUTES = 30  # фиксированное окно прогноза/торговли вперёд
 
@@ -39,7 +43,7 @@ ROLLING_TRADE_MINUTES = 30  # фиксированное окно прогноз
 #   3. после этого новые входы запрещены, но уже открытая сделка может жить;
 #   4. за SLOT_CLOSE_BEFORE_END_SECONDS секунд до конца слота сделка закрывается.
 
-SLOT_SIGNAL_STEP_SECONDS = 5  # как часто считать новый сигнал в слоте
+SLOT_SIGNAL_STEP_SECONDS = 5  # как часто проверять необходимость расчёта в слоте
 SLOT_STEP_MINUTES = 60  # длина слота и шаг сетки стартов
 SLOT_START_MINUTE_OF_DAY = 0  # якорь сетки от 00:00, в минутах
 SLOT_BACK_MINUTES = 30  # сколько минут от начала слота только анализируем
