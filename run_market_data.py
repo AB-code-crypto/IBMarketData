@@ -16,10 +16,11 @@ from core.ib_connector import (
     heartbeat_ib_connection,
     monitor_ib_connection,
 )
-from core.load_history import (
+from core.instrument_filters import (
     is_instrument_history_enabled,
-    process_instrument_history,
+    is_instrument_realtime_enabled,
 )
+from core.load_history import process_instrument_history
 from core.load_realtime import run_realtime_instrument_forever
 from core.logger import (
     disable_telegram_logging,
@@ -155,19 +156,13 @@ def _log_connection_details(*, server_time_text: str, active_instruments: dict) 
     log_info(logger, f"Price DB dir: {settings.price_db_dir}", to_telegram=False)
 
 
-def _is_instrument_realtime_enabled(instrument_row) -> bool:
-    # Проверяем выключатель realtime-загрузки инструмента.
-    # По умолчанию считаем realtime выключенным, чтобы случайно не стартовать
-    # инструмент без явного realtime_enabled=True.
-    return instrument_row["realtime_enabled"]
-
 
 def _is_market_data_enabled(instrument_row) -> bool:
     # Инструмент участвует в market-data сервисе, если включена история
     # или включён realtime.
     return (
             is_instrument_history_enabled(instrument_row)
-            or _is_instrument_realtime_enabled(instrument_row)
+            or is_instrument_realtime_enabled(instrument_row)
     )
 
 
@@ -176,7 +171,7 @@ def _is_signal_state_enabled(instrument_row) -> bool:
     # history и realtime.
     return (
             is_instrument_history_enabled(instrument_row)
-            and _is_instrument_realtime_enabled(instrument_row)
+            and is_instrument_realtime_enabled(instrument_row)
     )
 
 
@@ -300,7 +295,7 @@ async def _process_instrument_then_start_realtime(
     # 3. recent-backfill последнего часа запускается внутри realtime после первого
     #    синхронного BID/ASK бара.
     history_enabled = is_instrument_history_enabled(instrument_row)
-    realtime_enabled = _is_instrument_realtime_enabled(instrument_row)
+    realtime_enabled = is_instrument_realtime_enabled(instrument_row)
     signal_state_enabled = history_enabled and realtime_enabled
     history_ok = True
 

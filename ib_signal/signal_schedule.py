@@ -180,21 +180,3 @@ def get_due_signal_bar_ts(
         return None
 
     return due_bar_ts
-
-
-def should_calculate_signal(
-    *,
-    current_bar_ts: int,
-    now_ts: int,
-    settings: SignalSettings,
-    last_calculated_bar_ts: int | None,
-) -> bool:
-    # Совместимый boolean-helper.
-    # Основной runtime-код лучше строить через get_due_signal_bar_ts(),
-    # потому что ему нужен конкретный bar_time_ts расчёта.
-    return get_due_signal_bar_ts(
-        current_bar_ts=current_bar_ts,
-        now_ts=now_ts,
-        settings=settings,
-        last_calculated_bar_ts=last_calculated_bar_ts,
-    ) is not None

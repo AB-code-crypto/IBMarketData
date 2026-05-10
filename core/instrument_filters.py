@@ -1,6 +1,24 @@
 from contracts import Instrument
 
 
+def is_instrument_history_enabled(instrument_row) -> bool:
+    # History-флаг должен быть явно задан через defaults/overrides в contracts.py.
+    return instrument_row["history_enabled"]
+
+
+def is_instrument_realtime_enabled(instrument_row) -> bool:
+    # Realtime-флаг должен быть явно задан через defaults/overrides в contracts.py.
+    return instrument_row["realtime_enabled"]
+
+
+def is_instrument_live_enabled(instrument_row) -> bool:
+    # Полный live-контур требует и history, и realtime.
+    return (
+        is_instrument_history_enabled(instrument_row)
+        and is_instrument_realtime_enabled(instrument_row)
+    )
+
+
 def get_live_enabled_instrument_codes() -> list[str]:
     # Возвращает логические инструменты, включённые в полный live-контур.
     #
@@ -13,12 +31,7 @@ def get_live_enabled_instrument_codes() -> list[str]:
     result = []
 
     for instrument_code, instrument_row in Instrument.items():
-        if not instrument_row["history_enabled"]:
-            continue
-
-        if not instrument_row["realtime_enabled"]:
-            continue
-
-        result.append(instrument_code)
+        if is_instrument_live_enabled(instrument_row):
+            result.append(instrument_code)
 
     return result

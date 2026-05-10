@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from contracts import Instrument
+from core.instrument_filters import is_instrument_realtime_enabled
 from core.logger import get_logger, log_warning
 
 logger = get_logger(__name__)
@@ -24,11 +25,6 @@ def parse_contract_utc_text(utc_text):
     dt = datetime.strptime(utc_text, "%Y-%m-%dT%H:%M:%SZ")
     dt = dt.replace(tzinfo=timezone.utc)
     return dt
-
-
-def is_realtime_enabled(instrument_row):
-    # Realtime-флаг должен быть явно задан через defaults/overrides в contracts.py.
-    return instrument_row["realtime_enabled"]
 
 
 def get_active_futures_local_symbol(instrument_code, instrument_row, current_utc, server_time_text):
@@ -55,7 +51,7 @@ def build_active_instruments(server_time_text):
     active_instruments = {}
 
     for instrument_code, instrument_row in Instrument.items():
-        if not is_realtime_enabled(instrument_row):
+        if not is_instrument_realtime_enabled(instrument_row):
             continue
 
         try:

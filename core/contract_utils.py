@@ -31,10 +31,9 @@ def build_futures_contract(instrument_code, instrument_row, contract_row):
         "lastTradeDateOrContractMonth": contract_row["lastTradeDateOrContractMonth"],
     }
 
-    # conId используем, если он задан и не равен временной заглушке.
     # conId=111 лежит в contracts.py только как явный маркер "заполнить позже".
-    con_id = contract_row.get("conId")
-    if con_id is not None and con_id != PLACEHOLDER_CON_ID:
+    con_id = contract_row["conId"]
+    if con_id != PLACEHOLDER_CON_ID:
         kwargs["conId"] = con_id
 
     return Contract(**kwargs)
@@ -44,7 +43,7 @@ def build_cash_contract(instrument_code, instrument_row):
     """Строит IB CASH Contract, например EUR.USD через IDEALPRO."""
     return Contract(
         secType=instrument_row["secType"],
-        symbol=instrument_row.get("symbol", instrument_code),
+        symbol=instrument_row["symbol"],
         exchange=instrument_row["exchange"],
         currency=instrument_row["currency"],
     )
@@ -54,7 +53,7 @@ def build_crypto_contract(instrument_code, instrument_row):
     """Строит IB CRYPTO Contract, например BTC.USD через PAXOS/ZEROHASH."""
     return Contract(
         secType=instrument_row["secType"],
-        symbol=instrument_row.get("symbol", instrument_code),
+        symbol=instrument_row["symbol"],
         exchange=instrument_row["exchange"],
         currency=instrument_row["currency"],
     )

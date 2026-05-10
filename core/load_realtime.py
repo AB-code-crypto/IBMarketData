@@ -362,7 +362,7 @@ async def load_realtime_instrument_task(
     use_rth = instrument_row["useRTH"]
     table_name = get_instrument_table_name(instrument_code, instrument_row)
     db_path = get_instrument_db_path(settings, instrument_code, instrument_row)
-    session_model = instrument_row.get("session_model", "")
+    session_model = instrument_row["session_model"]
     db_conn = None
 
     recent_backfill_state = RecentBackfillState()

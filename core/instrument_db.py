@@ -10,7 +10,7 @@ def get_price_db_dir(settings) -> Path:
 
 def get_instrument_db_path(settings, instrument_code, instrument_row) -> str:
     # Строит путь к БД конкретного логического инструмента.
-    db_filename = instrument_row.get("db_filename", f"{instrument_code}.sqlite3")
+    db_filename = instrument_row["db_filename"]
     return str(get_price_db_dir(settings) / db_filename)
 
 

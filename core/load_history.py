@@ -7,6 +7,7 @@ import asyncio
 import traceback
 
 from contracts import Instrument
+from core.instrument_filters import is_instrument_history_enabled
 from core.bar_utils import (
     DEFAULT_HISTORY_LOOKBACK_DAYS,
     get_bar_size_seconds,
@@ -31,10 +32,6 @@ from core.time_utils import (
 
 logger = get_logger(__name__)
 
-
-def is_instrument_history_enabled(instrument_row):
-    # Проверяем выключатель history-загрузки инструмента.
-    return instrument_row["history_enabled"]
 
 
 def get_instrument_configured_start_ts(instrument_row, current_aligned_ts):
@@ -129,7 +126,7 @@ async def process_instrument_history_target(
             contract=contract,
             contract_name=contract_name,
             sec_type=instrument_row["secType"],
-            session_model=instrument_row.get("session_model", ""),
+            session_model=instrument_row["session_model"],
             bar_size_setting=instrument_row["barSizeSetting"],
             use_rth=instrument_row["useRTH"],
             segment_start_ts=segment["start_ts"],

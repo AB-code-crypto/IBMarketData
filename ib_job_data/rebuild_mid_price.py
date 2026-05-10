@@ -39,7 +39,7 @@ def get_feature_db_dir() -> Path:
 def get_instrument_feature_db_path(instrument_code: str, instrument_row: dict) -> Path:
     # Price DB: data/prices/MNQ.sqlite3
     # Job DB:   data/features/mnq_job.sqlite3
-    price_db_filename = instrument_row.get("db_filename", f"{instrument_code}.sqlite3")
+    price_db_filename = instrument_row["db_filename"]
     feature_db_stem = Path(price_db_filename).stem.lower()
     feature_db_filename = f"{feature_db_stem}_job.sqlite3"
 

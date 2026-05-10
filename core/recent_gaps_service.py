@@ -145,7 +145,7 @@ async def backfill_recent_hour(ib, ib_health, settings, instrument_code, contrac
         contract=contract,
         contract_name=contract_name,
         sec_type=sec_type,
-        session_model=instrument_row.get("session_model", ""),
+        session_model=instrument_row["session_model"],
         bar_size_setting=instrument_row["barSizeSetting"],
         use_rth=instrument_row["useRTH"],
         segment_start_ts=from_ts,
