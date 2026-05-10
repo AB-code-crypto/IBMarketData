@@ -33,28 +33,26 @@ class SignalSettings:
     candidate_search_step_seconds: int
     history_lookback_days: int | None
 
-    @classmethod
-    def from_config(cls) -> "SignalSettings":
-        """Создаёт настройки из боевого signal_config.py."""
-        return cls(
-            signal_window_mode=signal_config.SIGNAL_WINDOW_MODE,
-            max_job_bar_lag_seconds=signal_config.MAX_JOB_BAR_LAG_SECONDS,
 
-            rolling_signal_step_seconds=signal_config.ROLLING_SIGNAL_STEP_SECONDS,
-            rolling_back_minutes=signal_config.ROLLING_BACK_MINUTES,
-            rolling_trade_minutes=signal_config.ROLLING_TRADE_MINUTES,
+DEFAULT_SIGNAL_SETTINGS = SignalSettings(
+    signal_window_mode=signal_config.SIGNAL_WINDOW_MODE,
+    max_job_bar_lag_seconds=signal_config.MAX_JOB_BAR_LAG_SECONDS,
 
-            slot_signal_step_seconds=signal_config.SLOT_SIGNAL_STEP_SECONDS,
-            slot_step_minutes=signal_config.SLOT_STEP_MINUTES,
-            slot_start_minute_of_day=signal_config.SLOT_START_MINUTE_OF_DAY,
-            slot_back_minutes=signal_config.SLOT_BACK_MINUTES,
-            slot_entry_minutes=signal_config.SLOT_ENTRY_MINUTES,
-            slot_close_before_end_seconds=signal_config.SLOT_CLOSE_BEFORE_END_SECONDS,
+    rolling_signal_step_seconds=signal_config.ROLLING_SIGNAL_STEP_SECONDS,
+    rolling_back_minutes=signal_config.ROLLING_BACK_MINUTES,
+    rolling_trade_minutes=signal_config.ROLLING_TRADE_MINUTES,
 
-            price_source=signal_config.PRICE_SOURCE,
-            pearson_min=signal_config.PEARSON_MIN,
-            min_candidates=signal_config.MIN_CANDIDATES,
-            max_candidates=signal_config.MAX_CANDIDATES,
-            candidate_search_step_seconds=signal_config.CANDIDATE_SEARCH_STEP_SECONDS,
-            history_lookback_days=signal_config.HISTORY_LOOKBACK_DAYS,
-        )
+    slot_signal_step_seconds=signal_config.SLOT_SIGNAL_STEP_SECONDS,
+    slot_step_minutes=signal_config.SLOT_STEP_MINUTES,
+    slot_start_minute_of_day=signal_config.SLOT_START_MINUTE_OF_DAY,
+    slot_back_minutes=signal_config.SLOT_BACK_MINUTES,
+    slot_entry_minutes=signal_config.SLOT_ENTRY_MINUTES,
+    slot_close_before_end_seconds=signal_config.SLOT_CLOSE_BEFORE_END_SECONDS,
+
+    price_source=signal_config.PRICE_SOURCE,
+    pearson_min=signal_config.PEARSON_MIN,
+    min_candidates=signal_config.MIN_CANDIDATES,
+    max_candidates=signal_config.MAX_CANDIDATES,
+    candidate_search_step_seconds=signal_config.CANDIDATE_SEARCH_STEP_SECONDS,
+    history_lookback_days=signal_config.HISTORY_LOOKBACK_DAYS,
+)

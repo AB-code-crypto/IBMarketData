@@ -14,7 +14,7 @@ from core.logger import (
 )
 from core.telegram_sender import TelegramSender
 from ib_signal.signal_runner import run_signal_loop, wait_for_job_dbs
-from ib_signal.signal_settings import SignalSettings
+from ib_signal.signal_settings import DEFAULT_SIGNAL_SETTINGS
 from ib_signal.signal_settings_formatter import format_signal_settings
 
 setup_logging()
@@ -61,7 +61,7 @@ async def main() -> None:
             )
             return
 
-        signal_settings = SignalSettings.from_config()
+        signal_settings = DEFAULT_SIGNAL_SETTINGS
         await send_service_message(format_signal_settings(signal_settings))
 
         log_info(
