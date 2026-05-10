@@ -61,6 +61,7 @@ REALTIME_INSTRUMENT_RESTART_DELAY_SECONDS = 60
 
 def get_realtime_instrument_row(instrument_code):
     # Берём настройки инструмента из нашего реестра.
+    """Что делает: достаёт и валидирует настройки инструмента для realtime. Зачем нужна: realtime поддерживает только известные secType и 5-секундные бары."""
     if instrument_code not in Instrument:
         raise ValueError(f"Инструмент {instrument_code} не найден в contracts.py")
 
@@ -82,6 +83,7 @@ def get_realtime_instrument_row(instrument_code):
 
 def get_realtime_contract_context(instrument_code, active_contract_name):
     # Возвращает всё, что нужно realtime-loader'у для одного инструмента.
+    """Что делает: собирает instrument_row, contract_row, IB Contract и имя хранения для realtime. Зачем нужна: downstream-код подписки и записи получает весь контекст одним блоком."""
     instrument_row = get_realtime_instrument_row(instrument_code)
     sec_type = instrument_row["secType"]
 
@@ -102,6 +104,7 @@ def get_realtime_contract_context(instrument_code, active_contract_name):
 
 async def wait_for_realtime_ready(ib, ib_health):
     # Для первой подписки ждём нормального состояния соединения и market data.
+    """Что делает: ждёт локальное соединение, backend IB и market data farm перед подпиской. Зачем нужна: подписки нельзя открывать, пока инфраструктура IB не готова."""
     wait_reason = ""
 
     while True:
@@ -152,6 +155,7 @@ async def wait_for_realtime_ready(ib, ib_health):
 
 
 def validate_price_value(value, field_name, stream_name, contract_name, bar_time_text):
+    """Что делает: валидирует одно поле realtime-бара с контекстом stream/contract/time. Зачем нужна: некорректные realtime-цены не должны попадать в SQLite."""
     context = (
         f"realtime {stream_name} для {contract_name}, "
         f"bar_time={bar_time_text}"
@@ -165,6 +169,7 @@ def validate_price_value(value, field_name, stream_name, contract_name, bar_time
 
 def validate_realtime_bar(contract_name, what_to_show, bar):
     # Проверяем весь realtime-бар целиком.
+    """Что делает: проверяет OHLC-поля одного realtime-бара. Зачем нужна: realtime update handler пропускает битые бары до записи в БД."""
     bar_time_text = format_utc(bar.time)
 
     for field_name, field_value in (
@@ -190,6 +195,7 @@ def format_realtime_bar_message(contract_name, what_to_show, bar):
     # Собираем одну строку лога по новому 5-секундному бару.
     # В лог обязательно добавляем тип потока,
     # чтобы сразу было видно, это BID-бар или ASK-бар.
+    """Что делает: собирает текст лога по одному realtime-бару. Зачем нужна: логи должны явно показывать contract, stream, время и OHLC."""
     bar_time_text = format_utc(bar.time)
 
     return (
@@ -212,6 +218,7 @@ def maybe_start_recent_backfill_task(
     # Обновляем состояние первого BID / ASK бара и,
     # когда получен первый синхронный BID/ASK bar_time_ts,
     # один раз запускаем дозагрузку последнего часа.
+    """Что делает: отслеживает первый синхронный BID/ASK realtime-бар и запускает разовый recent-backfill. Зачем нужна: закрывает свежий час истории между последним historical load и стартом realtime."""
     if what_to_show == "BID":
         if recent_backfill_state.first_bid_ts is None:
             recent_backfill_state.first_bid_ts = bar_time_ts
@@ -244,6 +251,7 @@ def maybe_start_recent_backfill_task(
     mark_first_synced_bid_ask(instrument_code, sync_ts)
 
     async def run_recent_backfill():
+        """Что делает: выполняет recent-backfill в отдельной asyncio-задаче и обновляет state DB. Зачем нужна: realtime handler не должен блокироваться на исторической докачке."""
         try:
             was_loaded = await backfill_recent_hour(
                 ib=ib,
@@ -288,7 +296,9 @@ def build_realtime_update_handler(
 ):
     # Для каждой отдельной подписки делаем свой обработчик,
     # чтобы BID и ASK обрабатывались независимо и без догадок по контексту.
+    """Что делает: создаёт обработчик updateEvent для конкретной BID/ASK подписки. Зачем нужна: каждая подписка пишет только свою сторону бара и свой контекст."""
     def on_bar_update(bars, has_new_bar):
+        """Что делает: обрабатывает новый realtime-бар, валидирует его, пишет в SQLite и запускает recent-backfill при необходимости. Зачем нужна: это точка входа данных из IB realtime stream."""
         try:
             # Пишем только когда реально добавился новый бар,
             # а не когда просто обновился последний.
@@ -357,6 +367,7 @@ async def load_realtime_instrument_task(
         notify_recovered=False,
 ):
     # Realtime loader для одного логического инструмента.
+    """Что делает: открывает SQLite, создаёт подписки BID/ASK и следит за готовностью realtime одного инструмента. Зачем нужна: изолирует live-поток инструмента от остальных."""
     instrument_row, _, contract, contract_name = get_realtime_contract_context(
         instrument_code=instrument_code,
         active_contract_name=active_contract_name,
@@ -391,6 +402,7 @@ async def load_realtime_instrument_task(
         await wait_for_realtime_ready(ib, ib_health)
 
         def subscribe_all_realtime_streams():
+            """Что делает: пересоздаёт BID и ASK подписки и привязывает к ним update handlers. Зачем нужна: используется при старте и переподписке после проблем соединения."""
             clear_realtime_subscription_rows(ib, current_subscriptions)
 
             for what_to_show in REALTIME_WHAT_TO_SHOW_LIST:
@@ -564,6 +576,7 @@ async def run_realtime_instrument_forever(
     # Изолируем realtime одного инструмента от остальных.
     # Если инструмент упал из-за прав, недоступного exchange или ошибки подписки,
     # остальные realtime-задачи продолжают работать.
+    """Что делает: перезапускает realtime-задачу инструмента после ошибок. Зачем нужна: сбой одного инструмента не должен останавливать весь market-data сервис."""
     restart_attempt = 0
 
     while True:

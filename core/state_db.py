@@ -10,6 +10,7 @@ INSTRUMENT_STATE_TABLE = "instrument_state"
 
 
 def initialize_state_db() -> None:
+    """Что делает: создаёт служебную state DB и таблицу состояния инструментов. Зачем нужна: сервисы согласуют готовность history/realtime/job-data через устойчивое SQLite-состояние."""
     conn = open_sqlite_connection(
         str(STATE_DB_PATH),
         create_parent_dir=True,
@@ -43,6 +44,7 @@ def initialize_state_db() -> None:
 
 def reset_instrument_state(instrument_code: str) -> None:
     # Сбрасывает состояние инструмента перед новым стартом market-data процесса.
+    """Что делает: сбрасывает состояние инструмента перед новым стартом market-data. Зачем нужна: stale-флаги прошлого запуска не должны разблокировать job-data или signal."""
     initialize_state_db()
 
     conn = open_sqlite_connection(str(STATE_DB_PATH), use_wal=True)
@@ -81,6 +83,7 @@ def reset_instrument_state(instrument_code: str) -> None:
 
 
 def mark_history_ready(instrument_code: str) -> None:
+    """Что делает: отмечает, что history по инструменту готова. Зачем нужна: state DB фиксирует прохождение первого этапа live-контура."""
     initialize_state_db()
 
     conn = open_sqlite_connection(str(STATE_DB_PATH), use_wal=True)
@@ -110,6 +113,7 @@ def mark_history_ready(instrument_code: str) -> None:
 
 
 def mark_realtime_started(instrument_code: str) -> None:
+    """Что делает: отмечает запуск realtime по инструменту. Зачем нужна: state DB фиксирует, что live-поток инструмента начал работу."""
     initialize_state_db()
 
     conn = open_sqlite_connection(str(STATE_DB_PATH), use_wal=True)
@@ -139,6 +143,7 @@ def mark_realtime_started(instrument_code: str) -> None:
 
 
 def mark_first_synced_bid_ask(instrument_code: str, sync_ts: int) -> None:
+    """Что делает: сохраняет timestamp первого синхронного BID/ASK realtime-бара. Зачем нужна: recent-backfill и диагностика используют точку синхронизации live-потока."""
     initialize_state_db()
 
     conn = open_sqlite_connection(str(STATE_DB_PATH), use_wal=True)
@@ -173,6 +178,7 @@ def mark_signal_ready(instrument_code: str, sync_ts: Optional[int] = None) -> No
     # - realtime стартовал;
     # - первый синхронный BID/ASK бар получен;
     # - recent-backfill последнего часа завершён.
+    """Что делает: отмечает инструмент готовым для job-data и signal после recent-backfill. Зачем нужна: downstream-сервисы не стартуют до закрытия свежего гэпа."""
     initialize_state_db()
 
     conn = open_sqlite_connection(str(STATE_DB_PATH), use_wal=True)
@@ -213,6 +219,7 @@ def mark_signal_ready(instrument_code: str, sync_ts: Optional[int] = None) -> No
 
 
 def mark_instrument_error(instrument_code: str, error_text: str) -> None:
+    """Что делает: пишет ошибку инструмента и сбрасывает signal_ready. Зачем нужна: downstream-сервисы не должны работать по инструменту с неготовой history/realtime цепочкой."""
     initialize_state_db()
 
     conn = open_sqlite_connection(str(STATE_DB_PATH), use_wal=True)
@@ -243,6 +250,7 @@ def mark_instrument_error(instrument_code: str, error_text: str) -> None:
 
 
 def is_signal_ready(instrument_code: str) -> bool:
+    """Что делает: проверяет signal_ready в state DB. Зачем нужна: job-data ждёт готовность инструмента от market-data сервиса."""
     initialize_state_db()
 
     conn = open_sqlite_connection(str(STATE_DB_PATH), use_wal=True)

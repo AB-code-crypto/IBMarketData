@@ -2,6 +2,7 @@ from core.time_utils import build_bar_time_fields_from_utc_dt
 
 
 def _empty_quote_row(*, bar_time_ts, bar_time, bar_time_ct, bar_time_msk, contract_name):
+    """Что делает: создаёт пустую строку price DB для одного timestamp. Зачем нужна: BID и ASK заполняются независимо, но должны попасть в одну строку."""
     return {
         "bar_time_ts": bar_time_ts,
         "bar_time": bar_time,
@@ -28,6 +29,7 @@ def _empty_quote_row(*, bar_time_ts, bar_time, bar_time_ct, bar_time_msk, contra
 
 
 def _get_or_create_quote_row(rows_by_ts, *, bar, contract_name):
+    """Что делает: возвращает существующую строку по timestamp или создаёт новую. Зачем нужна: объединяет BID и ASK bars с одинаковым временем."""
     time_fields = build_bar_time_fields_from_utc_dt(bar.date)
     bar_time_ts = time_fields["bar_time_ts"]
 
@@ -44,6 +46,7 @@ def _get_or_create_quote_row(rows_by_ts, *, bar, contract_name):
 
 
 def build_quote_rows(bid_bars, ask_bars, contract_name):
+    """Что делает: объединяет списки BID и ASK historical bars в строки SQLite. Зачем нужна: price DB хранит один bar_time_ts с двумя сторонами цены."""
     rows_by_ts = {}
 
     for bar in ask_bars:

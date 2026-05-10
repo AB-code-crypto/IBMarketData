@@ -8,7 +8,7 @@ SQLITE_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def format_utc(dt, for_ib=False):
-    """Форматирует datetime как UTC-текст для IB-запросов, SQLite-строк и логов."""
+    """Что делает: форматирует datetime в UTC-строку для IB-запросов, SQLite и логов. Зачем нужна: все сервисы используют единый формат времени."""
     dt = dt.astimezone(timezone.utc)
 
     if for_ib:
@@ -18,23 +18,19 @@ def format_utc(dt, for_ib=False):
 
 
 def format_utc_ts(ts):
-    """Форматирует Unix timestamp как UTC-текст для логов."""
+    """Что делает: форматирует Unix timestamp как UTC-строку. Зачем нужна: логи и отчёты показывают timestamp в человекочитаемом виде."""
     return format_utc(datetime.fromtimestamp(ts, tz=timezone.utc))
 
 
 def parse_utc_iso_to_ts(utc_text):
-    """Преобразует ISO-текст вида 2024-03-13T22:00:00Z в Unix timestamp."""
+    """Что делает: переводит ISO UTC-текст из contracts.py в Unix timestamp. Зачем нужна: active windows контрактов сравниваются в timestamp-логике."""
     dt = datetime.strptime(utc_text, "%Y-%m-%dT%H:%M:%SZ")
     dt = dt.replace(tzinfo=timezone.utc)
     return int(dt.timestamp())
 
 
 def build_bar_time_fields_from_utc_dt(dt_utc):
-    """
-    Собирает все поля времени, которые используются в ценовой БД.
-    bar_time_ts — канонический UTC Unix timestamp бара.
-    bar_time, bar_time_ct и bar_time_msk — человекочитаемые datetime-проекции.
-    """
+    """Что делает: собирает timestamp и три текстовых представления времени бара. Зачем нужна: price DB хранит канонический UTC timestamp и удобные human-readable поля."""
     dt_utc = dt_utc.astimezone(timezone.utc)
     dt_ct = dt_utc.astimezone(CT_TIMEZONE)
     dt_msk = dt_utc.astimezone(MSK_TIMEZONE)

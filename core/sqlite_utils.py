@@ -9,7 +9,7 @@ def open_sqlite_connection(
         require_existing_file=False,
         use_wal=True,
 ):
-    """Открывает SQLite-соединение с едиными настройками проекта."""
+    """Что делает: открывает SQLite-соединение с настройками проекта. Зачем нужна: централизует WAL, busy_timeout, создание директорий и проверку существования файла."""
     db_path_obj = Path(db_path)
 
     if create_parent_dir:

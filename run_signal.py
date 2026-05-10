@@ -27,11 +27,13 @@ setup_telegram_logging(telegram_sender)
 async def send_service_message(message: str) -> None:
     # В консоль пишем через обычный логгер.
     # В Telegram отправляем напрямую, чтобы не зависеть от fire-and-forget задач.
+    """Что делает: пишет сервисное сообщение в консоль и напрямую отправляет его в Telegram. Зачем нужна: гарантирует доставку стартовых и shutdown-сообщений без зависимости от fire-and-forget логгера."""
     log_info(logger, message, to_telegram=False)
     await telegram_sender.send_text(message)
 
 
 async def shutdown_app(shutdown_message: str) -> None:
+    """Что делает: отправляет финальное сообщение, дожидается Telegram-задач и закрывает TelegramSender. Зачем нужна: завершает signal-сервис аккуратно и без потерянных уведомлений."""
     await send_service_message(shutdown_message)
 
     await wait_telegram_logging()
@@ -44,6 +46,7 @@ async def shutdown_app(shutdown_message: str) -> None:
 
 
 async def main() -> None:
+    """Что делает: запускает signal-сервис, выбирает live-инструменты, сообщает настройки и входит в signal-loop. Зачем нужна: является async entrypoint для run_signal.py."""
     shutdown_message = "\n===========\nСтоп signal-сервиса.\n===========\n"
 
     try:

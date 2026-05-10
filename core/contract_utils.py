@@ -4,7 +4,7 @@ from contracts import PLACEHOLDER_CON_ID
 
 
 def build_table_name(instrument_code, bar_size_setting):
-    """Строит стабильное имя SQLite-таблицы из кода инструмента и размера бара IB."""
+    """Что делает: строит стабильное имя SQLite-таблицы из кода инструмента и размера бара IB. Зачем нужна: все price DB используют единый формат имени таблицы."""
     suffix = (
         bar_size_setting
         .replace(" ", "")
@@ -19,7 +19,7 @@ def build_table_name(instrument_code, bar_size_setting):
 
 
 def build_futures_contract(instrument_code, instrument_row, contract_row):
-    """Строит IB futures Contract из локального реестра contracts.py."""
+    """Что делает: собирает IB futures Contract из строки логического инструмента и строки конкретного контракта. Зачем нужна: historical/realtime запросы по FUT требуют точный localSymbol и contract metadata."""
     kwargs = {
         "secType": instrument_row["secType"],
         "symbol": instrument_code,
@@ -40,7 +40,7 @@ def build_futures_contract(instrument_code, instrument_row, contract_row):
 
 
 def build_instrument_contract(instrument_code, instrument_row, contract_row=None):
-    """Строит IB Contract для поддерживаемого типа инструмента."""
+    """Что делает: создаёт IB Contract для поддерживаемых secType FUT, CASH и CRYPTO. Зачем нужна: скрывает различия построения контрактов от loaders."""
     sec_type = instrument_row["secType"]
 
     if sec_type == "FUT":
@@ -64,7 +64,7 @@ def build_instrument_contract(instrument_code, instrument_row, contract_row=None
 
 
 def get_contract_row_by_local_symbol(instrument_row, local_symbol):
-    """Ищет строку фьючерсного контракта в реестре инструмента по localSymbol."""
+    """Что делает: ищет строку фьючерсного контракта по localSymbol. Зачем нужна: repair/realtime-backfill получают active contract name и должны найти его параметры в contracts.py."""
     for contract_row in instrument_row["contracts"]:
         if contract_row["localSymbol"] == local_symbol:
             return contract_row
@@ -79,6 +79,7 @@ def get_contract_storage_name(instrument_code, instrument_row, contract_row=None
     #
     # Для фьючерсов это конкретный localSymbol, чтобы видеть сшивку.
     # Для CASH/CRYPTO квартальных контрактов нет, поэтому пишем код инструмента.
+    """Что делает: выбирает значение поля contract для записи в price DB. Зачем нужна: FUT хранит localSymbol для сшивки, а CASH/CRYPTO хранят логический инструмент."""
     if instrument_row["secType"] == "FUT":
         if contract_row is None:
             raise ValueError(f"Для FUT-инструмента {instrument_code} нужен contract_row")

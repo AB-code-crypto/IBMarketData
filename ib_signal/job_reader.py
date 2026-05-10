@@ -25,6 +25,7 @@ def get_job_db_status(
     instrument_code: str,
     max_job_bar_lag_seconds: int,
 ) -> JobDbStatus:
+    """Что делает: проверяет наличие job DB, таблицы, количества строк и свежесть последнего бара. Зачем нужна: signal-сервис считает сигнал только по готовой и актуальной job DB."""
     if instrument_code not in Instrument:
         raise ValueError(f"Инструмент {instrument_code!r} не найден в contracts.py")
 

@@ -20,6 +20,7 @@ RECENT_BACKFILL_WINDOW_SECONDS = 3600
 
 def get_instrument_left_boundary_ts(instrument_row, contract_row, sync_ts):
     # Левая граница, левее которой недавний добор заходить не должен.
+    """Что делает: считает левую границу recent-backfill для инструмента. Зачем нужна: добор последнего часа не должен заходить левее активного контракта или допустимой истории."""
     if instrument_row["secType"] == "FUT":
         return parse_utc_iso_to_ts(contract_row["active_from_utc"])
 
@@ -36,6 +37,7 @@ def get_recent_backfill_range(instrument_code, contract_local_symbol, sync_ts):
     # [sync_ts - 1 час, sync_ts)
     #
     # Левую границу дополнительно ограничиваем началом рабочего окна инструмента.
+    """Что делает: строит полуоткрытый интервал recent-backfill перед первым синхронным realtime-баром. Зачем нужна: закрывает свежую дырку между history load и стартом realtime."""
     instrument_row = Instrument[instrument_code]
 
     contract_row = None
@@ -61,6 +63,7 @@ async def backfill_recent_hour(ib, ib_health, settings, instrument_code, contrac
     #
     # Никаких проверок существования БД или таблицы здесь не делаем.
     # Считаем, что вся инфраструктура уже подготовлена и работает.
+    """Что делает: докачивает последний час истории до первого синхронного BID/ASK realtime-бара. Зачем нужна: после старта/reconnect price DB получает непрерывный участок перед live-потоком."""
     instrument_row = Instrument[instrument_code]
     sec_type = instrument_row["secType"]
 

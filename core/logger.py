@@ -17,6 +17,7 @@ telegram_tasks = set()
 
 def setup_logging():
     # Создаём отдельный логгер проекта.
+    """Что делает: настраивает основной logger проекта и глушит шум ib_async. Зачем нужна: все сервисы получают единый формат логов без дублей в PyCharm."""
     logger = logging.getLogger(PROJECT_LOGGER_NAME)
 
     # Уровень логирования.
@@ -53,6 +54,7 @@ def setup_logging():
 
 def setup_telegram_logging(sender):
     # Подключаем TelegramSender к логгеру.
+    """Что делает: подключает TelegramSender к логгеру. Зачем нужна: log_info/log_warning могут отправлять сообщения в Telegram без прямой зависимости от конкретного сервиса."""
     global telegram_sender
     global telegram_logging_enabled
 
@@ -62,12 +64,14 @@ def setup_telegram_logging(sender):
 
 def disable_telegram_logging():
     # Запрещаем создавать новые telegram-задачи.
+    """Что делает: запрещает создавать новые Telegram-задачи. Зачем нужна: shutdown не должен порождать новые fire-and-forget отправки после начала остановки."""
     global telegram_logging_enabled
     telegram_logging_enabled = False
 
 
 async def wait_telegram_logging():
     # Дожидаемся завершения уже созданных telegram-задач.
+    """Что делает: дожидается завершения уже созданных Telegram-задач. Зачем нужна: важные сообщения не должны теряться при остановке сервиса."""
     if not telegram_tasks:
         return
 
@@ -77,17 +81,20 @@ async def wait_telegram_logging():
 
 def get_logger(module_name):
     # Возвращаем дочерний логгер для конкретного модуля проекта.
+    """Что делает: возвращает дочерний logger для модуля. Зачем нужна: в логах сохраняется источник сообщения внутри единого logger namespace."""
     return logging.getLogger(f"{PROJECT_LOGGER_NAME}.{module_name}")
 
 
 def _on_telegram_task_done(task):
     # Удаляем завершённую задачу из набора.
+    """Что делает: удаляет завершённую Telegram-задачу из набора активных задач. Зачем нужна: logger не должен копить ссылки на завершённые задачи."""
     telegram_tasks.discard(task)
 
 
 def _send_to_telegram(message, to_telegram=True):
     # Если для конкретного сообщения отправка в Telegram отключена,
     # просто ничего не делаем.
+    """Что делает: асинхронно отправляет сообщение в Telegram, если это разрешено. Зачем нужна: логирование не блокирует основной поток сервиса."""
     if not to_telegram:
         return
 
@@ -115,11 +122,13 @@ def _send_to_telegram(message, to_telegram=True):
 def log_info(logger, message, to_telegram=True):
     # stacklevel=2 нужен, чтобы в логах показывалось место вызова
     # этой функции, а не сама helper-функция log_info().
+    """Что делает: пишет info-сообщение в logger и при необходимости отправляет его в Telegram. Зачем нужна: единая точка для штатных информационных логов."""
     logger.info(message, stacklevel=2)
     _send_to_telegram(message, to_telegram=to_telegram)
 
 
 def log_warning(logger, message, to_telegram=True):
+    """Что делает: пишет warning-сообщение в logger и при необходимости отправляет его в Telegram. Зачем нужна: единая точка для предупреждений и проблемных состояний."""
     logger.warning(message, stacklevel=2)
     _send_to_telegram(message, to_telegram=to_telegram)
 

@@ -10,6 +10,7 @@ logger = get_logger(__name__)
 
 
 def create_db_objects_if_missing(db_path, sql_list: Iterable[str]):
+    """Что делает: открывает SQLite DB и выполняет список CREATE SQL. Зачем нужна: инициализирует таблицы без дублирования boilerplate подключения."""
     conn = open_sqlite_connection(
         db_path,
         create_parent_dir=True,
@@ -24,7 +25,7 @@ def create_db_objects_if_missing(db_path, sql_list: Iterable[str]):
 
 
 def initialize_price_databases(settings):
-    """Создаём таблицы ценовой БД для всех инструментов из contracts.py."""
+    """Что делает: создаёт price-таблицы для всех инструментов из contracts.py. Зачем нужна: гарантирует наличие SQLite-структуры до history и realtime записи."""
     for instrument_code, instrument_row in Instrument.items():
         db_path = get_instrument_db_path(settings, instrument_code, instrument_row)
         table_name = get_instrument_table_name(instrument_code, instrument_row)
@@ -43,7 +44,7 @@ def initialize_price_databases(settings):
 
 
 def initialize_databases_sync(settings):
-    """Синхронная точка входа инициализации price DB."""
+    """Что делает: синхронно запускает инициализацию price DB и логирует её результат. Зачем нужна: используется на старте market-data сервиса перед обработкой инструментов."""
     log_info(logger, "Запускаю инициализацию price DB", to_telegram=False)
     initialize_price_databases(settings)
     log_info(logger, "Инициализация price DB завершена", to_telegram=False)

@@ -12,7 +12,7 @@ def calculate_centered_pearson(
         left_values: NumberSeries,
         right_values: NumberSeries,
 ) -> float:
-    """Считает центрированную корреляцию Пирсона для двух рядов."""
+    """Что делает: считает центрированную корреляцию Пирсона для двух одномерных рядов. Зачем нужна: это базовая метрика похожести текущего паттерна и исторических кандидатов."""
     left_array = np.asarray(left_values, dtype=float)
     right_array = np.asarray(right_values, dtype=float)
 

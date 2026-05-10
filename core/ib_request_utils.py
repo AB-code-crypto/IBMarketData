@@ -29,6 +29,7 @@ IB_HEALTH_WAIT_SECONDS = 1
 def format_exception_for_log(exc):
     # У TimeoutError строковое представление часто пустое, и в логе это выглядит неинформативно.
     # Поэтому всегда добавляем имя класса ошибки, а текст — только если он есть.
+    """Что делает: форматирует исключение так, чтобы даже пустой TimeoutError был информативен. Зачем нужна: логи reconnect/retry должны объяснять причину ожидания."""
     exc_name = exc.__class__.__name__
     exc_text = str(exc).strip()
 
@@ -43,6 +44,7 @@ async def wait_for_ib_connection(ib):
     #
     # Исторический загрузчик не должен падать только потому,
     # что TWS на минуту перезапустился или сеть кратковременно пропала.
+    """Что делает: ждёт восстановления локального IB API-соединения. Зачем нужна: historical requests не должны падать при кратком обрыве связи."""
     wait_logged = False
 
     while not ib.isConnected():
@@ -71,6 +73,7 @@ async def wait_for_ib_history_ready(ib, ib_health):
     # Это закрывает ситуацию, когда локальный сокет до TWS ещё жив,
     # но backend IB уже не в порядке и historical request может вернуть
     # частично пустые или битые цены.
+    """Что делает: ждёт одновременно локальное соединение, backend IB и HMDS. Зачем нужна: historical-запросы безопасны только когда все эти компоненты доступны."""
     wait_logged = False
 
     while True:
@@ -103,6 +106,7 @@ def is_connection_problem(exc):
     # - не глотать любые ошибки подряд;
     # - но и не падать на временном обрыве, который прилетел не как ConnectionError,
     #   а как RuntimeError / TimeoutError / другая текстовая ошибка библиотеки.
+    """Что делает: определяет, похожа ли ошибка на сетевую или connection-related проблему. Зачем нужна: retry нужен только для временных проблем соединения, а не для любых ошибок подряд."""
     if isinstance(exc, ConnectionError):
         return True
 
@@ -145,6 +149,7 @@ async def request_historical_data_with_reconnect(
     # - если backend IB / HMDS не в порядке — тоже ждём;
     # - если запрос оборвался из-за соединения — не падаем, а повторяем;
     # - если ошибка не похожа на сетевую/соединенческую — пробрасываем её наружу.
+    """Что делает: выполняет historical request с ожиданием health-state, timeout и retry на connection errors. Зачем нужна: делает history-loader устойчивым к реконнектам и временной недоступности IB."""
     while True:
         await wait_for_ib_history_ready(ib, ib_health)
 
@@ -182,6 +187,7 @@ async def request_historical_data_with_reconnect(
 
 async def request_current_time_with_reconnect(ib):
     # Устойчивая обёртка над reqCurrentTimeAsync.
+    """Что делает: запрашивает server time IB с ожиданием соединения и retry. Зачем нужна: history-loader регулярно обновляет правую границу истории по времени IB."""
     while True:
         await wait_for_ib_connection(ib)
 

@@ -13,6 +13,7 @@ JOB_DB_WAIT_SECONDS = 5
 
 
 def format_job_db_status(status) -> str:
+    """Что делает: форматирует JobDbStatus в одну строку лога. Зачем нужна: ожидание и пропуски расчёта показывают конкретную причину неготовности job DB."""
     return (
         f"ready={status.is_ready}, "
         f"reason={status.reason}, "
@@ -26,6 +27,7 @@ async def wait_for_job_dbs(
     instrument_codes: list[str],
     settings: SignalSettings,
 ) -> list[str]:
+    """Что делает: ждёт готовности job DB по всем instrument_codes. Зачем нужна: основной signal-loop стартует только после доступности рабочих данных."""
     pending = set(instrument_codes)
     ready = []
 
@@ -69,6 +71,7 @@ async def run_signal_loop(
     settings: SignalSettings,
 ) -> None:
     # last_seen нужен только для логирования появления нового бара.
+    """Что делает: отслеживает новые job-бары и определяет due signal_bar_ts по активному режиму. Зачем нужна: это основной runtime-цикл signal-сервиса, пока без фактического расчёта сигнала."""
     last_seen_ts_by_instrument: dict[str, int | None] = {
         instrument_code: None
         for instrument_code in instrument_codes

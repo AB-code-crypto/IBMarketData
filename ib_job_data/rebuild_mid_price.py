@@ -35,6 +35,7 @@ PRICE_DB_SCHEMA_NAME = "price_src"
 def get_instrument_feature_db_path(instrument_code: str, instrument_row: dict) -> Path:
     # Price DB: data/prices/MNQ.sqlite3
     # Job DB:   data/features/mnq_job.sqlite3
+    """Что делает: строит путь к job DB инструмента на основе price DB filename. Зачем нужна: все job-data и signal модули обращаются к одному месту хранения features."""
     price_db_filename = instrument_row["db_filename"]
     feature_db_stem = Path(price_db_filename).stem.lower()
     feature_db_filename = f"{feature_db_stem}_job.sqlite3"
@@ -47,6 +48,7 @@ def get_instrument_feature_db_path(instrument_code: str, instrument_row: dict) -
 # ============================================================
 
 def rebuild_instrument_mid_price_features(instrument_code: str) -> None:
+    """Что делает: полностью пересоздаёт mid_price_5s для одного инструмента. Зачем нужна: старт job-data получает чистую рабочую БД, синхронизированную с price DB."""
     if instrument_code not in Instrument:
         raise ValueError(f"Инструмент {instrument_code!r} не найден в contracts.py")
 

@@ -37,6 +37,7 @@ JOB_DB_UPDATE_INTERVAL_SECONDS = 1
 
 
 def rebuild_job_db(instrument_code: str) -> None:
+    """Что делает: пересоздаёт job DB одного инструмента из его price DB. Зачем нужна: перед live-обновлением гарантирует чистую таблицу mid/spread-признаков."""
     instrument_row = Instrument[instrument_code]
 
     job_db_path = Path(
@@ -63,6 +64,7 @@ def rebuild_job_db(instrument_code: str) -> None:
 
 
 async def wait_for_ready_instruments(instrument_codes: list[str]) -> list[str]:
+    """Что делает: ждёт, пока market-data сервис отметит инструменты готовыми для job-data. Зачем нужна: не даёт пересобирать job DB до завершения history/realtime подготовки."""
     pending = set(instrument_codes)
     ready = []
 
@@ -98,6 +100,7 @@ async def wait_for_ready_instruments(instrument_codes: list[str]) -> list[str]:
 
 
 def update_job_dbs_once(instrument_codes: list[str]) -> None:
+    """Что делает: один раз дописывает новые mid/spread-строки по всем готовым инструментам. Зачем нужна: выполняет инкрементальное обновление job DB в основном цикле."""
     for instrument_code in instrument_codes:
         try:
             rows_written = append_new_mid_price_rows(instrument_code)
@@ -119,6 +122,7 @@ def update_job_dbs_once(instrument_codes: list[str]) -> None:
 
 
 async def run_job_db_update_loop(instrument_codes: list[str]) -> None:
+    """Что делает: постоянно запускает инкрементальное обновление job DB с заданным интервалом. Зачем нужна: поддерживает рабочие данные signal-сервиса в актуальном состоянии."""
     log_info(
         logger,
         f"Запускаю обновление job DB для инструментов: {instrument_codes}",
@@ -131,6 +135,7 @@ async def run_job_db_update_loop(instrument_codes: list[str]) -> None:
 
 
 async def shutdown_app(shutdown_message: str) -> None:
+    """Что делает: отправляет сообщение остановки, ждёт Telegram-логи и закрывает TelegramSender. Зачем нужна: завершает job-data сервис без потери shutdown-сообщения."""
     log_info(logger, shutdown_message, to_telegram=True)
     await wait_telegram_logging()
 
@@ -143,6 +148,7 @@ async def shutdown_app(shutdown_message: str) -> None:
 
 
 async def main() -> None:
+    """Что делает: запускает job-data сервис, ждёт готовые инструменты, пересобирает job DB и входит в update-loop. Зачем нужна: является async entrypoint для run_job_data.py."""
     shutdown_message = "\n===========\nСтоп job-data сервиса.\n===========\n"
 
     try:

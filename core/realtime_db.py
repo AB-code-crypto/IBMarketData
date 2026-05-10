@@ -6,6 +6,7 @@ from core.time_utils import build_bar_time_fields_from_utc_dt
 def open_quotes_db(db_path):
     # Realtime loader открывает только уже существующую price DB.
     # Первый старт и создание БД выполняются заранее через initialize_databases_sync().
+    """Что делает: открывает существующую price DB для realtime-записи. Зачем нужна: realtime не должен молча создавать новую БД вместо подготовленной history-инфраструктуры."""
     return open_sqlite_connection(
         db_path,
         require_existing_file=True,
@@ -17,6 +18,7 @@ def write_realtime_bar_to_sqlite(conn, table_name, contract_name, what_to_show, 
     #
     # BID и ASK приходят раздельно, поэтому и пишем их раздельными UPSERT-ами,
     # которые обновляют только свою сторону строки.
+    """Что делает: записывает одну сторону realtime-бара через BID-only или ASK-only UPSERT. Зачем нужна: realtime BID и ASK приходят раздельно и не должны затирать друг друга."""
     time_fields = build_bar_time_fields_from_utc_dt(bar.time)
 
     bar_time_ts = time_fields["bar_time_ts"]

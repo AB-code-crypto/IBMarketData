@@ -5,6 +5,7 @@ from core.sqlite_utils import open_sqlite_connection
 
 
 def write_quote_rows_to_sqlite(db_path, table_name, rows):
+    """Что делает: создаёт price-таблицу при необходимости и UPSERT-ит строки BID/ASK. Зачем нужна: historical loader пишет подготовленные quote rows одной DB-операцией."""
     create_sql = create_quotes_table_sql(table_name)
     upsert_sql = upsert_quotes_sql(table_name)
 
@@ -20,6 +21,7 @@ def write_quote_rows_to_sqlite(db_path, table_name, rows):
 
 
 def get_contract_history_bounds(db_path, table_name, contract_name):
+    """Что делает: возвращает минимальный и максимальный bar_time_ts по contract в price DB. Зачем нужна: history coverage рассчитывает, какие сегменты ещё нужно докачать."""
     conn = open_sqlite_connection(db_path, use_wal=False)
 
     try:

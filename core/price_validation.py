@@ -2,7 +2,7 @@ import math
 
 
 def validate_positive_price(value, *, field_name, context):
-    """Проверяет, что цена является положительным конечным числом."""
+    """Что делает: проверяет, что значение является положительным конечным числом. Зачем нужна: защищает price DB от None, bool, NaN, inf и нулевых/отрицательных цен."""
     if value is None:
         return f"Некорректная цена: {context}, field={field_name}, value={value}"
 

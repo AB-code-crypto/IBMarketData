@@ -25,6 +25,7 @@ HEARTBEAT_INTERVAL_SECONDS = 600
 
 async def connect_ib(settings):
     # Создаём объект клиента IB.
+    """Что делает: создаёт IB-клиент, подключается к TWS/Gateway и регистрирует health handlers. Зачем нужна: централизует устойчивый старт IB-соединения."""
     ib = IB()
 
     # Создаём объект со служебным состоянием здоровья соединения.
@@ -106,18 +107,21 @@ async def connect_ib(settings):
 
 def disconnect_ib(ib):
     # Закрываем соединение только если оно активно.
+    """Что делает: закрывает активное IB-соединение. Зачем нужна: shutdown должен безопасно завершать socket-сессию."""
     if ib.isConnected():
         ib.disconnect()
 
 
 async def get_ib_server_time_text(ib):
     # Запрашиваем текущее серверное время у IB и возвращаем готовую строку.
+    """Что делает: запрашивает server time IB и возвращает строку без timezone suffix. Зачем нужна: это каноническое время для выбора active contract и логов."""
     current_time = await ib.reqCurrentTimeAsync()
     return str(current_time).split("+")[0]
 
 
 async def monitor_ib_connection(ib, settings, ib_health):
     # Запоминаем, было ли соединение активным на момент старта монитора.
+    """Что делает: постоянно следит за локальным IB API-соединением и переподключается при обрыве. Зачем нужна: market-data сервис должен переживать рестарт TWS/Gateway и краткие сетевые сбои."""
     was_connected = ib.isConnected()
 
     # Момент начала переподключения после потери связи.
@@ -215,6 +219,7 @@ async def heartbeat_ib_connection(ib, ib_health):
     # Бесконечная фоновая задача.
     # Раз в HEARTBEAT_INTERVAL_SECONDS проверяет не только локальный API-сокет,
     # но и реальное состояние TWS / IB по backend, market data farm и HMDS.
+    """Что делает: периодически проверяет server time и health-флаги IB. Зачем нужна: даёт регулярное подтверждение, что соединение и data farms находятся в штатном состоянии."""
     while True:
         await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
 

@@ -65,6 +65,7 @@ class BackgroundTasks:
 
 def _format_uptime(seconds: float) -> str:
     # Форматируем uptime в HH:MM:SS.
+    """Что делает: переводит количество секунд uptime в формат HH:MM:SS. Зачем нужна: делает периодический статус робота читаемым для Telegram и консоли."""
     seconds = max(0, int(seconds))
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
@@ -79,6 +80,7 @@ def _format_runtime_status(
         server_time_text: str,
 ) -> str:
     # Собираем единый статус сервиса для Telegram.
+    """Что делает: собирает сводный текст состояния market-data сервиса, IB-соединения, history и realtime. Зачем нужна: даёт единый формат для регулярного Telegram-статуса."""
     if runtime_status.history_instrument is None:
         history_text = "нет активной закачки истории"
     else:
@@ -116,6 +118,7 @@ def _format_runtime_status(
 async def _status_reporter(runtime_status: RuntimeStatus, ib, ib_health) -> None:
     # Раз в 10 минут отправляем в Telegram общий статус сервиса.
     # Это единственное регулярное штатное Telegram-сообщение.
+    """Что делает: периодически отправляет сводный статус market-data сервиса. Зачем нужна: позволяет видеть, что сервис жив и в каком состоянии находятся IB, history и realtime."""
     while True:
         await asyncio.sleep(STATUS_TELEGRAM_INTERVAL_SECONDS)
 
@@ -139,6 +142,7 @@ async def _status_reporter(runtime_status: RuntimeStatus, ib, ib_health) -> None
 
 
 def _log_connection_details(*, server_time_text: str, active_instruments: dict) -> None:
+    """Что делает: логирует стартовые параметры подключения и список активных realtime-инструментов. Зачем нужна: фиксирует контекст запуска без засорения Telegram техническими деталями."""
     log_info(logger, "Старт робота", to_telegram=True)
     log_info(logger, f"Host: {settings.ib_host}", to_telegram=False)
     log_info(logger, f"Port: {settings.ib_port}", to_telegram=False)
@@ -153,6 +157,7 @@ def _reset_signal_states_for_enabled_instruments() -> None:
     # Сбрасываем готовность IBSignal в самом начале run_market_data.
     # Это защищает run_job_data.py от stale signal_ready=1, оставшегося
     # от прошлого запуска.
+    """Что делает: сбрасывает signal-ready состояние инструментов полного live-контура перед новым запуском market-data. Зачем нужна: защищает job-data и signal сервисы от stale-состояния прошлого запуска."""
     initialize_state_db()
 
     for instrument_code, instrument_row in Instrument.items():
@@ -162,6 +167,7 @@ def _reset_signal_states_for_enabled_instruments() -> None:
 
 def _start_infrastructure_tasks(*, ib, ib_health, runtime_status: RuntimeStatus) -> BackgroundTasks:
     # Запускаем фоновые задачи, которые не зависят от конкретного инструмента.
+    """Что делает: запускает фоновые задачи мониторинга IB, heartbeat и Telegram-статуса. Зачем нужна: отделяет инфраструктурные задачи от обработки конкретных инструментов."""
     monitor_task = asyncio.create_task(
         monitor_ib_connection(ib, settings, ib_health),
         name="monitor_ib_connection",
@@ -183,6 +189,7 @@ def _start_infrastructure_tasks(*, ib, ib_health, runtime_status: RuntimeStatus)
 
 
 async def _cancel_tasks(*tasks: asyncio.Task) -> None:
+    """Что делает: отменяет переданные asyncio-задачи и дожидается их завершения. Зачем нужна: обеспечивает предсказуемый shutdown без висящих фоновых задач."""
     for task in tasks:
         if task is not None:
             task.cancel()
@@ -208,6 +215,7 @@ def _start_realtime_for_instrument(
 ) -> bool:
     # Запускаем realtime-задачу одного инструмента.
     # Активный контракт берём из словаря, рассчитанного один раз на старте сервиса.
+    """Что делает: создаёт realtime-задачу для одного инструмента и регистрирует её в runtime-состоянии. Зачем нужна: запускает live-поток сразу после готовности истории конкретного инструмента."""
     active_contract_name = active_instruments.get(instrument_code)
 
     if active_contract_name is None:
@@ -261,6 +269,7 @@ async def _process_instrument_then_start_realtime(
     # 2. если включён realtime — запускаем realtime-задачу;
     # 3. recent-backfill последнего часа запускается внутри realtime после первого
     #    синхронного BID/ASK бара.
+    """Что делает: обрабатывает один инструмент: при необходимости качает историю и затем запускает realtime. Зачем нужна: сохраняет порядок history -> realtime и изолирует ошибку одного инструмента от остальных."""
     history_enabled = instrument_row["history_enabled"]
     realtime_enabled = instrument_row["realtime_enabled"]
     signal_state_enabled = history_enabled and realtime_enabled
@@ -341,6 +350,7 @@ async def _process_all_instruments_then_keep_realtime(
     # - realtime запускается сразу после готовности своего инструмента;
     # - уже запущенный realtime продолжает работать, пока история следующих
     #   инструментов ещё докачивается.
+    """Что делает: последовательно обходит включённые инструменты, запускает их realtime-задачи и удерживает сервис живым. Зачем нужна: это основной orchestration-контур market-data сервиса после подключения к IB."""
     for instrument_code, instrument_row in Instrument.items():
         if not (instrument_row["history_enabled"] or instrument_row["realtime_enabled"]):
             continue
@@ -374,6 +384,7 @@ async def _process_all_instruments_then_keep_realtime(
 
 
 async def _shutdown_app(*, ib, shutdown_message: str, tasks: Optional[BackgroundTasks]) -> None:
+    """Что делает: останавливает фоновые задачи, закрывает IB-соединение и отправляет финальное Telegram-сообщение. Зачем нужна: завершает market-data сервис без потерянных логов и висящих задач."""
     if tasks is not None:
         await _cancel_tasks(tasks.heartbeat, tasks.monitor, tasks.status, *tasks.realtime)
 
@@ -395,6 +406,7 @@ async def _shutdown_app(*, ib, shutdown_message: str, tasks: Optional[Background
 
 
 async def main():
+    """Что делает: запускает market-data сервис от подключения к IB до обработки инструментов. Зачем нужна: является async entrypoint для run_market_data.py."""
     shutdown_message = "\n===========\nСтоп робота.\n===========\n"
     background_tasks: Optional[BackgroundTasks] = None
     runtime_status = RuntimeStatus()
