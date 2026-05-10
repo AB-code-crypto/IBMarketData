@@ -143,7 +143,7 @@ async def run_signal_loop(
                 f"{instrument_code}: пора считать сигнал, "
                 f"signal_bar_time_ts={due_signal_bar_ts}, "
                 f"latest_job_bar_time_ts={current_last_ts}, "
-                f"mode={settings.signal_window_mode}",
+                f"mode={settings.signal_window_mode.value}",
                 to_telegram=False,
             )
 

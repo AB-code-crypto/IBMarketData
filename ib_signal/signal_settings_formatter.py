@@ -1,16 +1,17 @@
+from ib_signal.signal_modes import SignalWindowMode
 from ib_signal.signal_settings import SignalSettings
 
 
 def format_signal_settings(settings: SignalSettings) -> str:
     lines = [
         "Активные настройки signal-сервиса:",
-        f"mode={settings.signal_window_mode}",
+        f"mode={settings.signal_window_mode.value}",
         f"last_bar_safety_seconds={settings.last_bar_safety_seconds}",
         f"signal_calculation_delay_seconds={settings.signal_calculation_delay_seconds}",
         "",
     ]
 
-    if settings.signal_window_mode == "ROLLING":
+    if settings.signal_window_mode == SignalWindowMode.ROLLING:
         lines.extend(
             [
                 "ROLLING:",
@@ -21,7 +22,7 @@ def format_signal_settings(settings: SignalSettings) -> str:
             ]
         )
 
-    elif settings.signal_window_mode == "GRID":
+    elif settings.signal_window_mode == SignalWindowMode.GRID:
         lines.extend(
             [
                 "GRID:",

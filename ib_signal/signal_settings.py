@@ -1,9 +1,7 @@
 from dataclasses import dataclass
-from typing import Literal
 
 from ib_signal import signal_config
-
-SignalWindowMode = Literal["ROLLING", "GRID"]
+from ib_signal.signal_modes import SignalWindowMode, parse_signal_window_mode
 
 
 @dataclass(frozen=True)
@@ -42,7 +40,7 @@ class SignalSettings:
     def from_config(cls) -> "SignalSettings":
         """Создаёт настройки из боевого signal_config.py."""
         return cls(
-            signal_window_mode=signal_config.SIGNAL_WINDOW_MODE,
+            signal_window_mode=parse_signal_window_mode(signal_config.SIGNAL_WINDOW_MODE),
             last_bar_safety_seconds=signal_config.LAST_BAR_SAFETY_SECONDS,
             signal_calculation_delay_seconds=signal_config.SIGNAL_CALCULATION_DELAY_SECONDS,
 

@@ -1,3 +1,4 @@
+from ib_signal.signal_modes import SignalWindowMode
 from ib_signal.signal_settings import SignalSettings
 
 SECONDS_PER_MINUTE = 60
@@ -21,14 +22,6 @@ def get_rolling_due_bar_ts(
     step_seconds: int,
 ) -> int:
     # Возвращает последнюю сеточную точку ROLLING, которая уже покрыта job DB.
-    #
-    # Пример:
-    #   current_bar_ts = 12:00:05
-    #   step_seconds   = 60
-    #   due_bar_ts     = 12:00:00
-    #
-    # Это защищает от пропуска минутного сигнала, если job-data или сам цикл
-    # увидели latest bar не ровно в 12:00:00, а чуть позже.
     if step_seconds <= 0:
         raise ValueError(f"step_seconds должен быть > 0, получено: {step_seconds}")
 
@@ -49,12 +42,6 @@ def get_grid_day_anchor_ts(
     slot_start_minute_of_day: int,
 ) -> int:
     # Возвращает дневной якорь GRID.
-    #
-    # slot_start_minute_of_day=0    -> 00:00:00 текущего Unix-дня
-    # slot_start_minute_of_day=570  -> 09:30:00 текущего Unix-дня
-    #
-    # Если текущий timestamp раньше сегодняшнего якоря, значит он относится
-    # к сетке, начатой от вчерашнего якоря.
     if slot_start_minute_of_day < 0 or slot_start_minute_of_day >= 24 * 60:
         raise ValueError(
             "slot_start_minute_of_day должен быть в диапазоне [0, 1440), "
@@ -79,7 +66,6 @@ def get_grid_slot_start_ts(
     # Возвращает старт текущего GRID-слота.
     #
     # Сетка строится от дневного якоря, а не от момента запуска сервиса.
-    # SECONDS_PER_DAY здесь нужен именно для ежедневной переякорки сетки.
     if slot_step_minutes <= 0:
         raise ValueError(
             f"slot_step_minutes должен быть > 0, получено: {slot_step_minutes}"
@@ -108,9 +94,6 @@ def get_grid_due_bar_ts(
 ) -> int | None:
     # Возвращает последнюю допустимую точку расчёта GRID-сигнала,
     # которая уже покрыта job DB.
-    #
-    # В первые slot_back_minutes минут слота сигнал не считаем.
-    # В следующие slot_entry_minutes минут считаем по сетке slot_signal_step_seconds.
     if slot_signal_step_seconds <= 0:
         raise ValueError(
             "slot_signal_step_seconds должен быть > 0, "
@@ -162,18 +145,13 @@ def get_due_signal_bar_ts(
     last_calculated_bar_ts: int | None,
 ) -> int | None:
     # Возвращает bar_time_ts, для которого пора считать сигнал.
-    #
-    # Если сейчас считать ничего не надо, возвращает None.
-    # Важно: возвращаем именно due bar, а не просто True/False.
-    # Это нужно, чтобы при latest_job_bar_time_ts=12:00:05 ROLLING-сигнал
-    # считался для 12:00:00, а не для 12:00:05.
-    if settings.signal_window_mode == "ROLLING":
+    if settings.signal_window_mode == SignalWindowMode.ROLLING:
         due_bar_ts = get_rolling_due_bar_ts(
             current_bar_ts=current_bar_ts,
             step_seconds=settings.rolling_signal_step_seconds,
         )
 
-    elif settings.signal_window_mode == "GRID":
+    elif settings.signal_window_mode == SignalWindowMode.GRID:
         due_bar_ts = get_grid_due_bar_ts(
             current_bar_ts=current_bar_ts,
             slot_signal_step_seconds=settings.slot_signal_step_seconds,
