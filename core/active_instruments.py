@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 
 from contracts import Instrument
-from core.instrument_filters import is_instrument_realtime_enabled
 from core.logger import get_logger, log_warning
 
 logger = get_logger(__name__)
@@ -51,7 +50,7 @@ def build_active_instruments(server_time_text):
     active_instruments = {}
 
     for instrument_code, instrument_row in Instrument.items():
-        if not is_instrument_realtime_enabled(instrument_row):
+        if not instrument_row["realtime_enabled"]:
             continue
 
         try:

@@ -7,7 +7,6 @@ import asyncio
 import traceback
 
 from contracts import Instrument
-from core.instrument_filters import is_instrument_history_enabled
 from core.bar_utils import (
     DEFAULT_HISTORY_LOOKBACK_DAYS,
     get_bar_size_seconds,
@@ -374,7 +373,7 @@ async def load_history_task(ib, ib_health, settings):
     total_rows_written = 0
 
     for instrument_code, instrument_row in Instrument.items():
-        if not is_instrument_history_enabled(instrument_row):
+        if not instrument_row["history_enabled"]:
             log_info(
                 logger,
                 f"Инструмент {instrument_code}: history-загрузка выключена, пропускаю.",

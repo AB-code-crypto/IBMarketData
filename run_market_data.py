@@ -16,10 +16,6 @@ from core.ib_connector import (
     heartbeat_ib_connection,
     monitor_ib_connection,
 )
-from core.instrument_filters import (
-    is_instrument_history_enabled,
-    is_instrument_realtime_enabled,
-)
 from core.load_history import process_instrument_history
 from core.load_realtime import run_realtime_instrument_forever
 from core.logger import (
@@ -161,8 +157,8 @@ def _is_market_data_enabled(instrument_row) -> bool:
     # Инструмент участвует в market-data сервисе, если включена история
     # или включён realtime.
     return (
-            is_instrument_history_enabled(instrument_row)
-            or is_instrument_realtime_enabled(instrument_row)
+            instrument_row["history_enabled"]
+            or instrument_row["realtime_enabled"]
     )
 
 
@@ -170,8 +166,8 @@ def _is_signal_state_enabled(instrument_row) -> bool:
     # State для IBSignal ведём только по инструментам, где включены обе части:
     # history и realtime.
     return (
-            is_instrument_history_enabled(instrument_row)
-            and is_instrument_realtime_enabled(instrument_row)
+            instrument_row["history_enabled"]
+            and instrument_row["realtime_enabled"]
     )
 
 
@@ -294,8 +290,8 @@ async def _process_instrument_then_start_realtime(
     # 2. если включён realtime — запускаем realtime-задачу;
     # 3. recent-backfill последнего часа запускается внутри realtime после первого
     #    синхронного BID/ASK бара.
-    history_enabled = is_instrument_history_enabled(instrument_row)
-    realtime_enabled = is_instrument_realtime_enabled(instrument_row)
+    history_enabled = instrument_row["history_enabled"]
+    realtime_enabled = instrument_row["realtime_enabled"]
     signal_state_enabled = history_enabled and realtime_enabled
     history_ok = True
 
