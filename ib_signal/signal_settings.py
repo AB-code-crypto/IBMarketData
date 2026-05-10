@@ -31,7 +31,7 @@ class SignalSettings:
     min_candidates: int
     max_candidates: int
     candidate_search_step_seconds: int
-    history_lookback_days: int
+    history_lookback_days: int | None
 
     @classmethod
     def from_config(cls) -> "SignalSettings":

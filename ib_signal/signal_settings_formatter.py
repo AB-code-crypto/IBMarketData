@@ -2,6 +2,13 @@ from ib_signal.signal_modes import SignalWindowMode
 from ib_signal.signal_settings import SignalSettings
 
 
+def format_history_lookback_days(settings: SignalSettings) -> str:
+    if settings.history_lookback_days is None:
+        return "all"
+
+    return str(settings.history_lookback_days)
+
+
 def format_signal_settings(settings: SignalSettings) -> str:
     lines = [
         "Активные настройки signal-сервиса:",
@@ -48,7 +55,7 @@ def format_signal_settings(settings: SignalSettings) -> str:
             f"min_candidates={settings.min_candidates}",
             f"max_candidates={settings.max_candidates}",
             f"candidate_search_step_seconds={settings.candidate_search_step_seconds}",
-            f"history_lookback_days={settings.history_lookback_days}",
+            f"history_lookback_days={format_history_lookback_days(settings)}",
         ]
     )
 

@@ -79,7 +79,7 @@ def get_grid_due_bar_ts(
     slot_step_minutes: int,
     slot_start_minute_of_day: int,
     slot_back_minutes: int,
-    slot_entry_minutes: int,
+    slot_close_before_end_seconds: int,
 ) -> int | None:
     # Возвращает последнюю допустимую точку расчёта GRID-сигнала,
     # которая уже покрыта job DB.
@@ -94,9 +94,17 @@ def get_grid_due_bar_ts(
             f"slot_back_minutes должен быть >= 0, получено: {slot_back_minutes}"
         )
 
-    if slot_entry_minutes <= 0:
+    if slot_close_before_end_seconds < 0:
         raise ValueError(
-            f"slot_entry_minutes должен быть > 0, получено: {slot_entry_minutes}"
+            "slot_close_before_end_seconds должен быть >= 0, "
+            f"получено: {slot_close_before_end_seconds}"
+        )
+
+    slot_step_seconds = slot_step_minutes * SECONDS_PER_MINUTE
+    if slot_close_before_end_seconds >= slot_step_seconds:
+        raise ValueError(
+            "slot_close_before_end_seconds должен быть меньше длины слота: "
+            f"close_before={slot_close_before_end_seconds}, slot_seconds={slot_step_seconds}"
         )
 
     slot_start_ts = get_grid_slot_start_ts(
@@ -105,22 +113,22 @@ def get_grid_due_bar_ts(
         slot_start_minute_of_day=slot_start_minute_of_day,
     )
 
-    entry_start_ts = slot_start_ts + slot_back_minutes * SECONDS_PER_MINUTE
-    entry_end_ts = entry_start_ts + slot_entry_minutes * SECONDS_PER_MINUTE
+    signal_start_ts = slot_start_ts + slot_back_minutes * SECONDS_PER_MINUTE
+    signal_end_ts = slot_start_ts + slot_step_seconds - slot_close_before_end_seconds
 
-    if current_bar_ts < entry_start_ts:
+    if current_bar_ts < signal_start_ts:
         return None
 
-    if current_bar_ts >= entry_end_ts:
+    if current_bar_ts >= signal_end_ts:
         return None
 
-    seconds_from_entry_start = current_bar_ts - entry_start_ts
-    due_shift = seconds_from_entry_start - (
-        seconds_from_entry_start % slot_signal_step_seconds
+    seconds_from_signal_start = current_bar_ts - signal_start_ts
+    due_shift = seconds_from_signal_start - (
+        seconds_from_signal_start % slot_signal_step_seconds
     )
-    due_bar_ts = entry_start_ts + due_shift
+    due_bar_ts = signal_start_ts + due_shift
 
-    if due_bar_ts >= entry_end_ts:
+    if due_bar_ts >= signal_end_ts:
         return None
 
     return due_bar_ts
@@ -149,7 +157,7 @@ def get_due_signal_bar_ts(
             slot_step_minutes=settings.slot_step_minutes,
             slot_start_minute_of_day=settings.slot_start_minute_of_day,
             slot_back_minutes=settings.slot_back_minutes,
-            slot_entry_minutes=settings.slot_entry_minutes,
+            slot_close_before_end_seconds=settings.slot_close_before_end_seconds,
         )
 
         if due_bar_ts is None:
