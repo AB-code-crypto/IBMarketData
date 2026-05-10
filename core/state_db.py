@@ -40,9 +40,6 @@ def initialize_state_db() -> None:
         conn.close()
 
 
-def _now_ts() -> int:
-    return int(time.time())
-
 
 def reset_instrument_state(instrument_code: str) -> None:
     # Сбрасывает состояние инструмента перед новым стартом market-data процесса.
@@ -75,7 +72,7 @@ def reset_instrument_state(instrument_code: str) -> None:
                 error_text = NULL
             ;
             """,
-            (instrument_code, _now_ts()),
+            (instrument_code, int(time.time())),
         )
         conn.commit()
 
@@ -104,7 +101,7 @@ def mark_history_ready(instrument_code: str) -> None:
                 error_text = NULL
             ;
             """,
-            (instrument_code, _now_ts()),
+            (instrument_code, int(time.time())),
         )
         conn.commit()
 
@@ -133,7 +130,7 @@ def mark_realtime_started(instrument_code: str) -> None:
                 error_text = NULL
             ;
             """,
-            (instrument_code, _now_ts()),
+            (instrument_code, int(time.time())),
         )
         conn.commit()
 
@@ -162,7 +159,7 @@ def mark_first_synced_bid_ask(instrument_code: str, sync_ts: int) -> None:
                 error_text = NULL
             ;
             """,
-            (instrument_code, int(sync_ts), _now_ts()),
+            (instrument_code, int(sync_ts), int(time.time())),
         )
         conn.commit()
 
@@ -206,7 +203,7 @@ def mark_signal_ready(instrument_code: str, sync_ts: Optional[int] = None) -> No
             (
                 instrument_code,
                 None if sync_ts is None else int(sync_ts),
-                _now_ts(),
+                int(time.time()),
             ),
         )
         conn.commit()
@@ -237,7 +234,7 @@ def mark_instrument_error(instrument_code: str, error_text: str) -> None:
                 error_text = excluded.error_text
             ;
             """,
-            (instrument_code, _now_ts(), str(error_text)),
+            (instrument_code, int(time.time()), str(error_text)),
         )
         conn.commit()
 
