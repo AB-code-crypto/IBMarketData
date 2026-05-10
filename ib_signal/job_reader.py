@@ -21,21 +21,17 @@ class JobDbStatus:
     last_bar_lag_seconds: int | None = None
 
 
-def get_signal_job_db_path(instrument_code: str) -> Path:
-    if instrument_code not in Instrument:
-        raise ValueError(f"Инструмент {instrument_code!r} не найден в contracts.py")
-
-    return get_instrument_feature_db_path(
-        instrument_code=instrument_code,
-        instrument_row=Instrument[instrument_code],
-    )
-
-
 def get_job_db_status(
     instrument_code: str,
     max_job_bar_lag_seconds: int,
 ) -> JobDbStatus:
-    job_db_path = get_signal_job_db_path(instrument_code)
+    if instrument_code not in Instrument:
+        raise ValueError(f"Инструмент {instrument_code!r} не найден в contracts.py")
+
+    job_db_path = get_instrument_feature_db_path(
+        instrument_code=instrument_code,
+        instrument_row=Instrument[instrument_code],
+    )
 
     if not job_db_path.is_file():
         return JobDbStatus(

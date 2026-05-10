@@ -153,28 +153,10 @@ def _log_connection_details(*, server_time_text: str, active_instruments: dict) 
 
 
 
-def _is_market_data_enabled(instrument_row) -> bool:
-    # Инструмент участвует в market-data сервисе, если включена история
-    # или включён realtime.
-    return (
-            instrument_row["history_enabled"]
-            or instrument_row["realtime_enabled"]
-    )
-
-
-def _is_signal_state_enabled(instrument_row) -> bool:
-    # State для IBSignal ведём только по инструментам, где включены обе части:
-    # history и realtime.
-    return (
-            instrument_row["history_enabled"]
-            and instrument_row["realtime_enabled"]
-    )
-
-
 def _iter_enabled_market_data_instruments():
     # Полностью выключенные инструменты пропускаем без логов.
     for instrument_code, instrument_row in Instrument.items():
-        if _is_market_data_enabled(instrument_row):
+        if instrument_row["history_enabled"] or instrument_row["realtime_enabled"]:
             yield instrument_code, instrument_row
 
 
@@ -185,7 +167,7 @@ def _reset_signal_states_for_enabled_instruments() -> None:
     initialize_state_db()
 
     for instrument_code, instrument_row in Instrument.items():
-        if _is_signal_state_enabled(instrument_row):
+        if instrument_row["history_enabled"] and instrument_row["realtime_enabled"]:
             reset_instrument_state(instrument_code)
 
 
