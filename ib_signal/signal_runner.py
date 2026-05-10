@@ -34,7 +34,7 @@ async def wait_for_job_dbs(
     log_info(
         logger,
         f"Жду готовности job DB для signal-сервиса: {sorted(pending)}",
-        to_telegram=False,
+        to_telegram=True,
     )
 
     while pending:
