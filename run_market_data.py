@@ -62,10 +62,6 @@ class BackgroundTasks:
     status: asyncio.Task
     realtime: list[asyncio.Task] = field(default_factory=list)
 
-    def as_tuple(self) -> tuple[asyncio.Task, ...]:
-        # Удобное представление для групповой отмены задач.
-        return self.heartbeat, self.monitor, self.status, *self.realtime
-
 
 def _format_uptime(seconds: float) -> str:
     # Форматируем uptime в HH:MM:SS.
@@ -151,13 +147,6 @@ def _log_connection_details(*, server_time_text: str, active_instruments: dict) 
     log_info(logger, f"Активные realtime-инструменты на старте: {active_instruments}", to_telegram=False)
     log_info(logger, f"Price DB dir: {settings.price_db_dir}", to_telegram=False)
 
-
-
-def _iter_enabled_market_data_instruments():
-    # Полностью выключенные инструменты пропускаем без логов.
-    for instrument_code, instrument_row in Instrument.items():
-        if instrument_row["history_enabled"] or instrument_row["realtime_enabled"]:
-            yield instrument_code, instrument_row
 
 
 def _reset_signal_states_for_enabled_instruments() -> None:
@@ -352,7 +341,10 @@ async def _process_all_instruments_then_keep_realtime(
     # - realtime запускается сразу после готовности своего инструмента;
     # - уже запущенный realtime продолжает работать, пока история следующих
     #   инструментов ещё докачивается.
-    for instrument_code, instrument_row in _iter_enabled_market_data_instruments():
+    for instrument_code, instrument_row in Instrument.items():
+        if not (instrument_row["history_enabled"] or instrument_row["realtime_enabled"]):
+            continue
+
         await _process_instrument_then_start_realtime(
             ib=ib,
             ib_health=ib_health,
@@ -383,7 +375,7 @@ async def _process_all_instruments_then_keep_realtime(
 
 async def _shutdown_app(*, ib, shutdown_message: str, tasks: Optional[BackgroundTasks]) -> None:
     if tasks is not None:
-        await _cancel_tasks(*tasks.as_tuple())
+        await _cancel_tasks(tasks.heartbeat, tasks.monitor, tasks.status, *tasks.realtime)
 
     try:
         disconnect_ib(ib)

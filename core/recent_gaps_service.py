@@ -18,37 +18,6 @@ logger = get_logger(__name__)
 RECENT_BACKFILL_WINDOW_SECONDS = 3600
 
 
-def note_first_realtime_bar_timestamps(first_bid_ts, first_ask_ts, what_to_show, bar_time_ts):
-    # Запоминаем только первый увиденный timestamp по каждой стороне.
-    #
-    # Состояние сервис у себя не хранит.
-    # Внешний код передаёт текущие значения внутрь и получает обновлённые наружу.
-    if what_to_show == "BID":
-        if first_bid_ts is None:
-            first_bid_ts = bar_time_ts
-        return first_bid_ts, first_ask_ts
-
-    if what_to_show == "ASK":
-        if first_ask_ts is None:
-            first_ask_ts = bar_time_ts
-        return first_bid_ts, first_ask_ts
-
-    raise ValueError(f"Неподдерживаемый realtime stream: {what_to_show}")
-
-
-def is_first_synced_bid_ask_bar_ready(first_bid_ts, first_ask_ts):
-    # Первый полноценный realtime-старт считаем подтверждённым,
-    # когда обе стороны уже пришли и timestamp у них одинаковый.
-    if first_bid_ts is None:
-        return False
-
-    if first_ask_ts is None:
-        return False
-
-    return first_bid_ts == first_ask_ts
-
-
-
 def get_instrument_left_boundary_ts(instrument_row, contract_row, sync_ts):
     # Левая граница, левее которой недавний добор заходить не должен.
     if instrument_row["secType"] == "FUT":

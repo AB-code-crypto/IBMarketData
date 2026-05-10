@@ -24,8 +24,6 @@ from core.realtime_subscriptions import (
 )
 from core.recent_gaps_service import (
     backfill_recent_hour,
-    is_first_synced_bid_ask_bar_ready,
-    note_first_realtime_bar_timestamps,
 )
 from core.runtime_state import RecentBackfillState, RealtimeMonitorState
 from core.time_utils import format_utc
@@ -214,17 +212,24 @@ def maybe_start_recent_backfill_task(
     # Обновляем состояние первого BID / ASK бара и,
     # когда получен первый синхронный BID/ASK bar_time_ts,
     # один раз запускаем дозагрузку последнего часа.
-    first_bid_ts, first_ask_ts = note_first_realtime_bar_timestamps(
-        first_bid_ts=recent_backfill_state.first_bid_ts,
-        first_ask_ts=recent_backfill_state.first_ask_ts,
-        what_to_show=what_to_show,
-        bar_time_ts=bar_time_ts,
-    )
+    if what_to_show == "BID":
+        if recent_backfill_state.first_bid_ts is None:
+            recent_backfill_state.first_bid_ts = bar_time_ts
 
-    recent_backfill_state.first_bid_ts = first_bid_ts
-    recent_backfill_state.first_ask_ts = first_ask_ts
+    elif what_to_show == "ASK":
+        if recent_backfill_state.first_ask_ts is None:
+            recent_backfill_state.first_ask_ts = bar_time_ts
 
-    if not is_first_synced_bid_ask_bar_ready(first_bid_ts, first_ask_ts):
+    else:
+        raise ValueError(f"Неподдерживаемый realtime stream: {what_to_show}")
+
+    first_bid_ts = recent_backfill_state.first_bid_ts
+    first_ask_ts = recent_backfill_state.first_ask_ts
+
+    if first_bid_ts is None or first_ask_ts is None:
+        return
+
+    if first_bid_ts != first_ask_ts:
         return
 
     sync_ts = first_bid_ts
