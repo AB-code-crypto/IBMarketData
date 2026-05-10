@@ -13,10 +13,10 @@ def get_live_enabled_instrument_codes() -> list[str]:
     result = []
 
     for instrument_code, instrument_row in Instrument.items():
-        if not instrument_row.get("history_enabled", False):
+        if not instrument_row["history_enabled"]:
             continue
 
-        if not instrument_row.get("realtime_enabled", False):
+        if not instrument_row["realtime_enabled"]:
             continue
 
         result.append(instrument_code)

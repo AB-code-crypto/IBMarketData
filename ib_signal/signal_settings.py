@@ -1,12 +1,13 @@
 from dataclasses import dataclass
 
 from ib_signal import signal_config
+from ib_signal.signal_modes import SignalWindowMode
 
 
 @dataclass(frozen=True)
 class SignalSettings:
     # Режим построения сигнальных окон.
-    signal_window_mode = signal_config.SIGNAL_WINDOW_MODE
+    signal_window_mode: SignalWindowMode
 
     # Контроль свежести job DB.
     last_bar_safety_seconds: int

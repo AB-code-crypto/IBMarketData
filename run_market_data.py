@@ -42,7 +42,7 @@ from core.telegram_sender import TelegramSender
 setup_logging()
 logger = get_logger(__name__)
 
-telegram_sender = TelegramSender(settings)
+telegram_sender = TelegramSender(settings, robot_name=settings.robot_name)
 setup_telegram_logging(telegram_sender)
 
 # Как часто отправлять штатный статус в Telegram.
@@ -159,7 +159,7 @@ def _is_instrument_realtime_enabled(instrument_row) -> bool:
     # Проверяем выключатель realtime-загрузки инструмента.
     # По умолчанию считаем realtime выключенным, чтобы случайно не стартовать
     # инструмент без явного realtime_enabled=True.
-    return instrument_row.get("realtime_enabled", False)
+    return instrument_row["realtime_enabled"]
 
 
 def _is_market_data_enabled(instrument_row) -> bool:

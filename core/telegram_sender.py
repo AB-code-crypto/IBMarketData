@@ -9,10 +9,9 @@ TELEGRAM_REQUEST_TIMEOUT_SECONDS = 20
 
 
 class TelegramSender:
-    def __init__(self, settings, robot_name=None):
+    def __init__(self, settings, robot_name: str):
         # Имя робота/сервиса для маркировки Telegram-сообщений.
-        # Если явно не передано, берём общее имя из settings.
-        self.robot_name = robot_name or getattr(settings, "robot_name", "IBMarketData")
+        self.robot_name = robot_name
         self.robot_hashtag = self._build_robot_hashtag(self.robot_name)
         # Токен бота Telegram.
         self.bot_token = settings.telegram_bot_token
@@ -31,14 +30,14 @@ class TelegramSender:
 
     def _build_robot_hashtag(self, robot_name):
         # Превращаем имя робота в безопасный Telegram-хештег.
-        # Например: "IBMarketData" -> "#IBMarketData".
+        # Например: "ib_signal" -> "#ib_signal".
         tag = str(robot_name).strip()
         if not tag:
-            tag = "IBMarketData"
+            raise ValueError("robot_name не должен быть пустым")
 
         tag = re.sub(r"\W+", "_", tag, flags=re.UNICODE).strip("_")
         if not tag:
-            tag = "IBMarketData"
+            raise ValueError(f"robot_name={robot_name!r} нельзя превратить в Telegram hashtag")
 
         return f"#{tag}"
 

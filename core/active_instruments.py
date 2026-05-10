@@ -25,9 +25,10 @@ def parse_contract_utc_text(utc_text):
     dt = dt.replace(tzinfo=timezone.utc)
     return dt
 
+
 def is_realtime_enabled(instrument_row):
-    # Отдельный выключатель realtime-загрузки.
-    return instrument_row.get("realtime_enabled", True)
+    # Realtime-флаг должен быть явно задан через defaults/overrides в contracts.py.
+    return instrument_row["realtime_enabled"]
 
 
 def get_active_futures_local_symbol(instrument_code, instrument_row, current_utc, server_time_text):

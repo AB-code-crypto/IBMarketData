@@ -34,7 +34,7 @@ logger = get_logger(__name__)
 
 def is_instrument_history_enabled(instrument_row):
     # Проверяем выключатель history-загрузки инструмента.
-    return instrument_row.get("history_enabled", True)
+    return instrument_row["history_enabled"]
 
 
 def get_instrument_configured_start_ts(instrument_row, current_aligned_ts):
