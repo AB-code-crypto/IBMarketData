@@ -392,7 +392,7 @@ def should_ignore_gap(
     if not IGNORE_EXPECTED_MARKET_PAUSES:
         return False
 
-    session_model = instrument_row.get("session_model", "")
+    session_model = instrument_row["session_model"]
 
     if session_model == "CME_EQUITY_INDEX":
         ignored_rule_name = get_cme_ignored_rule_name(
@@ -795,7 +795,7 @@ async def repair_interval(
         contract=contract,
         contract_name=contract_name,
         sec_type=instrument_row["secType"],
-        session_model=instrument_row.get("session_model", ""),
+        session_model=instrument_row["session_model"],
         bar_size_setting=instrument_row["barSizeSetting"],
         use_rth=instrument_row["useRTH"],
         segment_start_ts=interval["start_ts"],
