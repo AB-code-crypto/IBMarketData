@@ -16,7 +16,6 @@ from core.price_validation import validate_positive_price
 from core.realtime_db import open_quotes_db, write_realtime_bar_to_sqlite
 from core.realtime_monitor import (
     is_realtime_ready_now,
-    note_realtime_bar_received,
     reset_recent_backfill_state,
 )
 from core.realtime_subscriptions import (
@@ -25,7 +24,6 @@ from core.realtime_subscriptions import (
 )
 from core.recent_gaps_service import (
     backfill_recent_hour,
-    get_recent_backfill_sync_ts,
     is_first_synced_bid_ask_bar_ready,
     note_first_realtime_bar_timestamps,
 )
@@ -229,7 +227,7 @@ def maybe_start_recent_backfill_task(
     if not is_first_synced_bid_ask_bar_ready(first_bid_ts, first_ask_ts):
         return
 
-    sync_ts = get_recent_backfill_sync_ts(first_bid_ts, first_ask_ts)
+    sync_ts = first_bid_ts
 
     if recent_backfill_state.last_backfill_completed_sync_ts == sync_ts:
         return
@@ -321,7 +319,7 @@ def build_realtime_update_handler(
             )
 
             bar_time_ts = int(bar.time.astimezone(timezone.utc).timestamp())
-            note_realtime_bar_received(realtime_monitor_state)
+            realtime_monitor_state.last_bar_monotonic = time.monotonic()
             maybe_start_recent_backfill_task(
                 ib=ib,
                 ib_health=ib_health,

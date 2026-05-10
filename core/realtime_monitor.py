@@ -1,11 +1,3 @@
-import time
-
-
-def note_realtime_bar_received(realtime_monitor_state):
-    # Запоминаем monotonic-время последнего принятого realtime-бара.
-    realtime_monitor_state.last_bar_monotonic = time.monotonic()
-
-
 def reset_recent_backfill_state(recent_backfill_state):
     # Сбрасываем состояние разовой докачки последнего часа.
     backfill_task = recent_backfill_state.backfill_task

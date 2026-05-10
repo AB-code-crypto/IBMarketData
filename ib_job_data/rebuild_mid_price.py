@@ -31,10 +31,6 @@ PRICE_DB_SCHEMA_NAME = "price_src"
 # ПУТИ
 # ============================================================
 
-def get_feature_db_dir() -> Path:
-    # Feature/job-БД лежат рядом с data/prices, в data/features.
-    return Path(settings.price_db_dir).parent / "features"
-
 
 def get_instrument_feature_db_path(instrument_code: str, instrument_row: dict) -> Path:
     # Price DB: data/prices/MNQ.sqlite3
@@ -43,7 +39,7 @@ def get_instrument_feature_db_path(instrument_code: str, instrument_row: dict) -
     feature_db_stem = Path(price_db_filename).stem.lower()
     feature_db_filename = f"{feature_db_stem}_job.sqlite3"
 
-    return get_feature_db_dir() / feature_db_filename
+    return Path(settings.price_db_dir).parent / "features" / feature_db_filename
 
 
 # ============================================================

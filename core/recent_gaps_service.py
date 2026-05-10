@@ -48,13 +48,6 @@ def is_first_synced_bid_ask_bar_ready(first_bid_ts, first_ask_ts):
     return first_bid_ts == first_ask_ts
 
 
-def get_recent_backfill_sync_ts(first_bid_ts, first_ask_ts):
-    # Возвращаем timestamp первого синхронного BID/ASK бара.
-    if not is_first_synced_bid_ask_bar_ready(first_bid_ts, first_ask_ts):
-        raise ValueError("Первый синхронный BID/ASK бар ещё не получен")
-
-    return first_bid_ts
-
 
 def get_instrument_left_boundary_ts(instrument_row, contract_row, sync_ts):
     # Левая граница, левее которой недавний добор заходить не должен.

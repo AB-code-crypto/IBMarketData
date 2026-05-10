@@ -8,15 +8,10 @@ STATE_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "state.sqlite3
 INSTRUMENT_STATE_TABLE = "instrument_state"
 
 
-def get_state_db_path() -> Path:
-    # Внутренняя БД состояния всего робота.
-    # Не выносится в конфиг: это служебная БД проекта.
-    return STATE_DB_PATH
-
 
 def initialize_state_db() -> None:
     conn = open_sqlite_connection(
-        str(get_state_db_path()),
+        str(STATE_DB_PATH),
         create_parent_dir=True,
         use_wal=True,
     )
@@ -53,7 +48,7 @@ def reset_instrument_state(instrument_code: str) -> None:
     # Сбрасывает состояние инструмента перед новым стартом market-data процесса.
     initialize_state_db()
 
-    conn = open_sqlite_connection(str(get_state_db_path()), use_wal=True)
+    conn = open_sqlite_connection(str(STATE_DB_PATH), use_wal=True)
 
     try:
         conn.execute(
@@ -91,7 +86,7 @@ def reset_instrument_state(instrument_code: str) -> None:
 def mark_history_ready(instrument_code: str) -> None:
     initialize_state_db()
 
-    conn = open_sqlite_connection(str(get_state_db_path()), use_wal=True)
+    conn = open_sqlite_connection(str(STATE_DB_PATH), use_wal=True)
 
     try:
         conn.execute(
@@ -120,7 +115,7 @@ def mark_history_ready(instrument_code: str) -> None:
 def mark_realtime_started(instrument_code: str) -> None:
     initialize_state_db()
 
-    conn = open_sqlite_connection(str(get_state_db_path()), use_wal=True)
+    conn = open_sqlite_connection(str(STATE_DB_PATH), use_wal=True)
 
     try:
         conn.execute(
@@ -149,7 +144,7 @@ def mark_realtime_started(instrument_code: str) -> None:
 def mark_first_synced_bid_ask(instrument_code: str, sync_ts: int) -> None:
     initialize_state_db()
 
-    conn = open_sqlite_connection(str(get_state_db_path()), use_wal=True)
+    conn = open_sqlite_connection(str(STATE_DB_PATH), use_wal=True)
 
     try:
         conn.execute(
@@ -183,7 +178,7 @@ def mark_signal_ready(instrument_code: str, sync_ts: Optional[int] = None) -> No
     # - recent-backfill последнего часа завершён.
     initialize_state_db()
 
-    conn = open_sqlite_connection(str(get_state_db_path()), use_wal=True)
+    conn = open_sqlite_connection(str(STATE_DB_PATH), use_wal=True)
 
     try:
         conn.execute(
@@ -223,7 +218,7 @@ def mark_signal_ready(instrument_code: str, sync_ts: Optional[int] = None) -> No
 def mark_instrument_error(instrument_code: str, error_text: str) -> None:
     initialize_state_db()
 
-    conn = open_sqlite_connection(str(get_state_db_path()), use_wal=True)
+    conn = open_sqlite_connection(str(STATE_DB_PATH), use_wal=True)
 
     try:
         conn.execute(
@@ -253,7 +248,7 @@ def mark_instrument_error(instrument_code: str, error_text: str) -> None:
 def is_signal_ready(instrument_code: str) -> bool:
     initialize_state_db()
 
-    conn = open_sqlite_connection(str(get_state_db_path()), use_wal=True)
+    conn = open_sqlite_connection(str(STATE_DB_PATH), use_wal=True)
 
     try:
         row = conn.execute(
