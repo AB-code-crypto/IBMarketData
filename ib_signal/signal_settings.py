@@ -9,11 +9,8 @@ class SignalSettings:
     # Режим построения сигнальных окон.
     signal_window_mode: SignalWindowMode
 
-    # Контроль свежести job DB.
-    last_bar_safety_seconds: int
-
-    # Задержка после времени бара перед расчётом сигнала.
-    signal_calculation_delay_seconds: int
+    # Максимально допустимое отставание последнего job-бара от текущего времени.
+    max_job_bar_lag_seconds: int
 
     # ROLLING-режим.
     rolling_signal_step_seconds: int
@@ -41,8 +38,7 @@ class SignalSettings:
         """Создаёт настройки из боевого signal_config.py."""
         return cls(
             signal_window_mode=signal_config.SIGNAL_WINDOW_MODE,
-            last_bar_safety_seconds=signal_config.LAST_BAR_SAFETY_SECONDS,
-            signal_calculation_delay_seconds=signal_config.SIGNAL_CALCULATION_DELAY_SECONDS,
+            max_job_bar_lag_seconds=signal_config.MAX_JOB_BAR_LAG_SECONDS,
 
             rolling_signal_step_seconds=signal_config.ROLLING_SIGNAL_STEP_SECONDS,
             rolling_back_minutes=signal_config.ROLLING_BACK_MINUTES,

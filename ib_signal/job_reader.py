@@ -32,8 +32,8 @@ def get_signal_job_db_path(instrument_code: str) -> Path:
 
 
 def get_job_db_status(
-        instrument_code: str,
-        max_allowed_lag_seconds: int,
+    instrument_code: str,
+    max_job_bar_lag_seconds: int,
 ) -> JobDbStatus:
     job_db_path = get_signal_job_db_path(instrument_code)
 
@@ -104,13 +104,13 @@ def get_job_db_status(
 
         last_bar_lag_seconds = int(time.time()) - last_bar_time_ts
 
-        if last_bar_lag_seconds > max_allowed_lag_seconds:
+        if last_bar_lag_seconds > max_job_bar_lag_seconds:
             return JobDbStatus(
                 instrument_code=instrument_code,
                 is_ready=False,
                 reason=(
                     "last bar is stale: "
-                    f"{last_bar_lag_seconds}s > {max_allowed_lag_seconds}s"
+                    f"{last_bar_lag_seconds}s > {max_job_bar_lag_seconds}s"
                 ),
                 job_db_path=job_db_path,
                 rows_count=rows_count,
@@ -127,58 +127,6 @@ def get_job_db_status(
             last_bar_time_ts=last_bar_time_ts,
             last_bar_lag_seconds=last_bar_lag_seconds,
         )
-
-    finally:
-        conn.close()
-
-
-def is_job_db_ready(
-        instrument_code: str,
-        max_allowed_lag_seconds: int,
-) -> bool:
-    return get_job_db_status(
-        instrument_code=instrument_code,
-        max_allowed_lag_seconds=max_allowed_lag_seconds,
-    ).is_ready
-
-
-def get_last_job_bar_ts(instrument_code: str) -> int | None:
-    job_db_path = get_signal_job_db_path(instrument_code)
-
-    if not job_db_path.is_file():
-        return None
-
-    conn = open_sqlite_connection(
-        str(job_db_path),
-        require_existing_file=True,
-        use_wal=False,
-    )
-
-    try:
-        table_row = conn.execute(
-            """
-            SELECT name
-            FROM sqlite_master
-            WHERE type = 'table'
-              AND name = ?
-            """,
-            (MID_PRICE_TABLE_NAME,),
-        ).fetchone()
-
-        if table_row is None:
-            return None
-
-        row = conn.execute(
-            f"""
-            SELECT MAX(bar_time_ts) AS last_bar_time_ts
-            FROM {quote_identifier(MID_PRICE_TABLE_NAME)}
-            """
-        ).fetchone()
-
-        if row is None or row[0] is None:
-            return None
-
-        return int(row[0])
 
     finally:
         conn.close()

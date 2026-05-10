@@ -5,17 +5,6 @@ SECONDS_PER_MINUTE = 60
 SECONDS_PER_DAY = 24 * 60 * 60
 
 
-def is_calculation_delay_passed(
-    *,
-    signal_bar_ts: int,
-    now_ts: int,
-    delay_seconds: int,
-) -> bool:
-    # Не считаем сигнал ровно в момент времени бара.
-    # Даём job-data сервису небольшую паузу, чтобы последний бар точно попал в job DB.
-    return now_ts >= signal_bar_ts + delay_seconds
-
-
 def get_rolling_due_bar_ts(
     *,
     current_bar_ts: int,
@@ -140,11 +129,13 @@ def get_grid_due_bar_ts(
 def get_due_signal_bar_ts(
     *,
     current_bar_ts: int,
-    now_ts: int,
     settings: SignalSettings,
     last_calculated_bar_ts: int | None,
 ) -> int | None:
     # Возвращает bar_time_ts, для которого пора считать сигнал.
+    #
+    # Сигнал строится только по барам, которые уже есть в job DB.
+    # Поэтому отдельная задержка после времени бара здесь не нужна.
     if settings.signal_window_mode == SignalWindowMode.ROLLING:
         due_bar_ts = get_rolling_due_bar_ts(
             current_bar_ts=current_bar_ts,
@@ -170,13 +161,6 @@ def get_due_signal_bar_ts(
         )
 
     if due_bar_ts == last_calculated_bar_ts:
-        return None
-
-    if not is_calculation_delay_passed(
-        signal_bar_ts=due_bar_ts,
-        now_ts=now_ts,
-        delay_seconds=settings.signal_calculation_delay_seconds,
-    ):
         return None
 
     return due_bar_ts

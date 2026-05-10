@@ -6,8 +6,7 @@ def format_signal_settings(settings: SignalSettings) -> str:
     lines = [
         "Активные настройки signal-сервиса:",
         f"mode={settings.signal_window_mode.value}",
-        f"last_bar_safety_seconds={settings.last_bar_safety_seconds}",
-        f"signal_calculation_delay_seconds={settings.signal_calculation_delay_seconds}",
+        f"max_job_bar_lag_seconds={settings.max_job_bar_lag_seconds}",
         "",
     ]
 

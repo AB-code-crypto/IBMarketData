@@ -1,5 +1,4 @@
 import asyncio
-import time
 
 from core.logger import get_logger, log_info, setup_logging
 from ib_signal.job_reader import get_job_db_status
@@ -40,7 +39,7 @@ async def wait_for_job_dbs(
         for instrument_code in list(pending):
             status = get_job_db_status(
                 instrument_code=instrument_code,
-                max_allowed_lag_seconds=settings.last_bar_safety_seconds,
+                max_job_bar_lag_seconds=settings.max_job_bar_lag_seconds,
             )
 
             if not status.is_ready:
@@ -88,12 +87,10 @@ async def run_signal_loop(
     )
 
     while True:
-        now_ts = int(time.time())
-
         for instrument_code in instrument_codes:
             status = get_job_db_status(
                 instrument_code=instrument_code,
-                max_allowed_lag_seconds=settings.last_bar_safety_seconds,
+                max_job_bar_lag_seconds=settings.max_job_bar_lag_seconds,
             )
 
             if not status.is_ready:
@@ -128,7 +125,6 @@ async def run_signal_loop(
 
             due_signal_bar_ts = get_due_signal_bar_ts(
                 current_bar_ts=current_last_ts,
-                now_ts=now_ts,
                 settings=settings,
                 last_calculated_bar_ts=last_calculated_ts_by_instrument[instrument_code],
             )
