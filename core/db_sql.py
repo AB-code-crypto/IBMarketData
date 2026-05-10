@@ -1,5 +1,4 @@
 def create_quotes_table_sql(table_name):
-    # Таблица для BID/ASK-баров.
     """Что делает: возвращает SQL создания BID/ASK price-таблицы. Зачем нужна: централизует схему хранения исторических и realtime-баров."""
     return f"""
     CREATE TABLE IF NOT EXISTS {table_name} (
@@ -29,10 +28,6 @@ def create_quotes_table_sql(table_name):
 
 
 def upsert_quotes_sql(table_name):
-    # UPSERT для BID/ASK-таблицы.
-    #
-    # Этот вариант подходит, когда вся строка бара уже полностью собрана,
-    # например при исторической загрузке BID + ASK за один и тот же интервал.
     """Что делает: возвращает SQL UPSERT полной строки BID+ASK. Зачем нужна: historical loader пишет уже собранные пары BID/ASK одним запросом."""
     return f"""
     INSERT INTO {table_name} (
@@ -86,11 +81,6 @@ def upsert_quotes_sql(table_name):
 
 
 def upsert_quotes_ask_sql(table_name):
-    # UPSERT только для ASK-стороны realtime-бара.
-    #
-    # Обновляем только ask_* поля и не трогаем bid_*.
-    # Это важно, потому что BID и ASK в realtime приходят отдельными потоками,
-    # и более поздний UPSERT одной стороны не должен затирать другую сторону в NULL.
     """Что делает: возвращает SQL UPSERT только ASK-стороны realtime-бара. Зачем нужна: realtime ASK приходит отдельно и не должен затирать BID-поля."""
     return f"""
     INSERT INTO {table_name} (
@@ -122,9 +112,6 @@ def upsert_quotes_ask_sql(table_name):
 
 
 def upsert_quotes_bid_sql(table_name):
-    # UPSERT только для BID-стороны realtime-бара.
-    #
-    # Обновляем только bid_* поля и не трогаем ask_*.
     """Что делает: возвращает SQL UPSERT только BID-стороны realtime-бара. Зачем нужна: realtime BID приходит отдельно и не должен затирать ASK-поля."""
     return f"""
     INSERT INTO {table_name} (

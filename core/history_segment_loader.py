@@ -39,9 +39,6 @@ async def load_history_bid_ask_once(
         bar_size_setting,
         use_rth,
 ):
-    # Атомарная загрузка одного временного куска BID + ASK.
-    #
-    # Если historical request вернул битые цены, этот же chunk повторяем заново.
     """Что делает: загружает один historical chunk BID и ASK, валидирует и записывает его в price DB. Зачем нужна: это атомарная операция получения одного куска истории."""
     while True:
         bid_bars = await request_historical_data_with_reconnect(
@@ -119,13 +116,6 @@ async def load_quotes_segment(
         segment_end_ts,
         segment_kind,
 ):
-    # Качаем один недостающий сегмент истории.
-    #
-    # Сегмент может быть:
-    # - full: если по инструменту/контракту ещё нет вообще ничего;
-    # - head: если не хватает начала;
-    # - tail: если не хватает конца;
-    # - recent-backfill: если добираем свежий час после старта/reconnect.
     """Что делает: разбивает недостающий сегмент на chunks, фильтрует неторговые окна и загружает каждый chunk. Зачем нужна: используется для full/head/tail/recent-backfill загрузки без дублирования логики."""
     if segment_end_ts <= segment_start_ts:
         return 0

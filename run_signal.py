@@ -25,8 +25,6 @@ setup_telegram_logging(telegram_sender)
 
 
 async def send_service_message(message: str) -> None:
-    # В консоль пишем через обычный логгер.
-    # В Telegram отправляем напрямую, чтобы не зависеть от fire-and-forget задач.
     """Что делает: пишет сервисное сообщение в консоль и напрямую отправляет его в Telegram. Зачем нужна: гарантирует доставку стартовых и shutdown-сообщений без зависимости от fire-and-forget логгера."""
     log_info(logger, message, to_telegram=False)
     await telegram_sender.send_text(message)

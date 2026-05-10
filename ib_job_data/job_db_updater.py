@@ -16,9 +16,6 @@ PRICE_DB_SCHEMA_NAME = "price_src"
 
 
 def get_last_job_bar_ts(conn) -> int:
-    # Возвращает последний bar_time_ts, который уже рассчитан в job DB.
-    #
-    # Если таблица пустая, возвращаем 0.
     """Что делает: читает последний рассчитанный bar_time_ts в job DB. Зачем нужна: инкрементальное обновление знает, от какой границы дописывать новые строки."""
     row = conn.execute(
         f"""
@@ -34,15 +31,6 @@ def get_last_job_bar_ts(conn) -> int:
 
 
 def append_new_mid_price_rows(instrument_code: str) -> int:
-    # Досчитывает новые mid/spread-строки для одного инструмента.
-    #
-    # Работает блоком:
-    # - смотрит последний рассчитанный bar_time_ts в job DB;
-    # - берёт из price DB все более новые полностью валидные BID/ASK-бары;
-    # - одним INSERT ... SELECT пишет их в mid_price_5s.
-    #
-    # Если realtime шёл без задержек, обычно добавится 1 строка.
-    # Если был freeze или run_job_data отставал, добавится сразу блок строк.
     """Что делает: дописывает новые mid/spread-строки одного инструмента из price DB в job DB. Зачем нужна: поддерживает рабочую feature DB актуальной для signal-сервиса."""
     if instrument_code not in Instrument:
         raise ValueError(f"Инструмент {instrument_code!r} не найден в contracts.py")

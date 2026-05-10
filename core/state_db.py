@@ -43,7 +43,6 @@ def initialize_state_db() -> None:
 
 
 def reset_instrument_state(instrument_code: str) -> None:
-    # Сбрасывает состояние инструмента перед новым стартом market-data процесса.
     """Что делает: сбрасывает состояние инструмента перед новым стартом market-data. Зачем нужна: stale-флаги прошлого запуска не должны разблокировать job-data или signal."""
     initialize_state_db()
 
@@ -173,11 +172,6 @@ def mark_first_synced_bid_ask(instrument_code: str, sync_ts: int) -> None:
 
 
 def mark_signal_ready(instrument_code: str, sync_ts: Optional[int] = None) -> None:
-    # Инструмент готов для job-data и будущих сигналов:
-    # - history завершена;
-    # - realtime стартовал;
-    # - первый синхронный BID/ASK бар получен;
-    # - recent-backfill последнего часа завершён.
     """Что делает: отмечает инструмент готовым для job-data и signal после recent-backfill. Зачем нужна: downstream-сервисы не стартуют до закрытия свежего гэпа."""
     initialize_state_db()
 

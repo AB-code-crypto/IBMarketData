@@ -4,16 +4,6 @@ from core.time_utils import CT_TIMEZONE
 
 
 def should_load_futures_hour_chunk(chunk_start_ts, chunk_end_ts):
-    # Проверяем, попадает ли часовой chunk в гарантированное weekend-окно CME
-    # для equity index futures в UTC.
-    #
-    # Логика специально консервативная:
-    # пропускаем только гарантированно закрытое окно,
-    # чтобы случайно не отрезать торговые бары на переходах летнего/зимнего времени.
-    #
-    # Функция возвращает:
-    # - True  -> chunk надо качать;
-    # - False -> chunk гарантированно попал на выходные, пропускаем.
     """Что делает: решает, стоит ли качать часовой historical chunk CME equity futures. Зачем нужна: пропускает гарантированные weekend-окна и не тратит pacing quota IB."""
     chunk_start_dt = datetime.fromtimestamp(chunk_start_ts, tz=timezone.utc)
     chunk_end_dt = datetime.fromtimestamp(chunk_end_ts, tz=timezone.utc)
@@ -46,11 +36,6 @@ def should_load_futures_hour_chunk(chunk_start_ts, chunk_end_ts):
 
 
 def should_load_fx_hour_chunk(chunk_start_ts, chunk_end_ts):
-    # Грубая 24/5-фильтрация для FX.
-    #
-    # Логика консервативная: пропускаем субботу и раннее воскресенье UTC.
-    # Если IB где-то отдаёт редкие служебные котировки на границе сессии,
-    # лучше немного докачать лишнее, чем случайно отрезать торговые бары.
     """Что делает: решает, стоит ли качать часовой historical chunk FX. Зачем нужна: 24/5 FX не надо запрашивать в очевидно закрытые weekend-окна."""
     chunk_start_dt = datetime.fromtimestamp(chunk_start_ts, tz=timezone.utc)
     start_weekday = chunk_start_dt.weekday()
@@ -66,7 +51,6 @@ def should_load_fx_hour_chunk(chunk_start_ts, chunk_end_ts):
 
 
 def should_load_history_chunk(session_model, chunk_start_ts, chunk_end_ts):
-    # Единая точка принятия решения, стоит ли запрашивать historical chunk.
     """Что делает: выбирает session-фильтр historical chunk по session_model. Зачем нужна: loaders не должны знать расписание каждого рынка напрямую."""
     if session_model == "CME_EQUITY_INDEX":
         return should_load_futures_hour_chunk(chunk_start_ts, chunk_end_ts)
@@ -83,8 +67,6 @@ def should_load_history_chunk(session_model, chunk_start_ts, chunk_end_ts):
 
 
 def is_expected_cme_realtime_flow_now():
-    # Грубая проверка, должен ли сейчас вообще идти поток 5-секундных баров для CME.
-    # Используем Chicago time, потому что расписание CME естественнее проверять в CT.
     """Что делает: проверяет, ожидается ли сейчас realtime-поток CME equity futures. Зачем нужна: realtime-monitor не должен ругаться в очевидные неторговые окна."""
     now_ct = datetime.now(CT_TIMEZONE)
     weekday = now_ct.weekday()  # Mon=0 ... Sun=6
@@ -107,7 +89,6 @@ def is_expected_cme_realtime_flow_now():
 
 
 def is_expected_fx_realtime_flow_now():
-    # Грубая проверка 24/5 для FX по UTC.
     """Что делает: проверяет, ожидается ли сейчас FX realtime по грубой 24/5 модели. Зачем нужна: снижает ложные предупреждения monitor-а на выходных."""
     now_utc = datetime.now(timezone.utc)
     weekday = now_utc.weekday()
@@ -123,7 +104,6 @@ def is_expected_fx_realtime_flow_now():
 
 
 def is_expected_realtime_flow_now(session_model="CME_EQUITY_INDEX"):
-    # Единая точка проверки ожидаемого realtime-потока.
     """Что делает: выбирает realtime session-проверку по session_model. Зачем нужна: realtime loader использует один интерфейс для FUT, FX и crypto."""
     if session_model == "CME_EQUITY_INDEX":
         return is_expected_cme_realtime_flow_now()

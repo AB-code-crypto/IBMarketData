@@ -70,7 +70,6 @@ async def run_signal_loop(
     instrument_codes: list[str],
     settings: SignalSettings,
 ) -> None:
-    # last_seen нужен только для логирования появления нового бара.
     """Что делает: отслеживает новые job-бары и определяет due signal_bar_ts по активному режиму. Зачем нужна: это основной runtime-цикл signal-сервиса, пока без фактического расчёта сигнала."""
     last_seen_ts_by_instrument: dict[str, int | None] = {
         instrument_code: None

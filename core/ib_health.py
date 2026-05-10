@@ -20,21 +20,16 @@ class IbConnectionHealth:
 
     @property
     def market_data_ok(self):
-        # Market data считаем исправными, если нет ни одной "падающей" farm.
         """Что делает: возвращает True, если нет проблемных market data farm. Зачем нужна: loaders должны отличать локальное API-соединение от реальной доступности market data."""
         return len(self.market_data_down_farms) == 0
 
     @property
     def hmds_ok(self):
-        # HMDS считаем исправными, если нет ни одной "падающей" farm.
         """Что делает: возвращает True, если нет проблемных HMDS farm. Зачем нужна: historical loader должен ждать восстановления HMDS перед запросами истории."""
         return len(self.hmds_down_farms) == 0
 
 
 def normalize_ib_message(text):
-    # Приводим системные сообщения IB к читаемому виду.
-    # Иногда TWS присылает уже нормальный текст,
-    # а иногда строку с escaped unicode-последовательностями.
     """Что делает: декодирует системное сообщение IB, если оно пришло с escaped unicode. Зачем нужна: логи должны показывать читаемый текст, а не escape-последовательности."""
     text = str(text)
 
@@ -48,10 +43,6 @@ def normalize_ib_message(text):
 
 
 def extract_ib_farm_name(error_string):
-    # Для сообщений 2103 / 2104 / 2105 / 2106 название farm обычно идёт после ":".
-    # Например:
-    # "Соединение с базой рыночных данных исправно:cashfarm"
-    # "Нарушено соединение с базой данных HMDS:euhmds"
     """Что делает: достаёт имя farm из системного сообщения IB. Зачем нужна: health-state хранит конкретные проблемные market data/HMDS farm."""
     text = str(error_string).strip()
 
@@ -67,7 +58,6 @@ def extract_ib_farm_name(error_string):
 
 
 def build_farms_text(farms):
-    # Красиво собираем список farm в одну строку для логов.
     """Что делает: форматирует набор farm в строку для логов. Зачем нужна: health-сообщения должны быть компактными и читаемыми."""
     if not farms:
         return "-"
@@ -76,7 +66,6 @@ def build_farms_text(farms):
 
 
 def build_ib_health_text(ib_health):
-    # Строка со сводным состоянием здоровья соединения.
     """Что делает: собирает сводку health-флагов IB. Зачем нужна: используется в heartbeat и Telegram-status сообщениях."""
     return (
         f"ib_backend_ok={ib_health.ib_backend_ok}, "
@@ -88,9 +77,6 @@ def build_ib_health_text(ib_health):
 
 
 def reset_ib_health_for_new_connect(ib_health):
-    # При новом локальном подключении начинаем с "чистого" состояния.
-    # Если TWS во время синхронизации пришлёт системные коды проблем,
-    # обработчик errorEvent тут же обновит эти флаги и наборы farm.
     """Что делает: возвращает health-state в базовое состояние перед новым подключением. Зачем нужна: старые ошибки farm не должны автоматически переноситься на новое локальное соединение."""
     ib_health.ib_backend_ok = True
     ib_health.market_data_down_farms.clear()
@@ -98,11 +84,8 @@ def reset_ib_health_for_new_connect(ib_health):
 
 
 def register_ib_health_handlers(ib, ib_health):
-    # Подписываемся на системные сообщения TWS / IB Gateway.
-    # Через них будем поддерживать состояние backend, market data farm и HMDS.
     """Что делает: подписывает обработчик системных errorEvent IB и обновляет health-state. Зачем нужна: backend, market data и HMDS состояние приходят через системные коды TWS/Gateway."""
     def on_ib_error(req_id, error_code, error_string, contract):
-        # Сразу декодируем текст сообщения, чтобы в логах был нормальный русский текст.
         """Что делает: обрабатывает один системный errorEvent IB и обновляет соответствующие health-флаги. Зачем нужна: поддерживает актуальное состояние backend, market data farm и HMDS."""
         error_string = normalize_ib_message(error_string)
 

@@ -2,11 +2,6 @@ from core.time_utils import format_utc_ts
 
 
 def analyze_history_coverage(target_start_ts, target_end_ts, existing_min_ts, existing_max_ts, bar_size_seconds):
-    # Анализируем покрытие истории по конкретному контракту.
-    #
-    # В БД хранится время НАЧАЛА бара, а не его правой границы.
-    # Поэтому реальный хвост покрытия в БД:
-    # existing_max_ts + размер_бара.
     """Что делает: сравнивает целевой интервал истории с уже загруженными границами в БД. Зачем нужна: позволяет качать только недостающие head/tail участки, а не весь контракт заново."""
     if target_end_ts <= target_start_ts:
         raise ValueError("Целевой интервал истории должен быть положительным")

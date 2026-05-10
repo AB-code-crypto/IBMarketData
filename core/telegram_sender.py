@@ -10,7 +10,6 @@ TELEGRAM_REQUEST_TIMEOUT_SECONDS = 20
 
 class TelegramSender:
     def __init__(self, settings, robot_name: str):
-        # Имя робота/сервиса для маркировки Telegram-сообщений.
         """Что делает: создаёт отправитель Telegram-сообщений с настройками канала и хештегом сервиса. Зачем нужна: каждый сервис маркирует свои сообщения и использует общий Bot API-клиент."""
         self.robot_name = robot_name
         self.robot_hashtag = self._build_robot_hashtag(self.robot_name)
@@ -30,8 +29,6 @@ class TelegramSender:
         self.session = None
 
     def _build_robot_hashtag(self, robot_name):
-        # Превращаем имя робота в безопасный Telegram-хештег.
-        # Например: "ib_signal" -> "#ib_signal".
         """Что делает: превращает имя сервиса в безопасный Telegram-хештег. Зачем нужна: в общей группе можно фильтровать сообщения по сервису."""
         tag = str(robot_name).strip()
         if not tag:
@@ -44,8 +41,6 @@ class TelegramSender:
         return f"#{tag}"
 
     def _add_robot_hashtag(self, text):
-        # Каждое Telegram-сообщение помечаем хештегом робота,
-        # чтобы в общей группе было понятно, от какого сервиса пришло сообщение.
         """Что делает: добавляет хештег сервиса к тексту сообщения. Зачем нужна: все Telegram-уведомления получают единый источник."""
         text = str(text).strip()
         if not text:
@@ -57,13 +52,11 @@ class TelegramSender:
         return f"{self.robot_hashtag}\n{text}"
 
     async def close(self):
-        # Корректно закрываем HTTP-сессию при завершении программы.
         """Что делает: закрывает aiohttp-сессию TelegramSender. Зачем нужна: shutdown не должен оставлять открытые HTTP-ресурсы."""
         if self.session is not None and not self.session.closed:
             await self.session.close()
 
     async def _ensure_session(self):
-        # Если Telegram отключён в настройках, просто ничего не делаем.
         """Что делает: лениво создаёт aiohttp ClientSession или возвращает False при отключённом Telegram. Зачем нужна: sender не создаёт сетевые ресурсы, пока реально не отправляет сообщение."""
         if not self.enabled:
             return False
@@ -75,8 +68,6 @@ class TelegramSender:
         return True
 
     def _resolve_chat_id(self, chat_id):
-        # Если chat_id явно передан в вызове, используем его.
-        # Иначе отправляем в группу или канал по умолчанию.
         """Что делает: выбирает явный chat_id или технический chat_id по умолчанию. Зачем нужна: штатные логи идут в общий канал, но вызов может переопределить адресата."""
         if chat_id is not None and str(chat_id).strip() != "":
             return str(chat_id)
@@ -84,8 +75,6 @@ class TelegramSender:
         return str(self.default_chat_id)
 
     def _resolve_message_thread_id(self, message_thread_id):
-        # Если тема явно передана в вызове, используем её.
-        # Иначе используем техническую тему по умолчанию из настроек.
         """Что делает: выбирает явную тему Telegram или тему по умолчанию. Зачем нужна: сообщения можно направлять в конкретный thread группы."""
         if message_thread_id is None:
             message_thread_id = self.default_message_thread_id
@@ -97,9 +86,6 @@ class TelegramSender:
         return int(message_thread_id)
 
     def _split_text(self, text, limit):
-        # Разрезаем длинный текст на части не длиннее limit.
-        # Стараемся резать по переводу строки, потом по пробелу.
-        # Если не получилось, режем жёстко по limit.
         """Что делает: режет длинный текст на куски под лимит Telegram. Зачем нужна: большие traceback/status сообщения не должны теряться из-за лимита Bot API."""
         text = str(text).replace("\r\n", "\n").strip()
         if not text:
@@ -125,9 +111,6 @@ class TelegramSender:
         return chunks
 
     async def _post_json(self, method, payload):
-        # Делаем JSON POST в Bot API.
-        # Если Telegram вернул ошибку, возвращаем False.
-        # Логировать здесь нельзя: иначе при проблеме Telegram можно получить цикл логирования.
         """Что делает: отправляет JSON-запрос в Bot API и возвращает успех без исключений наружу. Зачем нужна: проблема Telegram не должна валить торговый сервис."""
         if not await self._ensure_session():
             return False
@@ -153,9 +136,6 @@ class TelegramSender:
             return False
 
     async def send_text(self, text, chat_id=None, message_thread_id=None):
-        # Отправка обычного текста.
-        # chat_id и message_thread_id можно передать явно,
-        # но для штатных логов используются значения из настроек.
         """Что делает: отправляет текстовое сообщение, добавляет хештег и режет длинные тексты. Зачем нужна: это публичный метод отправки Telegram-уведомлений сервисов."""
         resolved_chat_id = self._resolve_chat_id(chat_id)
         resolved_message_thread_id = self._resolve_message_thread_id(message_thread_id)

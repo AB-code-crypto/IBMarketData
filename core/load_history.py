@@ -34,11 +34,6 @@ logger = get_logger(__name__)
 
 
 def get_instrument_configured_start_ts(instrument_row, current_aligned_ts):
-    # Возвращает левую границу истории, заданную на уровне инструмента.
-    #
-    # history_start_utc имеет приоритет над history_lookback_days.
-    # Для новых инструментов удобнее задавать lookback, чтобы не тянуть историю
-    # глубже лимитов IB и не запускать многодневную initial load.
     """Что делает: выбирает левую границу истории из history_start_utc или history_lookback_days. Зачем нужна: разные инструменты могут иметь фиксированную дату старта или ограниченную глубину загрузки."""
     history_start_utc = instrument_row.get("history_start_utc")
     if history_start_utc:
@@ -63,9 +58,6 @@ async def process_instrument_history_target(
         target_start_ts,
         target_end_ts,
 ):
-    # Общая обработка одного целевого интервала истории.
-    # Для FUT это интервал конкретного фьючерсного контракта.
-    # Для CASH/CRYPTO это интервал самого логического инструмента.
     """Что делает: анализирует покрытие одного целевого интервала и докачивает недостающие сегменты. Зачем нужна: единая логика загрузки для FUT-контрактов и single-contract инструментов."""
     if target_end_ts <= target_start_ts:
         log_info(
@@ -169,7 +161,6 @@ async def process_futures_contract(
         contract_row,
         current_aligned_ts,
 ):
-    # Обработка одного фьючерсного контракта из сшиваемого ряда.
     """Что делает: готовит целевой интервал одного фьючерсного контракта и запускает загрузку. Зачем нужна: сшитый futures-инструмент состоит из нескольких active-окон контрактов."""
     contract = build_instrument_contract(
         instrument_code=instrument_code,
@@ -229,7 +220,6 @@ async def process_single_contract_instrument(
         instrument_row,
         current_aligned_ts,
 ):
-    # Обработка инструмента без фьючерсного rollover: CASH или CRYPTO.
     """Что делает: обрабатывает CASH/CRYPTO инструмент как один контракт без rollover. Зачем нужна: FX/crypto не требуют перебора квартальных контрактов."""
     contract = build_instrument_contract(
         instrument_code=instrument_code,
@@ -273,7 +263,6 @@ async def process_instrument_history(
         instrument_code,
         instrument_row,
 ):
-    # Обрабатываем историю одного инструмента.
     """Что делает: обрабатывает историю одного логического инструмента по его secType. Зачем нужна: run_market_data вызывает эту функцию перед запуском realtime по инструменту."""
     db_path = get_instrument_db_path(settings, instrument_code, instrument_row)
     table_name = get_instrument_table_name(instrument_code, instrument_row)

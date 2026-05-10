@@ -75,10 +75,6 @@ def get_contract_row_by_local_symbol(instrument_row, local_symbol):
 
 
 def get_contract_storage_name(instrument_code, instrument_row, contract_row=None):
-    # Значение, которое пишется в поле contract в SQLite.
-    #
-    # Для фьючерсов это конкретный localSymbol, чтобы видеть сшивку.
-    # Для CASH/CRYPTO квартальных контрактов нет, поэтому пишем код инструмента.
     """Что делает: выбирает значение поля contract для записи в price DB. Зачем нужна: FUT хранит localSymbol для сшивки, а CASH/CRYPTO хранят логический инструмент."""
     if instrument_row["secType"] == "FUT":
         if contract_row is None:

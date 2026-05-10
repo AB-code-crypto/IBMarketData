@@ -7,10 +7,6 @@ logger = get_logger(__name__)
 
 
 def parse_server_time_text(server_time_text):
-    # Разбираем время сервера IB в UTC.
-    #
-    # Ожидаем строку в формате из get_ib_server_time_text:
-    # YYYY-MM-DD HH:MM:SS
     """Что делает: преобразует строку server time от IB в UTC datetime. Зачем нужна: даёт единый формат времени для выбора активного фьючерсного контракта."""
     dt = datetime.strptime(server_time_text, "%Y-%m-%d %H:%M:%S")
     dt = dt.replace(tzinfo=timezone.utc)
@@ -18,10 +14,6 @@ def parse_server_time_text(server_time_text):
 
 
 def parse_contract_utc_text(utc_text):
-    # Разбираем UTC-время контракта из contracts.py.
-    #
-    # В реестре контрактов время хранится в ISO-формате:
-    # YYYY-MM-DDTHH:MM:SSZ
     """Что делает: преобразует ISO-время из contracts.py в UTC datetime. Зачем нужна: позволяет сравнивать active_from_utc/active_to_utc с текущим временем IB."""
     dt = datetime.strptime(utc_text, "%Y-%m-%dT%H:%M:%SZ")
     dt = dt.replace(tzinfo=timezone.utc)
@@ -29,7 +21,6 @@ def parse_contract_utc_text(utc_text):
 
 
 def get_active_futures_local_symbol(instrument_code, instrument_row, current_utc, server_time_text):
-    # Возвращает localSymbol активного фьючерсного контракта.
     """Что делает: ищет localSymbol фьючерсного контракта, активного на текущий момент. Зачем нужна: realtime должен подписываться на конкретный квартальный контракт, а не на логический инструмент."""
     for contract_row in instrument_row["contracts"]:
         active_from_utc = parse_contract_utc_text(contract_row["active_from_utc"])
@@ -45,10 +36,6 @@ def get_active_futures_local_symbol(instrument_code, instrument_row, current_utc
 
 
 def build_active_instruments(server_time_text):
-    # Возвращает словарь активных инструментов для realtime.
-    #
-    # Для FUT значение — localSymbol текущего активного фьючерса.
-    # Для CASH/CRYPTO значение — сам код инструмента, потому что rollover отсутствует.
     """Что делает: строит словарь активных realtime-инструментов на момент старта сервиса. Зачем нужна: фиксирует стартовый набор подписок и не подхватывает изменения contracts.py на лету."""
     current_utc = parse_server_time_text(server_time_text)
     active_instruments = {}

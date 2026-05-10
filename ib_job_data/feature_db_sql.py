@@ -2,7 +2,6 @@ MID_PRICE_TABLE_NAME = "mid_price_5s"
 
 
 def create_mid_price_table_sql() -> str:
-    # Таблица подготовленных mid/spread-цен для job-data сервиса и тестера.
     """Что делает: возвращает SQL создания таблицы mid_price_5s. Зачем нужна: job DB хранит подготовленные mid/spread OHLC для signal и tester."""
     return f"""
     CREATE TABLE IF NOT EXISTS {quote_identifier(MID_PRICE_TABLE_NAME)} (
@@ -31,11 +30,6 @@ def insert_mid_price_from_attached_price_db_sql(
         price_digits: int,
         mid_price_digits: int,
 ) -> str:
-    # Полностью заполняет mid_price_5s из attached price DB.
-    #
-    # mid_* округляем по mid_price_digits, потому что там есть деление на 2.
-    # spread_* округляем по price_digits, потому что spread — это разница цен
-    # в той же исходной разрядности.
     """Что делает: возвращает SQL полной загрузки mid/spread из attached price DB. Зачем нужна: rebuild job DB пересоздаёт весь рабочий набор признаков одним INSERT SELECT."""
     price_digits = int(price_digits)
     mid_price_digits = int(mid_price_digits)
@@ -98,14 +92,6 @@ def insert_new_mid_price_from_attached_price_db_sql(
         price_digits: int,
         mid_price_digits: int,
 ) -> str:
-    # Инкрементально дописывает новые mid/spread-строки из attached price DB.
-    #
-    # Граница берётся из параметра SQL:
-    #     bar_time_ts > ?
-    #
-    # Вставляем только полностью валидные строки, где есть весь BID/ASK OHLC.
-    # Если realtime успел записать только BID или только ASK, строка будет
-    # пропущена и попадёт в job DB на следующем проходе.
     """Что делает: возвращает SQL инкрементальной вставки новых mid/spread строк. Зачем нужна: live job-data обновляет только бары новее последнего рассчитанного."""
     price_digits = int(price_digits)
     mid_price_digits = int(mid_price_digits)
@@ -163,6 +149,5 @@ def insert_new_mid_price_from_attached_price_db_sql(
 
 
 def quote_identifier(value: str) -> str:
-    # Безопасно экранирует имя таблицы/схемы SQLite.
     """Что делает: экранирует SQLite identifier двойными кавычками. Зачем нужна: имена таблиц и схем безопасно вставляются в SQL."""
     return '"' + str(value).replace('"', '""') + '"'
