@@ -1,5 +1,6 @@
 import asyncio
 import traceback
+from dataclasses import replace
 
 from config import settings_live as app_settings
 from core.instrument_filters import get_live_enabled_instrument_codes
@@ -62,7 +63,9 @@ async def main() -> None:
             )
             return
 
-        signal_settings = DEFAULT_SIGNAL_SETTINGS
+        signal_settings = DEFAULT_SIGNAL_SETTINGS  # Блок ниже нужен также только для отладки
+        # signal_settings = replace(DEFAULT_SIGNAL_SETTINGS,max_job_bar_lag_seconds=10 ** 9,)
+
         await send_service_message(format_signal_settings(signal_settings))
 
         log_info(
@@ -75,6 +78,11 @@ async def main() -> None:
             instrument_codes=instrument_codes,
             settings=signal_settings,
         )
+
+        # DEBUG: временная заглушка для пошаговой отладки run_signal_loop().
+        # Обходит ожидание готовности всех job DB и запускает loop только по выбранным инструментам.
+        # После отладки удалить и вернуть wait_for_job_dbs().
+        # ready_instrument_codes = ["MNQ"]
 
         await run_signal_loop(
             instrument_codes=ready_instrument_codes,
