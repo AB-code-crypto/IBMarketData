@@ -27,8 +27,8 @@ FUT_DEFAULTS: InstrumentRow = {
 }
 
 FX_DEFAULTS: InstrumentRow = {
-    "history_enabled": False,
-    "realtime_enabled": False,
+    "history_enabled": True,
+    "realtime_enabled": True,
     "secType": "CASH",
     "exchange": "IDEALPRO",
     "barSizeSetting": "5 secs",
@@ -111,6 +111,7 @@ Instrument: Registry = {
     "MES": {
         **FUT_DEFAULTS,
         "history_enabled": True,
+        "realtime_enabled": True,
         "tradingClass": "MES",
         "multiplier": 5.0,
         "db_filename": "MES.sqlite3",
