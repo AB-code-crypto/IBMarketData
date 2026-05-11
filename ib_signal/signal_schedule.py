@@ -10,7 +10,8 @@ def get_rolling_due_bar_ts(
     current_bar_ts: int,
     step_seconds: int,
 ) -> int:
-    """Что делает: возвращает последнюю ROLLING-точку, покрытую job DB. Зачем нужна: сигнал не пропускается, если latest job bar ушёл чуть дальше минутной границы."""
+    """Что делает: возвращает последнюю ROLLING-точку, покрытую job DB.
+    Зачем нужна: сигнал не пропускается, если latest job bar ушёл чуть дальше минутной границы."""
     if step_seconds <= 0:
         raise ValueError(f"step_seconds должен быть > 0, получено: {step_seconds}")
 
@@ -18,7 +19,8 @@ def get_rolling_due_bar_ts(
 
 
 def get_unix_day_start_ts(timestamp: int) -> int:
-    """Что делает: считает начало Unix-дня для timestamp. Зачем нужна: GRID-сетка ежедневно переякоривается от дневного старта."""
+    """Что делает: считает начало Unix-дня для timestamp.
+     Зачем нужна: GRID-сетка ежедневно переякоривается от дневного старта."""
     return timestamp - (timestamp % SECONDS_PER_DAY)
 
 
@@ -27,7 +29,8 @@ def get_grid_day_anchor_ts(
     current_bar_ts: int,
     slot_start_minute_of_day: int,
 ) -> int:
-    """Что делает: строит дневной anchor GRID-сетки с учётом slot_start_minute_of_day. Зачем нужна: слоты не зависят от времени запуска сервиса."""
+    """Что делает: строит дневной anchor GRID-сетки с учётом slot_start_minute_of_day.
+    Зачем нужна: слоты не зависят от времени запуска сервиса."""
     if slot_start_minute_of_day < 0 or slot_start_minute_of_day >= 24 * 60:
         raise ValueError(
             "slot_start_minute_of_day должен быть в диапазоне [0, 1440), "
@@ -49,7 +52,8 @@ def get_grid_slot_start_ts(
     slot_step_minutes: int,
     slot_start_minute_of_day: int,
 ) -> int:
-    """Что делает: определяет старт текущего GRID-слота. Зачем нужна: дальше от него считаются анализируемый участок и окно расчёта сигналов."""
+    """Что делает: определяет старт текущего GRID-слота.
+    Зачем нужна: дальше от него считаются анализируемый участок и окно расчёта сигналов."""
     if slot_step_minutes <= 0:
         raise ValueError(
             f"slot_step_minutes должен быть > 0, получено: {slot_step_minutes}"
@@ -76,7 +80,8 @@ def get_grid_due_bar_ts(
     slot_back_minutes: int,
     slot_close_before_end_seconds: int,
 ) -> int | None:
-    """Что делает: возвращает последнюю допустимую GRID-точку расчёта, покрытую job DB. Зачем нужна: signal-сервис считает по сетке после back-участка и до close-before-end границы."""
+    """Что делает: возвращает последнюю допустимую GRID-точку расчёта, покрытую job DB.
+    Зачем нужна: signal-сервис считает по сетке после back-участка и до close-before-end границы."""
     if slot_signal_step_seconds <= 0:
         raise ValueError(
             "slot_signal_step_seconds должен быть > 0, "
@@ -134,7 +139,8 @@ def get_due_signal_bar_ts(
     settings: SignalSettings,
     last_calculated_bar_ts: int | None,
 ) -> int | None:
-    """Что делает: выбирает due signal_bar_ts для ROLLING или GRID и отсекает уже рассчитанный бар. Зачем нужна: signal-runner получает конкретный timestamp расчёта, а не просто True/False."""
+    """Что делает: выбирает due signal_bar_ts для ROLLING или GRID и отсекает уже рассчитанный бар.
+    Зачем нужна: signal-runner получает конкретный timestamp расчёта, а не просто True/False."""
     if settings.signal_window_mode == SignalWindowMode.ROLLING:
         due_bar_ts = get_rolling_due_bar_ts(
             current_bar_ts=current_bar_ts,

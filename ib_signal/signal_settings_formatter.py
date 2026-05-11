@@ -3,7 +3,8 @@ from ib_signal.signal_settings import SignalSettings
 
 
 def format_signal_settings(settings: SignalSettings) -> str:
-    """Что делает: собирает текст активных signal-настроек. Зачем нужна: при старте сервиса Telegram получает только реально используемый режим и параметры Pearson."""
+    """Что делает: собирает текст активных signal-настроек.
+    Зачем нужна: при старте сервиса Telegram получает только реально используемый режим и параметры Pearson."""
     history_lookback_days_text = (
         "all"
         if settings.history_lookback_days is None
