@@ -1,4 +1,5 @@
 import asyncio
+import time
 import traceback
 from pathlib import Path
 
@@ -63,42 +64,6 @@ def rebuild_job_db(instrument_code: str) -> None:
     rebuild_instrument_mid_price_features(instrument_code)
 
 
-async def wait_for_ready_instruments(instrument_codes: list[str]) -> list[str]:
-    """Что делает: ждёт, пока market-data сервис отметит инструменты готовыми для job-data. Зачем нужна: не даёт пересобирать job DB до завершения history/realtime подготовки."""
-    pending = set(instrument_codes)
-    ready = []
-
-    log_info(
-        logger,
-        f"Job-data сервис ждёт готовности инструментов от run_market_data: {sorted(pending)}",
-        to_telegram=True,
-    )
-
-    while pending:
-        for instrument_code in list(pending):
-            if not is_signal_ready(instrument_code):
-                continue
-
-            log_info(
-                logger,
-                f"{instrument_code}: Job DB стала доступна для подготовки рабочих данных",
-                to_telegram=True,
-            )
-            ready.append(instrument_code)
-            pending.remove(instrument_code)
-
-        if pending:
-            # В консоль пишем текущее ожидание, в Telegram не спамим.
-            log_info(
-                logger,
-                f"Job DB пока не готовы: {sorted(pending)}",
-                to_telegram=False,
-            )
-            await asyncio.sleep(READY_WAIT_SECONDS)
-
-    return ready
-
-
 def update_job_dbs_once(instrument_codes: list[str]) -> None:
     """Что делает: один раз дописывает новые mid/spread-строки по всем готовым инструментам. Зачем нужна: выполняет инкрементальное обновление job DB в основном цикле."""
     for instrument_code in instrument_codes:
@@ -121,17 +86,72 @@ def update_job_dbs_once(instrument_codes: list[str]) -> None:
             )
 
 
-async def run_job_db_update_loop(instrument_codes: list[str]) -> None:
-    """Что делает: постоянно запускает инкрементальное обновление job DB с заданным интервалом. Зачем нужна: поддерживает рабочие данные signal-сервиса в актуальном состоянии."""
+async def run_job_data_loop(instrument_codes: list[str]) -> None:
+    """Что делает: ждёт готовность инструментов, пересоздаёт их job DB по мере готовности и постоянно обновляет уже активные DB. Зачем нужна: один зависший инструмент не должен блокировать job-data по остальным."""
+    pending = set(instrument_codes)
+    active_instrument_codes: list[str] = []
+    all_ready_logged = False
+    next_pending_log_monotonic = 0.0
+
     log_info(
         logger,
-        f"Запускаю обновление job DB для инструментов: {instrument_codes}",
+        f"Job-data сервис ждёт готовности инструментов от run_market_data: {sorted(pending)}",
         to_telegram=True,
     )
 
     while True:
-        update_job_dbs_once(instrument_codes)
-        await asyncio.sleep(JOB_DB_UPDATE_INTERVAL_SECONDS)
+        for instrument_code in list(pending):
+            if not is_signal_ready(instrument_code):
+                continue
+
+            log_info(
+                logger,
+                f"{instrument_code}: инструмент готов для подготовки Job DB",
+                to_telegram=True,
+            )
+
+            try:
+                rebuild_job_db(instrument_code)
+            except Exception as exc:
+                log_warning(
+                    logger,
+                    f"{instrument_code}: ошибка пересоздания Job DB: {exc}\n"
+                    f"{traceback.format_exc()}",
+                    to_telegram=True,
+                )
+                continue
+
+            active_instrument_codes.append(instrument_code)
+            pending.remove(instrument_code)
+
+        if active_instrument_codes:
+            update_job_dbs_once(active_instrument_codes)
+
+        if pending:
+            now_monotonic = time.monotonic()
+            if now_monotonic >= next_pending_log_monotonic:
+                log_info(
+                    logger,
+                    f"Job DB пока не готовы: {sorted(pending)}. "
+                    f"Уже обновляются: {active_instrument_codes}",
+                    to_telegram=False,
+                )
+                next_pending_log_monotonic = now_monotonic + READY_WAIT_SECONDS
+
+        elif not all_ready_logged:
+            log_info(
+                logger,
+                f"Все Job DB пересозданы и обновляются: {active_instrument_codes}",
+                to_telegram=True,
+            )
+            all_ready_logged = True
+
+        sleep_seconds = (
+            JOB_DB_UPDATE_INTERVAL_SECONDS
+            if active_instrument_codes
+            else READY_WAIT_SECONDS
+        )
+        await asyncio.sleep(sleep_seconds)
 
 
 async def shutdown_app(shutdown_message: str) -> None:
@@ -148,7 +168,7 @@ async def shutdown_app(shutdown_message: str) -> None:
 
 
 async def main() -> None:
-    """Что делает: запускает job-data сервис, ждёт готовые инструменты, пересобирает job DB и входит в update-loop. Зачем нужна: является async entrypoint для run_job_data.py."""
+    """Что делает: запускает job-data сервис, выбирает live-инструменты и входит в цикл подготовки/обновления job DB. Зачем нужна: является async entrypoint для run_job_data.py."""
     shutdown_message = "\n===========\nСтоп job-data сервиса.\n===========\n"
 
     try:
@@ -179,21 +199,7 @@ async def main() -> None:
             to_telegram=True,
         )
 
-        ready_instrument_codes = await wait_for_ready_instruments(instrument_codes)
-
-        for instrument_code in ready_instrument_codes:
-            rebuild_job_db(instrument_code)
-
-        log_info(
-            logger,
-            f"Все Job DB пересозданы: {ready_instrument_codes}",
-            to_telegram=True,
-        )
-
-        # Перед входом в основной цикл сразу один раз догоняем job DB.
-        update_job_dbs_once(ready_instrument_codes)
-
-        await run_job_db_update_loop(ready_instrument_codes)
+        await run_job_data_loop(instrument_codes)
 
     except asyncio.CancelledError:
         shutdown_message = "===========\nСтоп job-data сервиса: остановлен пользователем\n==========="

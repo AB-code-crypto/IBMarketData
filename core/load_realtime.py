@@ -209,13 +209,18 @@ def maybe_start_recent_backfill_task(
         bar_time_ts,
 ):
     """Что делает: отслеживает первый синхронный BID/ASK realtime-бар и запускает разовый recent-backfill. Зачем нужна: закрывает свежий час истории между последним historical load и стартом realtime."""
+    if recent_backfill_state.last_backfill_completed_sync_ts is not None:
+        return
+
+    backfill_task = recent_backfill_state.backfill_task
+    if backfill_task is not None and not backfill_task.done():
+        return
+
     if what_to_show == "BID":
-        if recent_backfill_state.first_bid_ts is None:
-            recent_backfill_state.first_bid_ts = bar_time_ts
+        recent_backfill_state.first_bid_ts = bar_time_ts
 
     elif what_to_show == "ASK":
-        if recent_backfill_state.first_ask_ts is None:
-            recent_backfill_state.first_ask_ts = bar_time_ts
+        recent_backfill_state.first_ask_ts = bar_time_ts
 
     else:
         raise ValueError(f"Неподдерживаемый realtime stream: {what_to_show}")
@@ -230,13 +235,6 @@ def maybe_start_recent_backfill_task(
         return
 
     sync_ts = first_bid_ts
-
-    if recent_backfill_state.last_backfill_completed_sync_ts == sync_ts:
-        return
-
-    backfill_task = recent_backfill_state.backfill_task
-    if backfill_task is not None and not backfill_task.done():
-        return
 
     mark_first_synced_bid_ask(instrument_code, sync_ts)
 
