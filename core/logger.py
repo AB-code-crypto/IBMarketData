@@ -37,7 +37,7 @@ def setup_logging():
     # дата-время | уровень | модуль.функция:строка | сообщение
     formatter = logging.Formatter(
         fmt="%(asctime)s | %(levelname)s | %(module)s.%(funcName)s:%(lineno)d | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+        datefmt="%H:%M:%S",
     )
 
     handler.setFormatter(formatter)
