@@ -5,7 +5,10 @@ import numpy as np
 
 NumberSeries: TypeAlias = Sequence[int | float] | np.ndarray
 
-__all__ = ["calculate_centered_pearson"]
+__all__ = [
+    "calculate_centered_pearson",
+    "calculate_centered_pearson_batch",
+]
 
 
 def calculate_centered_pearson(
@@ -42,6 +45,50 @@ def calculate_centered_pearson(
         return 0.0
 
     return float(np.dot(centered_left, centered_right) / denominator)
+
+
+def calculate_centered_pearson_batch(
+        reference_values: NumberSeries,
+        candidate_matrix: np.ndarray,
+) -> np.ndarray:
+    """Что делает: считает Pearson между одним reference-паттерном и матрицей candidate-паттернов.
+    Зачем нужна: signal-сервис должен считать корреляции по всем кандидатам одним NumPy-проходом."""
+    reference_array = np.asarray(reference_values, dtype=float)
+    matrix = np.asarray(candidate_matrix, dtype=float)
+
+    if reference_array.ndim != 1:
+        raise ValueError("reference_values должен быть одномерным рядом")
+
+    if matrix.ndim != 2:
+        raise ValueError("candidate_matrix должна быть двумерной матрицей")
+
+    if matrix.shape[1] != reference_array.size:
+        raise ValueError(
+            "Длина candidate-паттернов должна совпадать с reference: "
+            f"matrix_columns={matrix.shape[1]}, reference={reference_array.size}"
+        )
+
+    if reference_array.size < 2:
+        raise ValueError("Для расчёта Pearson нужно минимум две точки")
+
+    if matrix.shape[0] == 0:
+        return np.empty((0,), dtype=float)
+
+    centered_reference = reference_array - reference_array.mean()
+    centered_matrix = matrix - matrix.mean(axis=1, keepdims=True)
+
+    numerator = centered_matrix @ centered_reference
+    denominator = (
+        np.linalg.norm(centered_matrix, axis=1)
+        * np.linalg.norm(centered_reference)
+    )
+
+    return np.divide(
+        numerator,
+        denominator,
+        out=np.zeros_like(numerator, dtype=float),
+        where=denominator != 0.0,
+    )
 
 
 if __name__ == "__main__":

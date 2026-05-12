@@ -6,7 +6,9 @@ from core.logger import get_logger, log_info, setup_logging
 from ib_signal.job_reader import get_fresh_job_bar_status, read_job_bar_time_ct
 from ib_signal.signal_schedule import get_due_signal_bar_ts
 from ib_signal.signal_config import SignalConfig
+from ib_signal.pearson import calculate_centered_pearson_batch
 from ib_signal.signal_candidates import find_candidate_windows, format_candidate_search_result
+from ib_signal.signal_pattern_matrix import build_pattern_matrix, format_pattern_matrix_result
 from ib_signal.signal_window import build_current_signal_window, format_signal_window_for_log
 
 setup_logging()
@@ -183,6 +185,25 @@ async def run_signal_loop(
                 settings=settings,
             )
 
+            pattern_matrix_result = build_pattern_matrix(
+                instrument_code=instrument_code,
+                window=signal_window,
+                candidates=candidate_search_result.candidates,
+                price_source=settings.price_source,
+            )
+
+            pearson_scores = calculate_centered_pearson_batch(
+                pattern_matrix_result.current_values,
+                pattern_matrix_result.candidate_matrix,
+            )
+
+            pearson_passed_count = int((pearson_scores >= settings.pearson_min).sum())
+            best_pearson = (
+                float(pearson_scores.max())
+                if pearson_scores.size > 0
+                else 0.0
+            )
+
             last_calculated_ts_by_instrument[instrument_code] = due_signal_bar_ts
 
             window_text = format_signal_window_for_log(
@@ -190,13 +211,17 @@ async def run_signal_loop(
                 lambda ts: read_job_bar_time_ct(instrument_code, ts),
             )
             candidate_text = format_candidate_search_result(candidate_search_result)
+            matrix_text = format_pattern_matrix_result(pattern_matrix_result)
 
             log_info(
                 logger,
                 f"{instrument_code}: пора считать сигнал, "
                 f"latest_job_row={status.last_bar_time_ct} CT, "
                 f"window={window_text}, "
-                f"candidate_search={candidate_text}",
+                f"candidate_search={candidate_text}, "
+                f"pattern_matrix={matrix_text}, "
+                f"pearson_best={best_pearson:.6f}, "
+                f"pearson_passed={pearson_passed_count}",
                 to_telegram=False,
             )
 
