@@ -1,5 +1,7 @@
 import asyncio
 
+from contracts import Instrument
+from core.bar_utils import get_bar_size_seconds
 from core.logger import get_logger, log_info, setup_logging
 from ib_signal.job_reader import get_fresh_job_bar_status, read_job_bar_time_ct
 from ib_signal.signal_schedule import get_due_signal_bar_ts
@@ -120,9 +122,15 @@ async def run_signal_loop(
             if current_last_ts is None:
                 continue
 
+            # bar_time_ts в job DB — это время начала бара.
+            # Точка принятия решения должна быть на границе закрытия этого бара.
+            # Размер бара берём из contracts.py, а не дублируем в signal config.
+            bar_size_seconds = get_bar_size_seconds(Instrument[instrument_code]["barSizeSetting"])
+            closed_bar_ts = current_last_ts + bar_size_seconds
+
             # due_signal_bar_ts - реальная точка принятия решения, для которой надо считать сигнал.
             due_signal_bar_ts = get_due_signal_bar_ts(
-                current_bar_ts=current_last_ts,
+                current_bar_ts=closed_bar_ts,
                 settings=settings,
                 last_calculated_bar_ts=last_calculated_ts_by_instrument[instrument_code],
             )
@@ -168,7 +176,7 @@ async def run_signal_loop(
             log_info(
                 logger,
                 f"{instrument_code}: пора считать сигнал, "
-                f"latest_job_bar={status.last_bar_time_ct} CT, "
+                f"latest_job_row={status.last_bar_time_ct} CT, "
                 f"window={window_text}",
                 to_telegram=False,
             )
