@@ -13,7 +13,7 @@ from core.logger import (
     wait_telegram_logging,
 )
 from core.telegram_sender import TelegramSender
-from ib_signal.signal_runner import run_signal_loop, wait_for_job_dbs
+from ib_signal.signal_runner import run_signal_loop, wait_for_fresh_job_bars
 from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG
 from ib_signal.signal_config_formatter import format_signal_config
 
@@ -74,7 +74,7 @@ async def main() -> None:
             to_telegram=False,
         )
 
-        ready_instrument_codes = await wait_for_job_dbs(
+        ready_instrument_codes = await wait_for_fresh_job_bars(
             instrument_codes=instrument_codes,
             settings=signal_config,
         )
