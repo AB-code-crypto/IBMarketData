@@ -63,6 +63,7 @@ async def main() -> None:
             return
 
         signal_config = DEFAULT_SIGNAL_CONFIG  # Блок ниже нужен также только для отладки
+        # from dataclasses import replace
         # signal_config = replace(DEFAULT_SIGNAL_CONFIG,max_job_bar_lag_seconds=10 ** 9,)
 
         await send_service_message(format_signal_config(signal_config))

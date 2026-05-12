@@ -1,8 +1,7 @@
 from dataclasses import dataclass
 
-from ib_signal.signal_config import SignalWindowMode
+from ib_signal.signal_config import SignalConfig, SignalWindowMode
 from ib_signal.signal_schedule import get_grid_slot_start_ts
-from ib_signal.signal_config import SignalConfig
 
 SECONDS_PER_MINUTE = 60
 
@@ -57,7 +56,8 @@ def build_rolling_signal_window(
     signal_bar_ts: int,
     settings: SignalConfig,
 ) -> SignalWindow:
-    """Что делает: строит ROLLING-окно анализа и future/trade-окно от signal_bar_ts. Зачем нужна: ROLLING-кандидаты должны иметь ту же длину паттерна и ту же точку принятия решения."""
+    """Что делает: строит ROLLING-окно анализа и future/trade-окно от signal_bar_ts.
+    Зачем нужна: ROLLING-кандидаты должны иметь ту же длину паттерна и ту же точку принятия решения."""
     pattern_seconds = settings.rolling_back_minutes * SECONDS_PER_MINUTE
     trade_seconds = settings.rolling_trade_minutes * SECONDS_PER_MINUTE
 
@@ -80,7 +80,8 @@ def build_grid_signal_window(
     signal_bar_ts: int,
     settings: SignalConfig,
 ) -> SignalWindow:
-    """Что делает: строит GRID-окно анализа от старта слота до signal_bar_ts и future/trade-окно до конца слота. Зачем нужна: GRID-кандидаты должны иметь такой же offset внутри своего исторического слота."""
+    """Что делает: строит GRID-окно анализа от старта слота до signal_bar_ts и future/trade-окно до конца слота.
+    Зачем нужна: GRID-кандидаты должны иметь такой же offset внутри своего исторического слота."""
     slot_start_ts = get_grid_slot_start_ts(
         current_bar_ts=signal_bar_ts,
         slot_step_minutes=settings.slot_step_minutes,
@@ -116,7 +117,8 @@ def build_current_signal_window(
     signal_bar_ts: int,
     settings: SignalConfig,
 ) -> SignalWindow:
-    """Что делает: выбирает построение окна по активному режиму ROLLING или GRID. Зачем нужна: signal-runner и будущий candidate search получают один объект с границами расчёта."""
+    """Что делает: выбирает построение окна по активному режиму ROLLING или GRID.
+    Зачем нужна: signal-runner и будущий candidate search получают один объект с границами расчёта."""
     if settings.signal_window_mode == SignalWindowMode.ROLLING:
         return build_rolling_signal_window(
             signal_bar_ts=signal_bar_ts,
@@ -135,7 +137,8 @@ def build_current_signal_window(
 
 
 def format_signal_window(window: SignalWindow) -> str:
-    """Что делает: форматирует SignalWindow в компактную строку лога. Зачем нужна: при отладке видно, какой pattern/trade интервал будет использовать расчёт."""
+    """Что делает: форматирует SignalWindow в компактную строку лога.
+    Зачем нужна: при отладке видно, какой pattern/trade интервал будет использовать расчёт."""
     return (
         f"pattern=[{window.pattern_start_ts}, {window.pattern_end_ts}], "
         f"pattern_seconds={window.pattern_seconds}, "
