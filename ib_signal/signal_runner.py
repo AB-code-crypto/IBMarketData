@@ -25,8 +25,8 @@ def format_fresh_job_bar_status(status) -> str:
 
 
 async def wait_for_fresh_job_bars(
-    instrument_codes: list[str],
-    settings: SignalConfig,
+        instrument_codes: list[str],
+        settings: SignalConfig,
 ) -> list[str]:
     """Что делает: ждёт свежий последний job-бар по каждому instrument_code.
     Зачем нужна: signal-сервис стартует расчёт только после того, как job-data начал обновлять рабочие данные."""
@@ -71,11 +71,13 @@ async def wait_for_fresh_job_bars(
 
 
 async def run_signal_loop(
-    instrument_codes: list[str],
-    settings: SignalConfig,
+        instrument_codes: list[str],
+        settings: SignalConfig,
 ) -> None:
     """Что делает: отслеживает новые job-бары и определяет due signal_bar_ts по активному режиму.
     Зачем нужна: это основной runtime-цикл signal-сервиса, пока без фактического расчёта сигнала."""
+
+    # last_seen_ts_by_instrument - память для логирования появления нового job-бара.
     last_seen_ts_by_instrument: dict[str, int | None] = {
         instrument_code: None
         for instrument_code in instrument_codes
@@ -95,6 +97,7 @@ async def run_signal_loop(
 
     while True:
         for instrument_code in instrument_codes:
+            # status - лёгкая проверка свежести job DB
             status = get_fresh_job_bar_status(
                 instrument_code=instrument_code,
                 max_job_bar_lag_seconds=settings.max_job_bar_lag_seconds,
@@ -109,7 +112,9 @@ async def run_signal_loop(
                 )
                 continue
 
+            # current_last_ts - последний доступный bar_time_ts в job DB.
             current_last_ts = status.last_bar_time_ts
+            # previous_last_ts - просто прошлое значение current_last_ts для логирования
             previous_last_ts = last_seen_ts_by_instrument[instrument_code]
 
             if current_last_ts is None:
@@ -131,6 +136,7 @@ async def run_signal_loop(
                     to_telegram=False,
                 )
 
+            # due_signal_bar_ts - реальная точка принятия решения, для которой надо считать сигнал.
             due_signal_bar_ts = get_due_signal_bar_ts(
                 current_bar_ts=current_last_ts,
                 settings=settings,
@@ -140,6 +146,7 @@ async def run_signal_loop(
             if due_signal_bar_ts is None:
                 continue
 
+            # signal_window - объект с границами. Он нужен как вход в следующий слой: сбор текущего паттерна, поиск кандидатов,
             signal_window = build_current_signal_window(
                 signal_bar_ts=due_signal_bar_ts,
                 settings=settings,
