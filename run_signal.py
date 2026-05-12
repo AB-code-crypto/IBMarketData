@@ -1,6 +1,5 @@
 import asyncio
 import traceback
-from dataclasses import replace
 
 from config import settings_live as app_settings
 from core.instrument_filters import get_live_enabled_instrument_codes
@@ -15,8 +14,8 @@ from core.logger import (
 )
 from core.telegram_sender import TelegramSender
 from ib_signal.signal_runner import run_signal_loop, wait_for_job_dbs
-from ib_signal.signal_settings import DEFAULT_SIGNAL_SETTINGS
-from ib_signal.signal_settings_formatter import format_signal_settings
+from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG
+from ib_signal.signal_config_formatter import format_signal_config
 
 setup_logging()
 logger = get_logger(__name__)
@@ -63,10 +62,10 @@ async def main() -> None:
             )
             return
 
-        signal_settings = DEFAULT_SIGNAL_SETTINGS  # Блок ниже нужен также только для отладки
-        # signal_settings = replace(DEFAULT_SIGNAL_SETTINGS,max_job_bar_lag_seconds=10 ** 9,)
+        signal_config = DEFAULT_SIGNAL_CONFIG  # Блок ниже нужен также только для отладки
+        # signal_config = replace(DEFAULT_SIGNAL_CONFIG,max_job_bar_lag_seconds=10 ** 9,)
 
-        await send_service_message(format_signal_settings(signal_settings))
+        await send_service_message(format_signal_config(signal_config))
 
         log_info(
             logger,
@@ -76,7 +75,7 @@ async def main() -> None:
 
         ready_instrument_codes = await wait_for_job_dbs(
             instrument_codes=instrument_codes,
-            settings=signal_settings,
+            settings=signal_config,
         )
 
         # DEBUG: временная заглушка для пошаговой отладки run_signal_loop().
@@ -86,7 +85,7 @@ async def main() -> None:
 
         await run_signal_loop(
             instrument_codes=ready_instrument_codes,
-            settings=signal_settings,
+            settings=signal_config,
         )
 
     except KeyboardInterrupt:

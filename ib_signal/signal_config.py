@@ -8,7 +8,7 @@ class SignalWindowMode(Enum):
 
 
 @dataclass(frozen=True)
-class SignalSettings:
+class SignalConfig:
     # Режим построения сигнальных окон.
     signal_window_mode: SignalWindowMode = SignalWindowMode.ROLLING
 
@@ -37,4 +37,4 @@ class SignalSettings:
     history_lookback_days: int | None = 120  # None = вся доступная история
 
 
-DEFAULT_SIGNAL_SETTINGS = SignalSettings()
+DEFAULT_SIGNAL_CONFIG = SignalConfig()

@@ -1,4 +1,4 @@
-from ib_signal.signal_settings import SignalSettings, SignalWindowMode
+from ib_signal.signal_config import SignalConfig, SignalWindowMode
 
 SECONDS_PER_MINUTE = 60
 SECONDS_PER_DAY = 24 * 60 * 60
@@ -135,7 +135,7 @@ def get_grid_due_bar_ts(
 def get_due_signal_bar_ts(
     *,
     current_bar_ts: int,
-    settings: SignalSettings,
+    settings: SignalConfig,
     last_calculated_bar_ts: int | None,
 ) -> int | None:
     """Что делает: выбирает due signal_bar_ts для ROLLING или GRID и отсекает уже рассчитанный бар.

@@ -3,7 +3,7 @@ import asyncio
 from core.logger import get_logger, log_info, setup_logging
 from ib_signal.job_reader import get_job_db_status
 from ib_signal.signal_schedule import get_due_signal_bar_ts
-from ib_signal.signal_settings import SignalSettings
+from ib_signal.signal_config import SignalConfig
 from ib_signal.signal_window import build_current_signal_window, format_signal_window
 
 setup_logging()
@@ -27,7 +27,7 @@ def format_job_db_status(status) -> str:
 
 async def wait_for_job_dbs(
     instrument_codes: list[str],
-    settings: SignalSettings,
+    settings: SignalConfig,
 ) -> list[str]:
     """Что делает: ждёт готовности job DB по всем instrument_codes.
     Зачем нужна: основной signal-loop стартует только после доступности рабочих данных."""
@@ -71,7 +71,7 @@ async def wait_for_job_dbs(
 
 async def run_signal_loop(
     instrument_codes: list[str],
-    settings: SignalSettings,
+    settings: SignalConfig,
 ) -> None:
     """Что делает: отслеживает новые job-бары и определяет due signal_bar_ts по активному режиму.
     Зачем нужна: это основной runtime-цикл signal-сервиса, пока без фактического расчёта сигнала."""

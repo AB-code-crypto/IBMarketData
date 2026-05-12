@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 
-from ib_signal.signal_settings import SignalWindowMode
+from ib_signal.signal_config import SignalWindowMode
 from ib_signal.signal_schedule import get_grid_slot_start_ts
-from ib_signal.signal_settings import SignalSettings
+from ib_signal.signal_config import SignalConfig
 
 SECONDS_PER_MINUTE = 60
 
@@ -55,7 +55,7 @@ def validate_signal_window(window: SignalWindow) -> None:
 def build_rolling_signal_window(
     *,
     signal_bar_ts: int,
-    settings: SignalSettings,
+    settings: SignalConfig,
 ) -> SignalWindow:
     """Что делает: строит ROLLING-окно анализа и future/trade-окно от signal_bar_ts. Зачем нужна: ROLLING-кандидаты должны иметь ту же длину паттерна и ту же точку принятия решения."""
     pattern_seconds = settings.rolling_back_minutes * SECONDS_PER_MINUTE
@@ -78,7 +78,7 @@ def build_rolling_signal_window(
 def build_grid_signal_window(
     *,
     signal_bar_ts: int,
-    settings: SignalSettings,
+    settings: SignalConfig,
 ) -> SignalWindow:
     """Что делает: строит GRID-окно анализа от старта слота до signal_bar_ts и future/trade-окно до конца слота. Зачем нужна: GRID-кандидаты должны иметь такой же offset внутри своего исторического слота."""
     slot_start_ts = get_grid_slot_start_ts(
@@ -114,7 +114,7 @@ def build_grid_signal_window(
 def build_current_signal_window(
     *,
     signal_bar_ts: int,
-    settings: SignalSettings,
+    settings: SignalConfig,
 ) -> SignalWindow:
     """Что делает: выбирает построение окна по активному режиму ROLLING или GRID. Зачем нужна: signal-runner и будущий candidate search получают один объект с границами расчёта."""
     if settings.signal_window_mode == SignalWindowMode.ROLLING:

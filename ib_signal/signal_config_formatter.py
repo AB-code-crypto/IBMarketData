@@ -1,7 +1,7 @@
-from ib_signal.signal_settings import SignalSettings, SignalWindowMode
+from ib_signal.signal_config import SignalConfig, SignalWindowMode
 
 
-def format_signal_settings(settings: SignalSettings) -> str:
+def format_signal_config(settings: SignalConfig) -> str:
     """Что делает: собирает текст активных signal-настроек.
     Зачем нужна: при старте сервиса Telegram получает только реально используемый режим и параметры Pearson."""
     history_lookback_days_text = (
