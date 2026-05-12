@@ -54,7 +54,6 @@ def format_signal_config(settings: SignalConfig) -> str:
             f"pearson_min={settings.pearson_min}",
             f"min_candidates={settings.min_candidates}",
             f"max_candidates={settings.max_candidates}",
-            f"candidate_search_step_seconds={settings.candidate_search_step_seconds}",
             f"history_lookback_days={history_lookback_days_text}",
         ]
     )

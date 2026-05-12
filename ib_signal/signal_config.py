@@ -38,7 +38,6 @@ class SignalConfig:
     pearson_min: float = 0.7
     min_candidates: int = 10
     max_candidates: int = 100
-    candidate_search_step_seconds: int = 60
     history_lookback_days: int | None = 120  # None = вся доступная история
 
 

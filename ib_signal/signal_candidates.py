@@ -163,7 +163,7 @@ def read_candidate_signal_rows(
     instrument_code: str,
     min_signal_bar_ts: int | None,
     max_signal_bar_ts: int,
-    candidate_search_step_seconds: int,
+    current_signal_bar_ts: int,
     allowed_hour_slots_ct: list[int],
     bar_size_seconds: int,
 ) -> list[tuple[int, str, int]]:
@@ -171,12 +171,6 @@ def read_candidate_signal_rows(
     Зачем нужна: перед сборкой NumPy-матрицы нужен список допустимых исторических окон."""
     if not allowed_hour_slots_ct:
         return []
-
-    if candidate_search_step_seconds <= 0:
-        raise ValueError(
-            f"candidate_search_step_seconds должен быть > 0, "
-            f"получено: {candidate_search_step_seconds}"
-        )
 
     instrument_row = Instrument[instrument_code]
     job_db_path = get_instrument_feature_db_path(
@@ -187,14 +181,19 @@ def read_candidate_signal_rows(
     hour_placeholders = ", ".join("?" for _ in allowed_hour_slots_ct)
     bar_size_modifier = f"+{bar_size_seconds} seconds"
 
+    # Для текущей точки 12:01 берём исторические точки 09:01, 10:01, ...
+    # а не все минутные точки внутри разрешённых часов.
+    # Поэтому фильтруем по фазе внутри часа: minute:second должны совпадать.
+    signal_phase_seconds = int(current_signal_bar_ts) % 3600
+
     where_parts = [
         "signal_bar_ts <= ?",
-        "(signal_bar_ts % ?) = 0",
+        "(signal_bar_ts % 3600) = ?",
         f"hour_slot_ct IN ({hour_placeholders})",
     ]
     params: list[object] = [
         int(max_signal_bar_ts),
-        int(candidate_search_step_seconds),
+        signal_phase_seconds,
         *allowed_hour_slots_ct,
     ]
 
@@ -287,7 +286,7 @@ def find_candidate_windows(
         instrument_code=instrument_code,
         min_signal_bar_ts=min_candidate_signal_ts,
         max_signal_bar_ts=max_candidate_signal_ts,
-        candidate_search_step_seconds=settings.candidate_search_step_seconds,
+        current_signal_bar_ts=current_window.signal_bar_ts,
         allowed_hour_slots_ct=allowed_hour_slots_ct,
         bar_size_seconds=bar_size_seconds,
     )
