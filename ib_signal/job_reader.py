@@ -73,20 +73,37 @@ def get_fresh_job_bar_status(
     try:
         last_bar_time_ts = read_latest_job_bar_ts(instrument_code)
 
-    except sqlite3.OperationalError as exc:
-        # SQLite-lock может быть временным, если job-data прямо сейчас пишет в job DB.
-        # Это не повод валить signal-сервис.
-        if "locked" in str(exc).lower():
-            return FreshJobBarStatus(
-                instrument_code=instrument_code,
-                is_ready=False,
-                reason=f"job DB locked: {exc}",
-                job_db_path=job_db_path,
-            )
+    except FileNotFoundError:
+        return FreshJobBarStatus(
+            instrument_code=instrument_code,
+            is_ready=False,
+            reason="job DB file not found",
+            job_db_path=job_db_path,
+        )
 
-        # Нет файла, нет таблицы, битая SQL-схема и прочие ошибки структуры —
-        # это проблема upstream-контура job-data, а не нормальное ожидание signal.
-        raise
+    except RuntimeError as exc:
+        # Во время rebuild run_job_data может уже создать файл/таблицу,
+        # но ещё не успеть заполнить её рабочими строками.
+        # Для signal-сервиса это не авария, а штатное ожидание готовности job DB.
+        return FreshJobBarStatus(
+            instrument_code=instrument_code,
+            is_ready=False,
+            reason=str(exc),
+            job_db_path=job_db_path,
+        )
+
+    except sqlite3.OperationalError as exc:
+        # Во время rebuild или записи job-data SQLite может временно вернуть:
+        # - database is locked;
+        # - no such table;
+        # - другие короткие состояния неполной job DB.
+        # Signal не чинит job DB, а ждёт, пока upstream-сервис её подготовит.
+        return FreshJobBarStatus(
+            instrument_code=instrument_code,
+            is_ready=False,
+            reason=f"job DB not ready: {exc}",
+            job_db_path=job_db_path,
+        )
 
     last_bar_lag_seconds = int(time.time()) - last_bar_time_ts
 
