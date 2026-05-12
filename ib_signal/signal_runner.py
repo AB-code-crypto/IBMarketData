@@ -160,7 +160,17 @@ async def run_signal_loop(
             if due_signal_bar_ts is None:
                 continue
 
-            # signal_window - объект с границами. Он нужен как вход в следующий слой: сбор текущего паттерна, поиск кандидатов,
+            '''
+            signal_window - объект с границами. Он нужен как вход в следующий слой: сбор текущего паттерна, поиск кандидатов,
+            pattern_start_ts
+            pattern_end_ts
+            trade_start_ts
+            trade_end_ts
+            pattern_seconds
+            trade_seconds
+            slot_start_ts
+            slot_offset_seconds
+            '''
             signal_window = build_current_signal_window(
                 signal_bar_ts=due_signal_bar_ts,
                 settings=settings,
