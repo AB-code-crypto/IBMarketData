@@ -12,8 +12,13 @@ class SignalConfig:
     # Режим построения сигнальных окон.
     signal_window_mode: SignalWindowMode = SignalWindowMode.ROLLING
 
-    # Максимально допустимое отставание последнего job-бара от текущего времени.
-    max_job_bar_lag_seconds: int = 10
+    # Максимально допустимый возраст последнего job-бара относительно текущего времени.
+    # Важно: bar_time_ts — это время начала 5-секундного бара, а не время его закрытия.
+    # Поэтому значение должно включать размер бара + запас на приход BID/ASK,
+    # запись price DB, обновление job DB и polling signal-сервиса.
+    # Другими словами минимальный max_job_bar_lag_seconds = 5 секунд это размер бара + пару секунд на обработку сигнала
+
+    max_job_bar_lag_seconds: int = 15
 
     # ROLLING-режим.
     rolling_signal_step_seconds: int = 60
