@@ -16,12 +16,13 @@ class FreshJobBarStatus:
     reason: str
     job_db_path: Path
     last_bar_time_ts: int | None = None
+    last_bar_time_ct: str | None = None
     last_bar_lag_seconds: int | None = None
 
 
-def read_latest_job_bar_ts(instrument_code: str) -> int:
-    """Что делает: читает последний bar_time_ts из job DB инструмента.
-    Зачем нужна: signal-сервису нужна только свежесть последнего рабочего бара, а не аудит структуры job DB."""
+def read_latest_job_bar_time(instrument_code: str) -> tuple[int, str]:
+    """Что делает: читает последний bar_time_ts и bar_time_ct из job DB инструмента.
+    Зачем нужна: signal-сервису нужна свежесть последнего рабочего бара и человекочитаемое CT-время для логов."""
     if instrument_code not in Instrument:
         raise ValueError(f"Инструмент {instrument_code!r} не найден в contracts.py")
 
@@ -39,8 +40,12 @@ def read_latest_job_bar_ts(instrument_code: str) -> int:
     try:
         row = conn.execute(
             f"""
-            SELECT MAX(bar_time_ts) AS last_bar_time_ts
+            SELECT
+                bar_time_ts,
+                bar_time_ct
             FROM {quote_identifier(MID_PRICE_TABLE_NAME)}
+            ORDER BY bar_time_ts DESC
+            LIMIT 1
             """
         ).fetchone()
 
@@ -50,7 +55,43 @@ def read_latest_job_bar_ts(instrument_code: str) -> int:
                 f"instrument={instrument_code}, db={job_db_path}"
             )
 
-        return int(row[0])
+        return int(row[0]), str(row[1])
+
+    finally:
+        conn.close()
+
+
+def read_job_bar_time_ct(instrument_code: str, bar_time_ts: int) -> str | None:
+    """Что делает: читает bar_time_ct конкретного job-бара по bar_time_ts.
+    Зачем нужна: логи signal-сервиса должны показывать человеческое время из job DB, а не Unix timestamp."""
+    if instrument_code not in Instrument:
+        raise ValueError(f"Инструмент {instrument_code!r} не найден в contracts.py")
+
+    job_db_path = get_instrument_feature_db_path(
+        instrument_code=instrument_code,
+        instrument_row=Instrument[instrument_code],
+    )
+
+    conn = open_sqlite_connection(
+        str(job_db_path),
+        require_existing_file=True,
+        use_wal=False,
+    )
+
+    try:
+        row = conn.execute(
+            f"""
+            SELECT bar_time_ct
+            FROM {quote_identifier(MID_PRICE_TABLE_NAME)}
+            WHERE bar_time_ts = ?
+            """,
+            (int(bar_time_ts),),
+        ).fetchone()
+
+        if row is None:
+            return None
+
+        return str(row[0])
 
     finally:
         conn.close()
@@ -71,7 +112,7 @@ def get_fresh_job_bar_status(
     )
 
     try:
-        last_bar_time_ts = read_latest_job_bar_ts(instrument_code)
+        last_bar_time_ts, last_bar_time_ct = read_latest_job_bar_time(instrument_code)
 
     except FileNotFoundError:
         return FreshJobBarStatus(
@@ -117,6 +158,7 @@ def get_fresh_job_bar_status(
             ),
             job_db_path=job_db_path,
             last_bar_time_ts=last_bar_time_ts,
+            last_bar_time_ct=last_bar_time_ct,
             last_bar_lag_seconds=last_bar_lag_seconds,
         )
 
@@ -126,5 +168,6 @@ def get_fresh_job_bar_status(
         reason="ready",
         job_db_path=job_db_path,
         last_bar_time_ts=last_bar_time_ts,
+        last_bar_time_ct=last_bar_time_ct,
         last_bar_lag_seconds=last_bar_lag_seconds,
     )

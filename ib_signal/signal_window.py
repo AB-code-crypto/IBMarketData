@@ -1,5 +1,7 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
+from core.time_utils import build_bar_time_fields_from_utc_dt
 from ib_signal.signal_config import SignalConfig, SignalWindowMode
 from ib_signal.signal_schedule import get_grid_slot_start_ts
 
@@ -137,14 +139,42 @@ def build_current_signal_window(
     )
 
 
-def format_signal_window(window: SignalWindow) -> str:
-    """Что делает: форматирует SignalWindow в компактную строку лога.
-    Зачем нужна: при отладке видно, какой pattern/trade интервал будет использовать расчёт."""
-    return (
-        f"pattern=[{window.pattern_start_ts}, {window.pattern_end_ts}], "
-        f"pattern_seconds={window.pattern_seconds}, "
-        f"trade=[{window.trade_start_ts}, {window.trade_end_ts}], "
-        f"trade_seconds={window.trade_seconds}, "
-        f"slot_start_ts={window.slot_start_ts}, "
-        f"slot_offset_seconds={window.slot_offset_seconds}"
-    )
+def format_ts_ct_for_log(ts: int, get_time_text) -> str:
+    """Что делает: возвращает CT-время для лога, сначала из job DB, а если бара в DB нет — рассчитывает CT-текст по timestamp.
+    Зачем нужна: pattern-границы обычно есть в DB, а future trade_end может быть в будущем и ещё отсутствовать в job DB."""
+    time_text = get_time_text(ts)
+    if time_text is not None:
+        return f"{time_text} CT"
+
+    dt_utc = datetime.fromtimestamp(ts, tz=timezone.utc)
+    return f"{build_bar_time_fields_from_utc_dt(dt_utc)['bar_time_ct']} CT"
+
+
+def format_signal_window_for_log(window: SignalWindow, get_time_text) -> str:
+    """Что делает: форматирует SignalWindow в человекочитаемую строку с CT-временем.
+    Зачем нужна: runtime-логи signal-сервиса должны читаться глазами, без Unix timestamp."""
+    parts = [
+        f"signal_bar={format_ts_ct_for_log(window.signal_bar_ts, get_time_text)}",
+        (
+            "pattern="
+            f"{format_ts_ct_for_log(window.pattern_start_ts, get_time_text)}"
+            " -> "
+            f"{format_ts_ct_for_log(window.pattern_end_ts, get_time_text)}"
+        ),
+        f"pattern_seconds={window.pattern_seconds}",
+        (
+            "trade="
+            f"{format_ts_ct_for_log(window.trade_start_ts, get_time_text)}"
+            " -> "
+            f"{format_ts_ct_for_log(window.trade_end_ts, get_time_text)}"
+        ),
+        f"trade_seconds={window.trade_seconds}",
+    ]
+
+    if window.slot_start_ts is not None:
+        parts.append(f"slot_start={format_ts_ct_for_log(window.slot_start_ts, get_time_text)}")
+
+    if window.slot_offset_seconds is not None:
+        parts.append(f"slot_offset_seconds={window.slot_offset_seconds}")
+
+    return ", ".join(parts)

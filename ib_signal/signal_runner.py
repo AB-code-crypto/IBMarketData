@@ -1,10 +1,10 @@
 import asyncio
 
 from core.logger import get_logger, log_info, setup_logging
-from ib_signal.job_reader import get_fresh_job_bar_status
+from ib_signal.job_reader import get_fresh_job_bar_status, read_job_bar_time_ct
 from ib_signal.signal_schedule import get_due_signal_bar_ts
 from ib_signal.signal_config import SignalConfig
-from ib_signal.signal_window import build_current_signal_window, format_signal_window
+from ib_signal.signal_window import build_current_signal_window, format_signal_window_for_log
 
 setup_logging()
 logger = get_logger(__name__)
@@ -19,7 +19,7 @@ def format_fresh_job_bar_status(status) -> str:
     return (
         f"ready={status.is_ready}, "
         f"reason={status.reason}, "
-        f"last_ts={status.last_bar_time_ts}, "
+        f"last_bar={status.last_bar_time_ct}, "
         f"lag={status.last_bar_lag_seconds}"
     )
 
@@ -154,13 +154,16 @@ async def run_signal_loop(
 
             last_calculated_ts_by_instrument[instrument_code] = due_signal_bar_ts
 
+            window_text = format_signal_window_for_log(
+                signal_window,
+                lambda ts: read_job_bar_time_ct(instrument_code, ts),
+            )
+
             log_info(
                 logger,
                 f"{instrument_code}: пора считать сигнал, "
-                f"signal_bar_time_ts={due_signal_bar_ts}, "
-                f"latest_job_bar_time_ts={current_last_ts}, "
-                f"mode={settings.signal_window_mode.value}, "
-                f"window={format_signal_window(signal_window)}",
+                f"latest_job_bar={status.last_bar_time_ct} CT, "
+                f"window={window_text}",
                 to_telegram=False,
             )
 
