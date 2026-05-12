@@ -29,7 +29,7 @@ FUT_DEFAULTS: InstrumentRow = {
 
 FX_DEFAULTS: InstrumentRow = {
     "history_enabled": True,
-    "realtime_enabled": True,
+    "realtime_enabled": False,
     "trading_enabled": False,
     "secType": "CASH",
     "exchange": "IDEALPRO",

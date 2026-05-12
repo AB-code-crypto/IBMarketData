@@ -6,6 +6,7 @@ from core.logger import get_logger, log_info, setup_logging
 from ib_signal.job_reader import get_fresh_job_bar_status, read_job_bar_time_ct
 from ib_signal.signal_schedule import get_due_signal_bar_ts
 from ib_signal.signal_config import SignalConfig
+from ib_signal.signal_candidates import find_candidate_windows, format_candidate_search_result
 from ib_signal.signal_window import build_current_signal_window, format_signal_window_for_log
 
 setup_logging()
@@ -176,18 +177,26 @@ async def run_signal_loop(
                 settings=settings,
             )
 
+            candidate_search_result = find_candidate_windows(
+                instrument_code=instrument_code,
+                current_window=signal_window,
+                settings=settings,
+            )
+
             last_calculated_ts_by_instrument[instrument_code] = due_signal_bar_ts
 
             window_text = format_signal_window_for_log(
                 signal_window,
                 lambda ts: read_job_bar_time_ct(instrument_code, ts),
             )
+            candidate_text = format_candidate_search_result(candidate_search_result)
 
             log_info(
                 logger,
                 f"{instrument_code}: пора считать сигнал, "
                 f"latest_job_row={status.last_bar_time_ct} CT, "
-                f"window={window_text}",
+                f"window={window_text}, "
+                f"candidate_search={candidate_text}",
                 to_telegram=False,
             )
 
