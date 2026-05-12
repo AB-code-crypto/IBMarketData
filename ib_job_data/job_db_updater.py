@@ -64,7 +64,7 @@ def append_new_mid_price_rows(instrument_code: str) -> int:
     conn = open_sqlite_connection(
         str(feature_db_path),
         create_parent_dir=True,
-        use_wal=False,
+        use_wal=True,
     )
 
     try:

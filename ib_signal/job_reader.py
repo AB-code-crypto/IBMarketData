@@ -44,13 +44,15 @@ def get_job_db_status(
             job_db_path=job_db_path,
         )
 
-    conn = open_sqlite_connection(
-        str(job_db_path),
-        require_existing_file=True,
-        use_wal=False,
-    )
+    conn = None
 
     try:
+        conn = open_sqlite_connection(
+            str(job_db_path),
+            require_existing_file=True,
+            use_wal=False,
+        )
+
         table_row = conn.execute(
             """
             SELECT name
@@ -127,8 +129,17 @@ def get_job_db_status(
             last_bar_lag_seconds=last_bar_lag_seconds,
         )
 
+    except sqlite3.OperationalError as exc:
+        return JobDbStatus(
+            instrument_code=instrument_code,
+            is_ready=False,
+            reason=f"full status query failed: {exc}",
+            job_db_path=job_db_path,
+        )
+
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 def get_latest_job_bar_status(
@@ -153,27 +164,21 @@ def get_latest_job_bar_status(
             job_db_path=job_db_path,
         )
 
-    conn = open_sqlite_connection(
-        str(job_db_path),
-        require_existing_file=True,
-        use_wal=False,
-    )
+    conn = None
 
     try:
-        try:
-            row = conn.execute(
-                f"""
-                SELECT MAX(bar_time_ts) AS last_bar_time_ts
-                FROM {quote_identifier(MID_PRICE_TABLE_NAME)}
-                """
-            ).fetchone()
-        except sqlite3.OperationalError as exc:
-            return JobDbStatus(
-                instrument_code=instrument_code,
-                is_ready=False,
-                reason=f"latest bar query failed: {exc}",
-                job_db_path=job_db_path,
-            )
+        conn = open_sqlite_connection(
+            str(job_db_path),
+            require_existing_file=True,
+            use_wal=False,
+        )
+
+        row = conn.execute(
+            f"""
+            SELECT MAX(bar_time_ts) AS last_bar_time_ts
+            FROM {quote_identifier(MID_PRICE_TABLE_NAME)}
+            """
+        ).fetchone()
 
         last_bar_time_ts = None if row is None or row[0] is None else int(row[0])
 
@@ -210,5 +215,14 @@ def get_latest_job_bar_status(
             last_bar_lag_seconds=last_bar_lag_seconds,
         )
 
+    except sqlite3.OperationalError as exc:
+        return JobDbStatus(
+            instrument_code=instrument_code,
+            is_ready=False,
+            reason=f"latest bar query failed: {exc}",
+            job_db_path=job_db_path,
+        )
+
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()

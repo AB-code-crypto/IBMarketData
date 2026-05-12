@@ -25,6 +25,16 @@ def format_job_db_status(status) -> str:
     )
 
 
+def is_job_db_structure_ready(status) -> bool:
+    """Что делает: определяет, что структура job DB уже проверена и дальше можно ждать только свежий latest bar.
+    Зачем нужна: wait_for_job_dbs не должен выполнять тяжёлый COUNT(*) по миллионам строк на каждой итерации ожидания."""
+    return (
+        status.rows_count is not None
+        and status.rows_count >= 1000
+        and status.last_bar_time_ts is not None
+    )
+
+
 async def wait_for_job_dbs(
     instrument_codes: list[str],
     settings: SignalConfig,
@@ -33,6 +43,10 @@ async def wait_for_job_dbs(
     Зачем нужна: основной signal-loop стартует только после доступности рабочих данных."""
     pending = set(instrument_codes)
     ready = []
+    structure_checked_by_instrument = {
+        instrument_code: False
+        for instrument_code in instrument_codes
+    }
 
     log_info(
         logger,
@@ -42,10 +56,19 @@ async def wait_for_job_dbs(
 
     while pending:
         for instrument_code in list(pending):
-            status = get_job_db_status(
-                instrument_code=instrument_code,
-                max_job_bar_lag_seconds=settings.max_job_bar_lag_seconds,
-            )
+            if structure_checked_by_instrument[instrument_code]:
+                status = get_latest_job_bar_status(
+                    instrument_code=instrument_code,
+                    max_job_bar_lag_seconds=settings.max_job_bar_lag_seconds,
+                )
+            else:
+                status = get_job_db_status(
+                    instrument_code=instrument_code,
+                    max_job_bar_lag_seconds=settings.max_job_bar_lag_seconds,
+                )
+
+                if is_job_db_structure_ready(status):
+                    structure_checked_by_instrument[instrument_code] = True
 
             if not status.is_ready:
                 log_info(
