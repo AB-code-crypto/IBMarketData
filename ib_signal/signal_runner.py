@@ -114,27 +114,11 @@ async def run_signal_loop(
 
             # current_last_ts - последний доступный bar_time_ts в job DB.
             current_last_ts = status.last_bar_time_ts
-            # previous_last_ts - просто прошлое значение current_last_ts для логирования
+            # previous_last_ts - прошлое значение current_last_ts для логирования.
             previous_last_ts = last_seen_ts_by_instrument[instrument_code]
 
             if current_last_ts is None:
                 continue
-
-            if previous_last_ts is None:
-                last_seen_ts_by_instrument[instrument_code] = current_last_ts
-                log_info(
-                    logger,
-                    f"{instrument_code}: начальный последний bar_time_ts={current_last_ts}",
-                    to_telegram=False,
-                )
-
-            elif current_last_ts > previous_last_ts:
-                last_seen_ts_by_instrument[instrument_code] = current_last_ts
-                log_info(
-                    logger,
-                    f"{instrument_code}: появился новый job bar_time_ts={current_last_ts}",
-                    to_telegram=False,
-                )
 
             # due_signal_bar_ts - реальная точка принятия решения, для которой надо считать сигнал.
             due_signal_bar_ts = get_due_signal_bar_ts(
@@ -142,6 +126,28 @@ async def run_signal_loop(
                 settings=settings,
                 last_calculated_bar_ts=last_calculated_ts_by_instrument[instrument_code],
             )
+
+            if previous_last_ts is None:
+                last_seen_ts_by_instrument[instrument_code] = current_last_ts
+                last_calculated_ts_by_instrument[instrument_code] = due_signal_bar_ts
+
+                log_info(
+                    logger,
+                    f"{instrument_code}: начальный job-bar принят: "
+                    f"latest_job_bar={status.last_bar_time_ct} CT. "
+                    f"Первый расчёт будет со следующей due-точки.",
+                    to_telegram=False,
+                )
+                continue
+
+            elif current_last_ts > previous_last_ts:
+                last_seen_ts_by_instrument[instrument_code] = current_last_ts
+                log_info(
+                    logger,
+                    f"{instrument_code}: появился новый job bar: "
+                    f"{status.last_bar_time_ct} CT",
+                    to_telegram=False,
+                )
 
             if due_signal_bar_ts is None:
                 continue
