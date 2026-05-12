@@ -1,7 +1,7 @@
 import asyncio
 
 from core.logger import get_logger, log_info, setup_logging
-from ib_signal.job_reader import get_job_db_status
+from ib_signal.job_reader import get_job_db_status, get_latest_job_bar_status
 from ib_signal.signal_schedule import get_due_signal_bar_ts
 from ib_signal.signal_config import SignalConfig
 from ib_signal.signal_window import build_current_signal_window, format_signal_window
@@ -94,7 +94,7 @@ async def run_signal_loop(
 
     while True:
         for instrument_code in instrument_codes:
-            status = get_job_db_status(
+            status = get_latest_job_bar_status(
                 instrument_code=instrument_code,
                 max_job_bar_lag_seconds=settings.max_job_bar_lag_seconds,
             )
