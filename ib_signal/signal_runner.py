@@ -4,6 +4,7 @@ from core.logger import get_logger, log_info, setup_logging
 from ib_signal.job_reader import get_job_db_status
 from ib_signal.signal_schedule import get_due_signal_bar_ts
 from ib_signal.signal_settings import SignalSettings
+from ib_signal.signal_window import build_current_signal_window, format_signal_window
 
 setup_logging()
 logger = get_logger(__name__)
@@ -137,6 +138,11 @@ async def run_signal_loop(
             if due_signal_bar_ts is None:
                 continue
 
+            signal_window = build_current_signal_window(
+                signal_bar_ts=due_signal_bar_ts,
+                settings=settings,
+            )
+
             last_calculated_ts_by_instrument[instrument_code] = due_signal_bar_ts
 
             log_info(
@@ -144,7 +150,8 @@ async def run_signal_loop(
                 f"{instrument_code}: пора считать сигнал, "
                 f"signal_bar_time_ts={due_signal_bar_ts}, "
                 f"latest_job_bar_time_ts={current_last_ts}, "
-                f"mode={settings.signal_window_mode.value}",
+                f"mode={settings.signal_window_mode.value}, "
+                f"window={format_signal_window(signal_window)}",
                 to_telegram=False,
             )
 

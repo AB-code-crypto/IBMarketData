@@ -1,5 +1,4 @@
-from ib_signal.signal_modes import SignalWindowMode
-from ib_signal.signal_settings import SignalSettings
+from ib_signal.signal_settings import SignalSettings, SignalWindowMode
 
 
 def format_signal_settings(settings: SignalSettings) -> str:

@@ -1,5 +1,4 @@
-from ib_signal.signal_modes import SignalWindowMode
-from ib_signal.signal_settings import SignalSettings
+from ib_signal.signal_settings import SignalSettings, SignalWindowMode
 
 SECONDS_PER_MINUTE = 60
 SECONDS_PER_DAY = 24 * 60 * 60

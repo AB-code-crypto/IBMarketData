@@ -1,7 +1,10 @@
 from dataclasses import dataclass
+from enum import Enum
 
-from ib_signal import signal_config
-from ib_signal.signal_modes import SignalWindowMode
+
+class SignalWindowMode(Enum):
+    ROLLING = "ROLLING"
+    GRID = "GRID"
 
 
 @dataclass(frozen=True)
@@ -35,24 +38,50 @@ class SignalSettings:
 
 
 DEFAULT_SIGNAL_SETTINGS = SignalSettings(
-    signal_window_mode=signal_config.SIGNAL_WINDOW_MODE,
-    max_job_bar_lag_seconds=signal_config.MAX_JOB_BAR_LAG_SECONDS,
+    # ============================================================
+    # РЕЖИМ ПОСТРОЕНИЯ СИГНАЛЬНЫХ ОКОН
+    # ============================================================
+    signal_window_mode=SignalWindowMode.ROLLING,
 
-    rolling_signal_step_seconds=signal_config.ROLLING_SIGNAL_STEP_SECONDS,
-    rolling_back_minutes=signal_config.ROLLING_BACK_MINUTES,
-    rolling_trade_minutes=signal_config.ROLLING_TRADE_MINUTES,
+    # Если job DB отстала сильнее этого значения, signal-сервис считает её неготовой.
+    max_job_bar_lag_seconds=10,
 
-    slot_signal_step_seconds=signal_config.SLOT_SIGNAL_STEP_SECONDS,
-    slot_step_minutes=signal_config.SLOT_STEP_MINUTES,
-    slot_start_minute_of_day=signal_config.SLOT_START_MINUTE_OF_DAY,
-    slot_back_minutes=signal_config.SLOT_BACK_MINUTES,
-    slot_entry_minutes=signal_config.SLOT_ENTRY_MINUTES,
-    slot_close_before_end_seconds=signal_config.SLOT_CLOSE_BEFORE_END_SECONDS,
+    # ============================================================
+    # ROLLING-РЕЖИМ
+    # ============================================================
+    # ROLLING работает от последнего доступного закрытого job-бара:
+    #   signal_bar = последняя расчётная точка ROLLING, покрытая job DB
+    #   back_start = signal_bar - rolling_back_minutes
+    #   back_end   = signal_bar
+    #   trade_from = signal_bar
+    #   trade_to   = signal_bar + rolling_trade_minutes
+    rolling_signal_step_seconds=60,
+    rolling_back_minutes=30,
+    rolling_trade_minutes=30,
 
-    price_source=signal_config.PRICE_SOURCE,
-    pearson_min=signal_config.PEARSON_MIN,
-    min_candidates=signal_config.MIN_CANDIDATES,
-    max_candidates=signal_config.MAX_CANDIDATES,
-    candidate_search_step_seconds=signal_config.CANDIDATE_SEARCH_STEP_SECONDS,
-    history_lookback_days=signal_config.HISTORY_LOOKBACK_DAYS,
+    # ============================================================
+    # GRID-РЕЖИМ
+    # ============================================================
+    # GRID строит сигналы по сетке слотов:
+    #   1. первые slot_back_minutes только копим анализируемый участок;
+    #   2. после slot_back_minutes signal-сервис может пересчитывать сигнал;
+    #   3. slot_entry_minutes описывает окно первичного входа для будущего execution;
+    #   4. сопровождение позиции решает отдельный контур контроля позиции;
+    #   5. за slot_close_before_end_seconds секунд до конца слота расчёты прекращаются.
+    slot_signal_step_seconds=5,
+    slot_step_minutes=60,
+    slot_start_minute_of_day=0,
+    slot_back_minutes=30,
+    slot_entry_minutes=20,
+    slot_close_before_end_seconds=10,
+
+    # ============================================================
+    # ПОИСК КАНДИДАТОВ ПО PEARSON
+    # ============================================================
+    price_source="mid_close",
+    pearson_min=0.7,
+    min_candidates=10,
+    max_candidates=100,
+    candidate_search_step_seconds=60,
+    history_lookback_days=120,  # None = вся доступная история
 )
