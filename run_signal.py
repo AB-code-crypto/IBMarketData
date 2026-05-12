@@ -2,7 +2,7 @@ import asyncio
 import traceback
 
 from config import settings_live as app_settings
-from core.instrument_filters import get_live_enabled_instrument_codes
+from core.instrument_filters import get_trading_enabled_instrument_codes
 from core.logger import (
     disable_telegram_logging,
     get_logger,
@@ -52,12 +52,12 @@ async def main() -> None:
             "\n===========\nСтарт signal-сервиса.\n===========\n"
         )
 
-        instrument_codes = get_live_enabled_instrument_codes()
+        instrument_codes = get_trading_enabled_instrument_codes()
 
         if not instrument_codes:
             log_warning(
                 logger,
-                "Нет инструментов для signal-сервиса: history_enabled=True и realtime_enabled=True не найдены.",
+                "Нет инструментов для signal-сервиса: history_enabled=True, realtime_enabled=True и trading_enabled=True не найдены.",
                 to_telegram=False,
             )
             return

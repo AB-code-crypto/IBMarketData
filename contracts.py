@@ -16,6 +16,7 @@ PLACEHOLDER_CON_ID = 111
 FUT_DEFAULTS: InstrumentRow = {
     "history_enabled": False,
     "realtime_enabled": False,
+    "trading_enabled": False,
     "secType": "FUT",
     "exchange": "CME",
     "currency": "USD",
@@ -29,6 +30,7 @@ FUT_DEFAULTS: InstrumentRow = {
 FX_DEFAULTS: InstrumentRow = {
     "history_enabled": True,
     "realtime_enabled": True,
+    "trading_enabled": False,
     "secType": "CASH",
     "exchange": "IDEALPRO",
     "barSizeSetting": "5 secs",
@@ -42,6 +44,7 @@ FX_DEFAULTS: InstrumentRow = {
 CRYPTO_DEFAULTS: InstrumentRow = {
     "history_enabled": False,
     "realtime_enabled": False,
+    "trading_enabled": False,
     "secType": "CRYPTO",
     "currency": "USD",
     "barSizeSetting": "5 secs",
@@ -64,6 +67,7 @@ Instrument: Registry = {
         "db_filename": "MNQ.sqlite3",
         "history_enabled": True,
         "realtime_enabled": True,
+        "trading_enabled": True,
         "contracts": [
             {"conId": 620730945, "localSymbol": "MNQM4", "lastTradeDateOrContractMonth": "20240621",
              "active_from_utc": "2024-03-13T22:00:00Z", "active_to_utc": "2024-06-19T17:00:00Z"},
@@ -111,7 +115,6 @@ Instrument: Registry = {
     "MES": {
         **FUT_DEFAULTS,
         "history_enabled": True,
-        "realtime_enabled": True,
         "tradingClass": "MES",
         "multiplier": 5.0,
         "db_filename": "MES.sqlite3",

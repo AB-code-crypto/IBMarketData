@@ -1,12 +1,17 @@
 from contracts import Instrument
 
 
-def get_live_enabled_instrument_codes() -> list[str]:
-    """Что делает: возвращает инструменты, у которых включены и history, и realtime. Зачем нужна: job-data и signal работают только по полному live-контуру."""
+def get_trading_enabled_instrument_codes() -> list[str]:
+    """Что делает: возвращает инструменты, включённые в контур сигналов и будущей торговли.
+    Зачем нужна: job-data и signal работают только там, где включены history, realtime и trading."""
     result = []
 
     for instrument_code, instrument_row in Instrument.items():
-        if instrument_row["history_enabled"] and instrument_row["realtime_enabled"]:
+        if (
+            instrument_row["history_enabled"]
+            and instrument_row["realtime_enabled"]
+            and instrument_row["trading_enabled"]
+        ):
             result.append(instrument_code)
 
     return result

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from config import settings_live as settings
 from contracts import Instrument
-from core.instrument_filters import get_live_enabled_instrument_codes
+from core.instrument_filters import get_trading_enabled_instrument_codes
 from core.logger import (
     disable_telegram_logging,
     get_logger,
@@ -178,9 +178,10 @@ async def main() -> None:
         # run_job_data намеренно не подхватывает новые инструменты на лету.
         # Чтобы добавить инструмент в job-data контур:
         # 1. history_enabled=True — закачать историю;
-        # 2. realtime_enabled=True — включить live-контур когда история закачалась;
-        # 3. перезапустить run_market_data.py и run_job_data.py.
-        instrument_codes = get_live_enabled_instrument_codes()
+        # 2. realtime_enabled=True — включить live-котировки;
+        # 3. trading_enabled=True — включить job-data/signal/будущую торговлю;
+        # 4. перезапустить run_market_data.py и run_job_data.py.
+        instrument_codes = get_trading_enabled_instrument_codes()
 
         log_info(
             logger,
@@ -191,7 +192,7 @@ async def main() -> None:
         if not instrument_codes:
             log_warning(
                 logger,
-                "Нет инструментов для job-data сервиса: history_enabled=True и realtime_enabled=True не найдены.",
+                "Нет инструментов для job-data сервиса: history_enabled=True, realtime_enabled=True и trading_enabled=True не найдены.",
                 to_telegram=True,
             )
             return
