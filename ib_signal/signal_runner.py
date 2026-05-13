@@ -10,6 +10,7 @@ from ib_signal.signal_errors import SignalDataNotReadyError
 from ib_signal.pearson import calculate_centered_pearson_batch
 from ib_signal.signal_candidates import find_candidate_windows, format_candidate_search_result
 from ib_signal.signal_pattern_matrix import build_pattern_matrix, format_pattern_matrix_result
+from ib_signal.signal_plot import save_signal_candidate_plot
 from ib_signal.signal_window import build_current_signal_window, format_signal_window_for_log
 
 setup_logging()
