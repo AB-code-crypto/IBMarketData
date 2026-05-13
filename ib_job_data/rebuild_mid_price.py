@@ -23,6 +23,7 @@ from ib_job_data.feature_db_sql import (
     insert_mid_price_from_attached_price_db_sql,
     quote_identifier,
 )
+from ib_job_data.sma_features import SMA_TABLE_NAME, rebuild_sma_features
 
 PRICE_DB_SCHEMA_NAME = "price_src"
 
@@ -82,6 +83,7 @@ def rebuild_instrument_mid_price_features(instrument_code: str) -> None:
     print(f"Price table: {price_table_name}")
     print(f"Job DB     : {feature_db_path}")
     print(f"Job table  : {MID_PRICE_TABLE_NAME}")
+    print(f"Job SMA    : {SMA_TABLE_NAME}")
     print("=" * 80)
 
     conn = open_sqlite_connection(
@@ -106,6 +108,11 @@ def rebuild_instrument_mid_price_features(instrument_code: str) -> None:
             mid_price_digits=instrument_row["mid_price_digits"],
         )
         conn.execute(insert_sql)
+
+        rebuild_sma_features(
+            conn,
+            mid_price_digits=instrument_row["mid_price_digits"],
+        )
 
         conn.commit()
         print("Готово.")

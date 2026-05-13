@@ -11,6 +11,7 @@ from ib_job_data.feature_db_sql import (
     quote_identifier,
 )
 from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
+from ib_job_data.sma_features import append_new_sma_rows
 
 PRICE_DB_SCHEMA_NAME = "price_src"
 
@@ -87,9 +88,16 @@ def append_new_mid_price_rows(instrument_code: str) -> int:
 
         changes_before = conn.total_changes
         conn.execute(insert_sql, (last_job_bar_ts,))
+        mid_rows_written = conn.total_changes - changes_before
+
+        append_new_sma_rows(
+            conn,
+            mid_price_digits=instrument_row["mid_price_digits"],
+        )
+
         conn.commit()
 
-        return conn.total_changes - changes_before
+        return mid_rows_written
 
     finally:
         try:
