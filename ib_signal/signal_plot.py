@@ -19,8 +19,8 @@ PLOT_TOP_CANDIDATES = 10
 
 def get_signal_png_dir() -> Path:
     """Что делает: возвращает каталог для PNG signal-сервиса и создаёт его при необходимости.
-    Зачем нужна: пользователь хочет складывать графики в data/png, а не отправлять их в Telegram."""
-    png_dir = Path(__file__).resolve().parent.parent / "data" / "png"
+    Зачем нужна: пользователь хочет складывать графики в корневой каталог png, а не отправлять их в Telegram."""
+    png_dir = Path(__file__).resolve().parent.parent / "png"
     png_dir.mkdir(parents=True, exist_ok=True)
     return png_dir
 

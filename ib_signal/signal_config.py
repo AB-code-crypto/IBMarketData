@@ -10,7 +10,7 @@ class SignalWindowMode(Enum):
 @dataclass(frozen=True)
 class SignalConfig:
     # Режим построения сигнальных окон.
-    signal_window_mode: SignalWindowMode = SignalWindowMode.ROLLING
+    signal_window_mode: SignalWindowMode = SignalWindowMode.GRID
 
     # Максимально допустимый возраст последнего job-бара относительно текущего времени.
     # Важно: bar_time_ts — это время начала 5-секундного бара, а не время его закрытия.
