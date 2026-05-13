@@ -198,8 +198,10 @@ def save_signal_candidate_plot(
 
     shown_count = 0
 
+    sma_line_colors: dict[int, str] = {}
+
     for sma_period_bars, sma_values in current_sma_lines.items():
-        ax.plot(
+        sma_line = ax.plot(
             current_x_minutes,
             sma_values - current_values[0],
             linestyle="--",
@@ -207,7 +209,8 @@ def save_signal_candidate_plot(
             alpha=0.95,
             zorder=4,
             label=f"SMA {sma_period_bars}",
-        )
+        )[0]
+        sma_line_colors[sma_period_bars] = sma_line.get_color()
 
     if top_indices.size > 0:
         for rank, candidate_index in enumerate(top_indices, start=1):
@@ -244,22 +247,23 @@ def save_signal_candidate_plot(
                 ),
             )
 
-    ax.plot(
+    current_pattern_line = ax.plot(
         current_x_minutes,
         current_line,
         linewidth=3.0,
         alpha=1.0,
         zorder=7,
         label="Current pattern",
-    )
+    )[0]
 
     ax.plot(
         current_x_minutes,
         current_regression_line,
-        linestyle="-.",
+        linestyle="-",
         linewidth=2.0,
         alpha=0.95,
-        zorder=6,
+        zorder=8,
+        color=current_pattern_line.get_color(),
         label="Current regression",
     )
 
@@ -267,10 +271,11 @@ def save_signal_candidate_plot(
         ax.plot(
             current_x_minutes,
             sma_600_regression_line,
-            linestyle=":",
+            linestyle="-",
             linewidth=2.0,
             alpha=0.95,
-            zorder=5,
+            zorder=6,
+            color=sma_line_colors[600],
             label="SMA 600 regression",
         )
 
