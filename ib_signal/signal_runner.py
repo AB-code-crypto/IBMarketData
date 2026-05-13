@@ -6,6 +6,7 @@ from core.logger import get_logger, log_info, setup_logging
 from ib_signal.job_reader import get_fresh_job_bar_status, read_job_bar_time_ct
 from ib_signal.signal_schedule import get_due_signal_bar_ts
 from ib_signal.signal_config import SignalConfig
+from ib_signal.signal_errors import SignalDataNotReadyError
 from ib_signal.pearson import calculate_centered_pearson_batch
 from ib_signal.signal_candidates import find_candidate_windows, format_candidate_search_result
 from ib_signal.signal_pattern_matrix import build_pattern_matrix, format_pattern_matrix_result
@@ -179,30 +180,51 @@ async def run_signal_loop(
                 settings=settings,
             )
 
-            candidate_search_result = find_candidate_windows(
-                instrument_code=instrument_code,
-                current_window=signal_window,
-                settings=settings,
-            )
+            try:
+                candidate_search_result = find_candidate_windows(
+                    instrument_code=instrument_code,
+                    current_window=signal_window,
+                    settings=settings,
+                )
 
-            pattern_matrix_result = build_pattern_matrix(
-                instrument_code=instrument_code,
-                window=signal_window,
-                candidates=candidate_search_result.candidates,
-                price_source=settings.price_source,
-            )
+                pattern_matrix_result = build_pattern_matrix(
+                    instrument_code=instrument_code,
+                    window=signal_window,
+                    candidates=candidate_search_result.candidates,
+                    price_source=settings.price_source,
+                )
 
-            pearson_scores = calculate_centered_pearson_batch(
-                pattern_matrix_result.current_values,
-                pattern_matrix_result.candidate_matrix,
-            )
+                pearson_scores = calculate_centered_pearson_batch(
+                    pattern_matrix_result.current_values,
+                    pattern_matrix_result.candidate_matrix,
+                )
 
-            pearson_passed_count = int((pearson_scores >= settings.pearson_min).sum())
-            best_pearson = (
-                float(pearson_scores.max())
-                if pearson_scores.size > 0
-                else 0.0
-            )
+                pearson_passed_count = int((pearson_scores >= settings.pearson_min).sum())
+                best_pearson = (
+                    float(pearson_scores.max())
+                    if pearson_scores.size > 0
+                    else 0.0
+                )
+
+            except SignalDataNotReadyError as exc:
+                # Например, после клиринга первая строка 17:00:00 закрывается в 17:00:05,
+                # а due-точка 17:00:00 требует строку 16:59:55, которой нет.
+                # Это не авария signal-сервиса, а штатный пропуск расчёта.
+                last_calculated_ts_by_instrument[instrument_code] = due_signal_bar_ts
+
+                window_text = format_signal_window_for_log(
+                    signal_window,
+                    lambda ts: read_job_bar_time_ct(instrument_code, ts),
+                )
+
+                log_info(
+                    logger,
+                    f"{instrument_code}: пропускаю расчёт, данных для окна недостаточно: "
+                    f"{exc}; latest_job_row={status.last_bar_time_ct} CT, "
+                    f"window={window_text}",
+                    to_telegram=False,
+                )
+                continue
 
             last_calculated_ts_by_instrument[instrument_code] = due_signal_bar_ts
 

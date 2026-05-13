@@ -158,13 +158,10 @@ Instrument: Registry = {
 
     "NQ": {
         **FUT_DEFAULTS,
-        # "history_enabled": True,
+        "history_enabled": True,
         "tradingClass": "NQ",
         "multiplier": 20.0,
         "db_filename": "NQ.sqlite3",
-        # Для нового инструмента ограничиваем начальную загрузку двумя неделями.
-        # Если нужна более длинная история, увеличь history_lookback_days вручную.
-        # "history_lookback_days": 14,
         "contracts": [
             {"conId": 620730920, "localSymbol": "NQM4", "lastTradeDateOrContractMonth": "20240621",
              "active_from_utc": "2024-03-13T22:00:00Z", "active_to_utc": "2024-06-19T17:00:00Z"},

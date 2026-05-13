@@ -9,6 +9,7 @@ from core.time_utils import SQLITE_DATETIME_FORMAT
 from ib_job_data.feature_db_sql import MID_PRICE_TABLE_NAME, quote_identifier
 from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 from ib_signal.signal_config import SignalConfig, SignalWindowMode
+from ib_signal.signal_errors import SignalDataNotReadyError
 from ib_signal.signal_schedule import get_grid_slot_start_ts
 from ib_signal.signal_time import resolve_allowed_hour_slots
 from ib_signal.signal_window import SignalWindow
@@ -82,7 +83,7 @@ def read_signal_bar_time_ct(
         ).fetchone()
 
         if row is None:
-            raise RuntimeError(
+            raise SignalDataNotReadyError(
                 f"Не найден job-бар для signal_bar_ts={signal_bar_ts}: "
                 f"instrument={instrument_code}, source_bar_ts={source_bar_ts}"
             )

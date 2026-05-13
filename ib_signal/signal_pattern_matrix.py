@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+import sqlite3
 import numpy as np
 
 from contracts import Instrument
@@ -8,6 +9,7 @@ from core.sqlite_utils import open_sqlite_connection
 from ib_job_data.feature_db_sql import MID_PRICE_TABLE_NAME, quote_identifier
 from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 from ib_signal.signal_candidates import CandidateWindow
+from ib_signal.signal_errors import SignalDataNotReadyError
 from ib_signal.signal_window import SignalWindow
 
 PRICE_SOURCE_COLUMNS = {
@@ -271,13 +273,16 @@ def build_pattern_matrix(
     )
 
     try:
-        current_values = read_current_pattern_values(
-            conn=conn,
-            window=window,
-            price_source=price_source,
-            expected_points=expected_points,
-            bar_size_seconds=bar_size_seconds,
-        )
+        try:
+            current_values = read_current_pattern_values(
+                conn=conn,
+                window=window,
+                price_source=price_source,
+                expected_points=expected_points,
+                bar_size_seconds=bar_size_seconds,
+            )
+        except ValueError as exc:
+            raise SignalDataNotReadyError(str(exc)) from exc
 
         candidate_matrix, valid_candidates, skipped_candidates_count = (
             read_candidate_pattern_matrix(
@@ -296,6 +301,13 @@ def build_pattern_matrix(
             skipped_candidates_count=skipped_candidates_count,
             expected_points=expected_points,
         )
+
+    except sqlite3.OperationalError as exc:
+        if "locked" in str(exc).lower():
+            raise SignalDataNotReadyError(
+                f"job DB locked during pattern matrix build: {exc}"
+            ) from exc
+        raise
 
     finally:
         conn.close()
