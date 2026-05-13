@@ -20,7 +20,7 @@ PLOT_TOP_CANDIDATES = 10
 def get_signal_png_dir() -> Path:
     """Что делает: возвращает каталог для PNG signal-сервиса и создаёт его при необходимости.
     Зачем нужна: пользователь хочет складывать графики в data/png, а не отправлять их в Telegram."""
-    png_dir = Path(__file__).resolve().parent.parent / "png"
+    png_dir = Path(__file__).resolve().parent.parent / "data" / "png"
     png_dir.mkdir(parents=True, exist_ok=True)
     return png_dir
 
@@ -168,8 +168,8 @@ def save_signal_candidate_plot(
     bar_size_seconds = get_bar_size_seconds(instrument_row["barSizeSetting"])
 
     current_x_minutes = (
-            np.arange(current_values.size, dtype=float) * bar_size_seconds / 60.0
-            - signal_window.pattern_seconds / 60.0
+        np.arange(current_values.size, dtype=float) * bar_size_seconds / 60.0
+        - signal_window.pattern_seconds / 60.0
     )
     current_line = normalize_series_for_plot(np.asarray(current_values, dtype=float))
 
@@ -199,8 +199,8 @@ def save_signal_candidate_plot(
             shown_count += 1
             candidate_line = normalize_series_for_plot(candidate_full_values)
             candidate_x_minutes = (
-                    np.arange(candidate_line.size, dtype=float) * bar_size_seconds / 60.0
-                    - signal_window.pattern_seconds / 60.0
+                np.arange(candidate_line.size, dtype=float) * bar_size_seconds / 60.0
+                - signal_window.pattern_seconds / 60.0
             )
 
             ax.plot(
@@ -227,8 +227,8 @@ def save_signal_candidate_plot(
     ax.set_title(
         f"{instrument_code} | signal_bar={signal_bar_time_ct} CT | "
         f"price_source={price_source}\n"
-        f"pattern_seconds={signal_window.pattern_seconds} | "
-        f"trade_seconds={signal_window.trade_seconds} | "
+        f"pattern_minutes={signal_window.pattern_seconds / 60:g} | "
+        f"trade_minutes={signal_window.trade_seconds / 60:g} | "
         f"valid_candidates={len(valid_candidates)} | "
         f"passed_threshold={(pearson_scores >= pearson_min).sum()} | "
         f"shown_top={shown_count}"

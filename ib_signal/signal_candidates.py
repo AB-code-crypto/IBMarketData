@@ -327,8 +327,7 @@ def format_candidate_search_result(result: CandidateSearchResult) -> str:
     if not result.candidates:
         return (
             f"current_signal_bar={result.current_signal_bar_time_ct} CT, "
-            f"current_signal_bar={result.current_signal_bar_time_ct} CT, "
-        f"current_hour_ct={result.current_hour_slot_ct}, "
+            f"current_hour_ct={result.current_hour_slot_ct}, "
             f"allowed_hours_ct={result.allowed_hour_slots_ct}, "
             f"candidates=0"
         )

@@ -8,6 +8,17 @@ from ib_signal.signal_schedule import get_grid_slot_start_ts
 SECONDS_PER_MINUTE = 60
 
 
+def format_minutes_for_log(seconds: int) -> str:
+    """Что делает: форматирует длительность в минутах для логов.
+    Зачем нужна: pattern/trade в конфигах задаются в минутах, поэтому секунды в runtime-логах читать неудобно."""
+    minutes = seconds / SECONDS_PER_MINUTE
+
+    if minutes.is_integer():
+        return str(int(minutes))
+
+    return f"{minutes:.2f}"
+
+
 @dataclass(frozen=True)
 class SignalWindow:
     # Точка принятия решения: последний закрытый job-бар, для которого считаем сигнал.
@@ -161,20 +172,20 @@ def format_signal_window_for_log(window: SignalWindow, get_time_text) -> str:
             " -> "
             f"{format_ts_ct_for_log(window.pattern_end_ts, get_time_text)}"
         ),
-        f"pattern_seconds={window.pattern_seconds}",
+        f"pattern_minutes={format_minutes_for_log(window.pattern_seconds)}",
         (
             "trade="
             f"{format_ts_ct_for_log(window.trade_start_ts, get_time_text)}"
             " -> "
             f"{format_ts_ct_for_log(window.trade_end_ts, get_time_text)}"
         ),
-        f"trade_seconds={window.trade_seconds}",
+        f"trade_minutes={format_minutes_for_log(window.trade_seconds)}",
     ]
 
     if window.slot_start_ts is not None:
         parts.append(f"slot_start={format_ts_ct_for_log(window.slot_start_ts, get_time_text)}")
 
     if window.slot_offset_seconds is not None:
-        parts.append(f"slot_offset_seconds={window.slot_offset_seconds}")
+        parts.append(f"slot_offset_minutes={format_minutes_for_log(window.slot_offset_seconds)}")
 
     return ", ".join(parts)
