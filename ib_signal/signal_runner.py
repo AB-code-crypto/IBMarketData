@@ -11,7 +11,7 @@ from ib_signal.pearson import calculate_centered_pearson_batch
 from ib_signal.signal_candidates import find_candidate_windows, format_candidate_search_result
 from ib_signal.signal_pattern_matrix import build_pattern_matrix, format_pattern_matrix_result
 from ib_signal.signal_plot import save_signal_candidate_plot
-from ib_signal.signal_window import build_current_signal_window, format_signal_window_for_log
+from ib_signal.signal_window import build_current_signal_window, format_signal_window_for_log, format_ts_ct_for_log
 
 setup_logging()
 logger = get_logger(__name__)
@@ -206,6 +206,36 @@ async def run_signal_loop(
                     if pearson_scores.size > 0
                     else 0.0
                 )
+
+                signal_bar_time_ct = read_job_bar_time_ct(
+                    instrument_code,
+                    signal_window.signal_bar_ts,
+                )
+
+                if signal_bar_time_ct is None:
+                    signal_bar_time_ct = format_ts_ct_for_log(
+                        signal_window.signal_bar_ts,
+                        lambda ts: read_job_bar_time_ct(instrument_code, ts),
+                    ).replace(" CT", "")
+
+                saved_plot_path = save_signal_candidate_plot(
+                    instrument_code=instrument_code,
+                    signal_bar_time_ct=signal_bar_time_ct,
+                    signal_window=signal_window,
+                    current_values=pattern_matrix_result.current_values,
+                    valid_candidates=pattern_matrix_result.valid_candidates,
+                    candidate_matrix=pattern_matrix_result.candidate_matrix,
+                    pearson_scores=pearson_scores,
+                    price_source=settings.price_source,
+                    pearson_min=settings.pearson_min,
+                )
+
+                if saved_plot_path is not None:
+                    log_info(
+                        logger,
+                        f"{instrument_code}: сохранён PNG с кандидатами: {saved_plot_path}",
+                        to_telegram=False,
+                    )
 
             except SignalDataNotReadyError as exc:
                 # Например, после клиринга первая строка 17:00:00 закрывается в 17:00:05,

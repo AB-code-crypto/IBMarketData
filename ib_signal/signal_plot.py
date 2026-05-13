@@ -161,6 +161,9 @@ def save_signal_candidate_plot(
         limit=min(PLOT_TOP_CANDIDATES, len(valid_candidates)),
     )
 
+    if top_indices.size == 0:
+        return None
+
     instrument_row = Instrument[instrument_code]
     bar_size_seconds = get_bar_size_seconds(instrument_row["barSizeSetting"])
 
