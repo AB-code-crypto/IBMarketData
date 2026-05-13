@@ -11,6 +11,8 @@ from ib_signal.pearson import calculate_centered_pearson_batch
 from ib_signal.signal_candidates import find_candidate_windows, format_candidate_search_result
 from ib_signal.signal_pattern_matrix import build_pattern_matrix, format_pattern_matrix_result
 from ib_signal.signal_plot import save_signal_candidate_plot
+from ib_signal.signal_regression import build_linear_regression
+from ib_signal.signal_sma_reader import read_current_sma_values
 from ib_signal.signal_window import build_current_signal_window, format_signal_window_for_log
 
 setup_logging()
@@ -207,6 +209,20 @@ async def run_signal_loop(
                     else 0.0
                 )
 
+                price_regression = build_linear_regression(
+                    pattern_matrix_result.current_values,
+                )
+                sma_600_values = read_current_sma_values(
+                    instrument_code=instrument_code,
+                    signal_window=signal_window,
+                    period_bars=600,
+                )
+                sma_600_regression = (
+                    build_linear_regression(sma_600_values)
+                    if sma_600_values is not None
+                    else None
+                )
+
                 saved_plot_path = save_signal_candidate_plot(
                     instrument_code=instrument_code,
                     signal_bar_time_ct=candidate_search_result.current_signal_bar_time_ct,
@@ -254,6 +270,12 @@ async def run_signal_loop(
             candidate_text = format_candidate_search_result(candidate_search_result)
             matrix_text = format_pattern_matrix_result(pattern_matrix_result)
 
+            sma_600_regression_delta = (
+                f"{sma_600_regression.fitted_delta:.6f}"
+                if sma_600_regression is not None
+                else "None"
+            )
+
             log_info(
                 logger,
                 f"{instrument_code}: пора считать сигнал, "
@@ -261,6 +283,7 @@ async def run_signal_loop(
                 f"window={window_text}, "
                 f"candidate_search={candidate_text}, "
                 f"pattern_matrix={matrix_text}, "
+                f"regression=price_delta={price_regression.fitted_delta:.6f}, sma600_delta={sma_600_regression_delta}, "
                 f"pearson_best={best_pearson:.6f}, "
                 f"pearson_passed={pearson_passed_count}",
                 to_telegram=False,

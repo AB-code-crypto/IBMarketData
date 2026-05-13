@@ -13,6 +13,8 @@ from ib_job_data.feature_db_sql import MID_PRICE_TABLE_NAME, quote_identifier
 from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 from ib_job_data.sma_features import SMA_PERIODS, SMA_TABLE_NAME, get_sma_column_name
 from ib_signal.signal_candidates import CandidateWindow
+from ib_signal.signal_regression import build_linear_regression
+from ib_signal.signal_sma_reader import read_current_sma_lines
 from ib_signal.signal_window import SignalWindow
 
 PLOT_TOP_CANDIDATES = 10
@@ -253,6 +255,17 @@ def save_signal_candidate_plot(
     )
     current_line = normalize_series_for_plot(np.asarray(current_values, dtype=float))
 
+    current_regression_line = (
+        build_linear_regression(current_values).line_values
+        - current_values[0]
+    )
+    sma_600_values = current_sma_lines.get(600)
+    sma_600_regression_line = (
+        build_linear_regression(sma_600_values).line_values - current_values[0]
+        if sma_600_values is not None
+        else None
+    )
+
     trade_points = signal_window.trade_seconds // bar_size_seconds
     full_points = current_values.size + trade_points
 
@@ -312,6 +325,27 @@ def save_signal_candidate_plot(
         linewidth=2.8,
         label="Current pattern",
     )
+
+    ax.plot(
+        current_x_minutes,
+        current_regression_line,
+        linestyle="-.",
+        linewidth=2.0,
+        alpha=0.95,
+        zorder=6,
+        label="Current regression",
+    )
+
+    if sma_600_regression_line is not None:
+        ax.plot(
+            current_x_minutes,
+            sma_600_regression_line,
+            linestyle=":",
+            linewidth=2.0,
+            alpha=0.95,
+            zorder=5,
+            label="SMA 600 regression",
+        )
 
     ax.axvline(0.0, linestyle="--", linewidth=1.2)
 
