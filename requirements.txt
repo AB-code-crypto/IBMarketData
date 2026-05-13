@@ -3,3 +3,4 @@ ib_async==2.1.0
 tzdata==2025.3
 python-dotenv==1.2.2
 numpy==2.4.4
+matplotlib==3.10.9

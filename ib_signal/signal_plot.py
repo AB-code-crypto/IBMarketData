@@ -14,7 +14,7 @@ from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 from ib_signal.signal_candidates import CandidateWindow
 from ib_signal.signal_window import SignalWindow
 
-PLOT_TOP_CANDIDATES = 10
+PLOT_TOP_CANDIDATES = 20
 
 
 def get_signal_png_dir() -> Path:
