@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,7 +20,7 @@ PLOT_TOP_CANDIDATES = 10
 def get_signal_png_dir() -> Path:
     """Что делает: возвращает каталог для PNG signal-сервиса и создаёт его при необходимости.
     Зачем нужна: пользователь хочет складывать графики в data/png, а не отправлять их в Telegram."""
-    png_dir = Path(__file__).resolve().parent.parent / "data" / "png"
+    png_dir = Path(__file__).resolve().parent.parent / "png"
     png_dir.mkdir(parents=True, exist_ok=True)
     return png_dir
 
@@ -144,7 +145,6 @@ def save_signal_candidate_plot(
         signal_window: SignalWindow,
         current_values: np.ndarray,
         valid_candidates: list[CandidateWindow],
-        candidate_matrix: np.ndarray,
         pearson_scores: np.ndarray,
         price_source: str,
         pearson_min: float,
@@ -168,8 +168,8 @@ def save_signal_candidate_plot(
     bar_size_seconds = get_bar_size_seconds(instrument_row["barSizeSetting"])
 
     current_x_minutes = (
-        np.arange(current_values.size, dtype=float) * bar_size_seconds / 60.0
-        - signal_window.pattern_seconds / 60.0
+            np.arange(current_values.size, dtype=float) * bar_size_seconds / 60.0
+            - signal_window.pattern_seconds / 60.0
     )
     current_line = normalize_series_for_plot(np.asarray(current_values, dtype=float))
 
@@ -199,8 +199,8 @@ def save_signal_candidate_plot(
             shown_count += 1
             candidate_line = normalize_series_for_plot(candidate_full_values)
             candidate_x_minutes = (
-                np.arange(candidate_line.size, dtype=float) * bar_size_seconds / 60.0
-                - signal_window.pattern_seconds / 60.0
+                    np.arange(candidate_line.size, dtype=float) * bar_size_seconds / 60.0
+                    - signal_window.pattern_seconds / 60.0
             )
 
             ax.plot(

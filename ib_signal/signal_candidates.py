@@ -32,6 +32,7 @@ class CandidateWindow:
 
 @dataclass(frozen=True)
 class CandidateSearchResult:
+    current_signal_bar_time_ct: str
     current_hour_slot_ct: int
     allowed_hour_slots_ct: list[int]
     candidates: list[CandidateWindow]
@@ -278,6 +279,7 @@ def find_candidate_windows(
 
     if max_candidate_signal_ts <= 0:
         return CandidateSearchResult(
+            current_signal_bar_time_ct=current_signal_bar_time_ct,
             current_hour_slot_ct=current_hour_slot_ct,
             allowed_hour_slots_ct=allowed_hour_slots_ct,
             candidates=[],
@@ -312,6 +314,7 @@ def find_candidate_windows(
         )
 
     return CandidateSearchResult(
+        current_signal_bar_time_ct=current_signal_bar_time_ct,
         current_hour_slot_ct=current_hour_slot_ct,
         allowed_hour_slots_ct=allowed_hour_slots_ct,
         candidates=candidates,
@@ -323,7 +326,9 @@ def format_candidate_search_result(result: CandidateSearchResult) -> str:
     Зачем нужна: в логах видно, какие CT-часы разрешены и сколько candidate windows найдено."""
     if not result.candidates:
         return (
-            f"current_hour_ct={result.current_hour_slot_ct}, "
+            f"current_signal_bar={result.current_signal_bar_time_ct} CT, "
+            f"current_signal_bar={result.current_signal_bar_time_ct} CT, "
+        f"current_hour_ct={result.current_hour_slot_ct}, "
             f"allowed_hours_ct={result.allowed_hour_slots_ct}, "
             f"candidates=0"
         )
