@@ -21,24 +21,24 @@ class SignalConfig:
     max_job_bar_lag_seconds: int = 15
 
     # ROLLING-режим.
-    rolling_signal_step_seconds: int = 60
-    rolling_back_minutes: int = 30
-    rolling_trade_minutes: int = 30
+    rolling_signal_step_seconds: int = 60  # считаем сигнал не на каждом баре, а через это кол-во секунд
+    rolling_back_minutes: int = 30  # Смотрим на столько минут назад
+    rolling_trade_minutes: int = 30  # Длительность сделки по времени
 
     # GRID-режим.
-    slot_signal_step_seconds: int = 5
-    slot_step_minutes: int = 60
-    slot_start_minute_of_day: int = 0
-    slot_back_minutes: int = 30
-    slot_entry_minutes: int = 20
-    slot_close_before_end_seconds: int = 10
+    slot_signal_step_seconds: int = 5  # Считаем сигнал на каждом баре в 5 секунд
+    slot_step_minutes: int = 60  # Размер слота внутри которого торгуем. Слоты не накладываются друг на друга
+    slot_start_minute_of_day: int = 0  # Смещение слота от начала дня. Если хочется торговать не 30-60 минут, а 0-30
+    slot_back_minutes: int = 30  # Смотрим на столько минут назад
+    slot_entry_minutes: int = 20  # Вход возможно только в первые 20 минут после анализа
+    slot_close_before_end_seconds: int = 10  # Закрываем сделку за 10
 
     # Поиск кандидатов по Pearson.
-    price_source: str = "mid_close"
-    pearson_min: float = 0.7
-    min_candidates: int = 10
-    max_candidates: int = 100
-    history_lookback_days: int | None = 120  # None = вся доступная история
+    price_source: str = "mid_close"  #
+    pearson_min: float = 0.7  # минимальный пирсон
+    min_candidates: int = 10  # мин и макс сколько нужно кандидатов выше pearson_min
+    max_candidates: int = 100  #
+    history_lookback_days: int | None = 180  # None = вся доступная история
 
 
 DEFAULT_SIGNAL_CONFIG = SignalConfig()
