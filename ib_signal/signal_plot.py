@@ -18,11 +18,11 @@ from ib_signal.signal_window import SignalWindow
 
 PLOT_TOP_CANDIDATES = 10
 
-CURRENT_PATTERN_COLOR = "black"
+CURRENT_PATTERN_COLOR = "red"
 SMA_LINE_COLORS: dict[int, str] = {
     120: "tab:orange",
-    600: "tab:green",
-    1200: "tab:red",
+    600: "tab:blue",
+    1200: "tab:green",
 }
 
 
@@ -247,7 +247,7 @@ def save_signal_candidate_plot(
                 candidate_x_minutes,
                 candidate_line,
                 linewidth=1.1,
-                alpha=0.6,
+                alpha=0.4,
                 label=(
                     f"{rank}. "
                     f"{candidate.signal_bar_time_ct} CT | "
@@ -258,7 +258,7 @@ def save_signal_candidate_plot(
     current_pattern_line = ax.plot(
         current_x_minutes,
         current_line,
-        linewidth=3.0,
+        linewidth=2.0,
         alpha=1.0,
         zorder=7,
         color=CURRENT_PATTERN_COLOR,
@@ -268,7 +268,7 @@ def save_signal_candidate_plot(
     ax.plot(
         current_x_minutes,
         current_regression_line,
-        linestyle="-",
+        # linestyle="-",
         linewidth=2.0,
         alpha=0.95,
         zorder=8,
@@ -280,7 +280,7 @@ def save_signal_candidate_plot(
         ax.plot(
             current_x_minutes,
             sma_600_regression_line,
-            linestyle="-",
+            # linestyle="-",
             linewidth=2.0,
             alpha=0.95,
             zorder=6,
