@@ -156,6 +156,75 @@ def read_candidate_full_values(
     return values
 
 
+def build_info_lines(
+        *,
+        signal_window: SignalWindow,
+        valid_candidates: list[CandidateWindow],
+        pearson_scores: np.ndarray,
+        pearson_min: float,
+        shown_candidates: list[tuple[int, CandidateWindow, float]],
+        current_sma_lines: dict[int, np.ndarray],
+        current_regression,
+        current_regression_direction: str,
+        sma_600_regression,
+        sma_600_regression_direction: str | None,
+        regression_flat_delta_threshold: float,
+) -> list[str]:
+    """Что делает: собирает весь текстовый блок для правой информационной панели.
+    Зачем нужна: пользователь хочет стабильную область справа, чтобы текст не накладывался на график."""
+    lines: list[str] = []
+
+    lines.append("REGRESSION")
+    lines.append(
+        f"flat_delta_threshold={format_plot_regression_value(regression_flat_delta_threshold)}"
+    )
+    lines.append(
+        f"price: slope={format_plot_regression_value(current_regression.slope)}"
+    )
+    lines.append(
+        f"       delta={format_plot_regression_value(current_regression.fitted_delta)}"
+    )
+    lines.append(f"       direction={current_regression_direction}")
+
+    if sma_600_regression is not None:
+        lines.append(
+            f"sma600: slope={format_plot_regression_value(sma_600_regression.slope)}"
+        )
+        lines.append(
+            f"        delta={format_plot_regression_value(sma_600_regression.fitted_delta)}"
+        )
+        lines.append(f"        direction={sma_600_regression_direction}")
+    else:
+        lines.append("sma600: regression=None")
+
+    lines.append("")
+    lines.append("WINDOW")
+    lines.append(f"pattern_minutes={signal_window.pattern_seconds / 60:g}")
+    lines.append(f"trade_minutes={signal_window.trade_seconds / 60:g}")
+    lines.append(f"valid_candidates={len(valid_candidates)}")
+    lines.append(f"passed_threshold={(pearson_scores >= pearson_min).sum()}")
+    lines.append(f"shown_top={len(shown_candidates)}")
+
+    if current_sma_lines:
+        lines.append("")
+        lines.append("SMA LINES")
+        for sma_period_bars in sorted(current_sma_lines):
+            lines.append(f"SMA {sma_period_bars}")
+
+    lines.append("")
+    lines.append("CANDIDATES")
+    if shown_candidates:
+        for rank, candidate, pearson_value in shown_candidates:
+            lines.append(
+                f"{rank}. {candidate.signal_bar_time_ct}"
+            )
+            lines.append(f"   r={pearson_value:.4f}")
+    else:
+        lines.append("No shown candidates")
+
+    return lines
+
+
 def save_signal_candidate_plot(
         *,
         instrument_code: str,
@@ -227,14 +296,21 @@ def save_signal_candidate_plot(
     trade_points = signal_window.trade_seconds // bar_size_seconds
     full_points = current_values.size + trade_points
 
-    fig, ax = plt.subplots(figsize=(16, 9))
+    fig = plt.figure(figsize=(18, 9))
+    grid = fig.add_gridspec(
+        nrows=1,
+        ncols=2,
+        width_ratios=[3, 1],
+        wspace=0.05,
+    )
+    ax = fig.add_subplot(grid[0, 0])
+    ax_info = fig.add_subplot(grid[0, 1])
+    ax_info.axis("off")
 
-    shown_count = 0
-
-    sma_line_colors: dict[int, str] = {}
+    shown_candidates: list[tuple[int, CandidateWindow, float]] = []
 
     for sma_period_bars, sma_values in current_sma_lines.items():
-        sma_line = ax.plot(
+        ax.plot(
             current_x_minutes,
             sma_values - current_values[0],
             linestyle="--",
@@ -242,9 +318,7 @@ def save_signal_candidate_plot(
             alpha=0.95,
             zorder=4,
             color=SMA_LINE_COLORS.get(sma_period_bars),
-            label=f"SMA {sma_period_bars}",
-        )[0]
-        sma_line_colors[sma_period_bars] = sma_line.get_color()
+        )
 
     if top_indices.size > 0:
         for rank, candidate_index in enumerate(top_indices, start=1):
@@ -262,7 +336,7 @@ def save_signal_candidate_plot(
             if candidate_full_values is None:
                 continue
 
-            shown_count += 1
+            shown_candidates.append((rank, candidate, pearson_value))
             candidate_line = normalize_series_for_plot(candidate_full_values)
             candidate_x_minutes = (
                 np.arange(candidate_line.size, dtype=float) * bar_size_seconds / 60.0
@@ -274,86 +348,35 @@ def save_signal_candidate_plot(
                 candidate_line,
                 linewidth=1.1,
                 alpha=0.4,
-                label=(
-                    f"{rank}. "
-                    f"{candidate.signal_bar_time_ct} CT | "
-                    f"r={pearson_value:.4f}"
-                ),
             )
 
-    current_pattern_line = ax.plot(
+    ax.plot(
         current_x_minutes,
         current_line,
         linewidth=2.0,
         alpha=1.0,
         zorder=7,
         color=CURRENT_PATTERN_COLOR,
-        label="Current pattern",
-    )[0]
+    )
 
     ax.plot(
         current_x_minutes,
         current_regression_line,
-        # linestyle="-",
         linewidth=2.0,
         alpha=0.95,
         zorder=8,
-        color=current_pattern_line.get_color(),
-        label=(
-            f"Current regression "
-            f"delta={format_plot_regression_value(current_regression.fitted_delta)} "
-            f"dir={current_regression_direction}"
-        ),
+        color=CURRENT_PATTERN_COLOR,
     )
 
     if sma_600_regression_line is not None:
         ax.plot(
             current_x_minutes,
             sma_600_regression_line,
-            # linestyle="-",
             linewidth=2.0,
             alpha=0.95,
             zorder=6,
-            color=sma_line_colors[600],
-            label=(
-                f"SMA 600 regression "
-                f"delta={format_plot_regression_value(sma_600_regression.fitted_delta)} "
-                f"dir={sma_600_regression_direction}"
-            ),
+            color=SMA_LINE_COLORS[600],
         )
-
-    regression_diagnostics_lines = [
-        f"flat_delta_threshold={format_plot_regression_value(regression_flat_delta_threshold)}",
-        (
-            f"price: slope={format_plot_regression_value(current_regression.slope)}, "
-            f"delta={format_plot_regression_value(current_regression.fitted_delta)}, "
-            f"direction={current_regression_direction}"
-        ),
-    ]
-
-    if sma_600_regression is not None:
-        regression_diagnostics_lines.append(
-            f"sma600: slope={format_plot_regression_value(sma_600_regression.slope)}, "
-            f"delta={format_plot_regression_value(sma_600_regression.fitted_delta)}, "
-            f"direction={sma_600_regression_direction}"
-        )
-    else:
-        regression_diagnostics_lines.append("sma600: regression=None")
-
-    ax.text(
-        0.01,
-        0.99,
-        "\n".join(regression_diagnostics_lines),
-        transform=ax.transAxes,
-        fontsize=9,
-        verticalalignment="top",
-        bbox={
-            "boxstyle": "round",
-            "facecolor": "white",
-            "alpha": 0.80,
-            "edgecolor": "gray",
-        },
-    )
 
     ax.axvline(0.0, linestyle="--", linewidth=1.2)
 
@@ -364,12 +387,37 @@ def save_signal_candidate_plot(
         f"trade_minutes={signal_window.trade_seconds / 60:g} | "
         f"valid_candidates={len(valid_candidates)} | "
         f"passed_threshold={(pearson_scores >= pearson_min).sum()} | "
-        f"shown_top={shown_count}"
+        f"shown_top={len(shown_candidates)}"
     )
     ax.set_xlabel("Minutes relative to signal point")
     ax.set_ylabel("Delta from first point")
     ax.grid(True)
-    ax.legend(loc="best", fontsize=8)
+
+    info_lines = build_info_lines(
+        signal_window=signal_window,
+        valid_candidates=valid_candidates,
+        pearson_scores=pearson_scores,
+        pearson_min=pearson_min,
+        shown_candidates=shown_candidates,
+        current_sma_lines=current_sma_lines,
+        current_regression=current_regression,
+        current_regression_direction=current_regression_direction,
+        sma_600_regression=sma_600_regression,
+        sma_600_regression_direction=sma_600_regression_direction,
+        regression_flat_delta_threshold=regression_flat_delta_threshold,
+    )
+
+    ax_info.text(
+        0.01,
+        0.99,
+        "\n".join(info_lines),
+        transform=ax_info.transAxes,
+        fontsize=9,
+        verticalalignment="top",
+        horizontalalignment="left",
+        family="monospace",
+    )
+
     fig.tight_layout()
 
     plot_path = build_plot_path(
