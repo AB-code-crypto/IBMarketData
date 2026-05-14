@@ -171,7 +171,7 @@ def draw_info_section(
         y,
         title,
         transform=ax_info.transAxes,
-        fontsize=8.5,
+        fontsize=8.3,
         fontweight="bold",
         verticalalignment="top",
         horizontalalignment="left",
@@ -185,7 +185,7 @@ def draw_info_section(
         y,
         "-" * len(title),
         transform=ax_info.transAxes,
-        fontsize=8.2,
+        fontsize=8.0,
         verticalalignment="top",
         horizontalalignment="left",
         family="monospace",
@@ -199,7 +199,7 @@ def draw_info_section(
             y,
             text,
             transform=ax_info.transAxes,
-            fontsize=8.2,
+            fontsize=8.0,
             verticalalignment="top",
             horizontalalignment="left",
             family="monospace",
@@ -207,7 +207,7 @@ def draw_info_section(
         )
         y -= line_height
 
-    return y - line_height * 0.55
+    return y - line_height * 0.22
 
 
 def save_signal_candidate_plot(
@@ -434,7 +434,7 @@ def save_signal_candidate_plot(
         candidate_rows.append(("No shown candidates", None))
 
     y = 0.99
-    line_height = 0.031
+    line_height = 0.024
     y = draw_info_section(
         ax_info,
         title="REGRESSION",
