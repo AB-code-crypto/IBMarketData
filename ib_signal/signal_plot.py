@@ -416,9 +416,9 @@ def save_signal_candidate_plot(
             None,
         ),
         ("current        : red", CURRENT_PATTERN_COLOR),
-        ("sma120         : orange", SMA_LINE_COLORS[120]),
-        ("sma600         : blue", SMA_LINE_COLORS[600]),
-        ("sma1200        : green", SMA_LINE_COLORS[1200]),
+        ("sma 120         : orange", SMA_LINE_COLORS[120]),
+        ("sma 600         : blue", SMA_LINE_COLORS[600]),
+        ("sma 1200        : green", SMA_LINE_COLORS[1200]),
     ]
 
     candidate_rows: list[tuple[str, str | None]] = []

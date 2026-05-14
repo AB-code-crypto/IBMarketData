@@ -36,7 +36,7 @@ class SignalConfig:
     # Диагностика наклона regression line.
     # Значение задаётся в ценовых пунктах за всё pattern-window.
     # Пока это диагностический порог: он влияет только на подпись up/down/flat, а не на отбор кандидатов.
-    regression_flat_delta_threshold: float = 1.0
+    regression_flat_delta_threshold: float = 10.0
 
     # Поиск кандидатов по Pearson.
     price_source: str = "mid_close"  #
