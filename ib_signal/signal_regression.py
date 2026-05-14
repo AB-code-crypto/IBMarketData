@@ -90,7 +90,7 @@ def classify_regression_direction(
         flat_delta_threshold: float,
 ) -> RegressionDirection:
     """Что делает: классифицирует наклон regression line как up/down/flat по fitted_delta.
-    Зачем нужна: slope зависит от размера бара, а fitted_delta сразу показывает движение линии за всё окно."""
+    Зачем нужна: fitted_delta сразу показывает движение regression line за всё окно."""
     threshold = float(flat_delta_threshold)
 
     if threshold < 0.0:
@@ -113,8 +113,8 @@ def format_regression_diagnostics(
         *,
         flat_delta_threshold: float,
 ) -> str:
-    """Что делает: форматирует slope/delta/direction одной regression line для лога или PNG.
-    Зачем нужна: одинаковая диагностическая строка в консоли и на картинке снижает риск рассинхрона."""
+    """Что делает: форматирует delta/direction одной regression line для лога.
+    Зачем нужна: лог не должен содержать slope, потому что при фиксированном окне он дублирует delta."""
     if regression is None:
         return f"{label}=None"
 
@@ -124,7 +124,6 @@ def format_regression_diagnostics(
     )
 
     return (
-        f"{label}_slope={regression.slope:.6f}, "
         f"{label}_delta={regression.fitted_delta:.6f}, "
         f"{label}_direction={direction}"
     )

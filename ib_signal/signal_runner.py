@@ -12,6 +12,7 @@ from ib_signal.signal_candidates import find_candidate_windows, format_candidate
 from ib_signal.signal_pattern_matrix import build_pattern_matrix, format_pattern_matrix_result
 from ib_signal.signal_plot import save_signal_candidate_plot
 from ib_signal.signal_regression import build_linear_regression, format_regression_diagnostics
+from ib_signal.signal_regression_threshold import get_regression_flat_delta_threshold
 from ib_signal.signal_sma_reader import read_current_sma_values
 from ib_signal.signal_window import build_current_signal_window, format_signal_window_for_log
 
@@ -167,17 +168,8 @@ async def run_signal_loop(
             if due_signal_bar_ts is None:
                 continue
 
-            '''
-            signal_window - объект с границами. Он нужен как вход в следующий слой: сбор текущего паттерна, поиск кандидатов,
-            pattern_start_ts
-            pattern_end_ts
-            trade_start_ts
-            trade_end_ts
-            pattern_seconds
-            trade_seconds
-            slot_start_ts
-            slot_offset_seconds
-            '''
+            # signal_window - объект с границами. Он нужен как вход в следующий слой:
+            # сбор текущего паттерна, поиск кандидатов и дальнейший расчёт сигнала.
             signal_window = build_current_signal_window(
                 signal_bar_ts=due_signal_bar_ts,
                 settings=settings,
@@ -209,6 +201,10 @@ async def run_signal_loop(
                     else 0.0
                 )
 
+                regression_flat_delta_threshold = get_regression_flat_delta_threshold(
+                    instrument_code,
+                )
+
                 price_regression = build_linear_regression(
                     pattern_matrix_result.current_values,
                 )
@@ -232,7 +228,7 @@ async def run_signal_loop(
                     pearson_scores=pearson_scores,
                     price_source=settings.price_source,
                     pearson_min=settings.pearson_min,
-                    regression_flat_delta_threshold=settings.regression_flat_delta_threshold,
+                    regression_flat_delta_threshold=regression_flat_delta_threshold,
                 )
 
                 if saved_plot_path is not None:
@@ -274,12 +270,12 @@ async def run_signal_loop(
             price_regression_text = format_regression_diagnostics(
                 "price",
                 price_regression,
-                flat_delta_threshold=settings.regression_flat_delta_threshold,
+                flat_delta_threshold=regression_flat_delta_threshold,
             )
             sma_600_regression_text = format_regression_diagnostics(
                 "sma600",
                 sma_600_regression,
-                flat_delta_threshold=settings.regression_flat_delta_threshold,
+                flat_delta_threshold=regression_flat_delta_threshold,
             )
 
             log_info(
@@ -289,7 +285,7 @@ async def run_signal_loop(
                 f"window={window_text}, "
                 f"candidate_search={candidate_text}, "
                 f"pattern_matrix={matrix_text}, "
-                f"regression_threshold={settings.regression_flat_delta_threshold:.6f}, "
+                f"regression_threshold={regression_flat_delta_threshold:.6f}, "
                 f"regression={price_regression_text}, {sma_600_regression_text}, "
                 f"pearson_best={best_pearson:.6f}, "
                 f"pearson_passed={pearson_passed_count}",
