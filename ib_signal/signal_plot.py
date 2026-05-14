@@ -18,6 +18,13 @@ from ib_signal.signal_window import SignalWindow
 
 PLOT_TOP_CANDIDATES = 10
 
+CURRENT_PATTERN_COLOR = "black"
+SMA_LINE_COLORS: dict[int, str] = {
+    120: "tab:orange",
+    600: "tab:green",
+    1200: "tab:red",
+}
+
 
 def get_signal_png_dir() -> Path:
     """Что делает: возвращает каталог для PNG signal-сервиса и создаёт его при необходимости.
@@ -208,6 +215,7 @@ def save_signal_candidate_plot(
             linewidth=2.2,
             alpha=0.95,
             zorder=4,
+            color=SMA_LINE_COLORS.get(sma_period_bars),
             label=f"SMA {sma_period_bars}",
         )[0]
         sma_line_colors[sma_period_bars] = sma_line.get_color()
@@ -253,6 +261,7 @@ def save_signal_candidate_plot(
         linewidth=3.0,
         alpha=1.0,
         zorder=7,
+        color=CURRENT_PATTERN_COLOR,
         label="Current pattern",
     )[0]
 
