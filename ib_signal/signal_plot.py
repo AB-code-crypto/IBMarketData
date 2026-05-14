@@ -156,6 +156,15 @@ def read_candidate_full_values(
     return values
 
 
+def append_info_section(lines: list[str], title: str) -> None:
+    """Что делает: добавляет компактный заголовок секции в правую колонку.
+    Зачем нужна: структурирует правую панель и помогает быстро читать длинный текст."""
+    if lines:
+        lines.append("")
+    lines.append(title)
+    lines.append("-" * len(title))
+
+
 def build_info_lines(
         *,
         signal_window: SignalWindow,
@@ -170,55 +179,60 @@ def build_info_lines(
         sma_600_regression_direction: str | None,
         regression_flat_delta_threshold: float,
 ) -> list[str]:
-    """Что делает: собирает весь текстовый блок для правой информационной панели.
-    Зачем нужна: пользователь хочет стабильную область справа, чтобы текст не накладывался на график."""
+    """Что делает: собирает компактный и структурированный текстовый блок для правой панели.
+    Зачем нужна: в правой колонке должно помещаться много данных без наложений на график."""
     lines: list[str] = []
 
-    lines.append("REGRESSION")
+    append_info_section(lines, "REGRESSION")
     lines.append(
-        f"flat_delta_threshold={format_plot_regression_value(regression_flat_delta_threshold)}"
+        f"flat_threshold : {format_plot_regression_value(regression_flat_delta_threshold)}"
     )
     lines.append(
-        f"price: slope={format_plot_regression_value(current_regression.slope)}"
+        f"price  slope   : {format_plot_regression_value(current_regression.slope)}"
     )
     lines.append(
-        f"       delta={format_plot_regression_value(current_regression.fitted_delta)}"
+        f"price  delta   : {format_plot_regression_value(current_regression.fitted_delta)}"
     )
-    lines.append(f"       direction={current_regression_direction}")
+    lines.append(f"price  dir     : {current_regression_direction}")
 
     if sma_600_regression is not None:
         lines.append(
-            f"sma600: slope={format_plot_regression_value(sma_600_regression.slope)}"
+            f"sma600 slope   : {format_plot_regression_value(sma_600_regression.slope)}"
         )
         lines.append(
-            f"        delta={format_plot_regression_value(sma_600_regression.fitted_delta)}"
+            f"sma600 delta   : {format_plot_regression_value(sma_600_regression.fitted_delta)}"
         )
-        lines.append(f"        direction={sma_600_regression_direction}")
+        lines.append(f"sma600 dir     : {sma_600_regression_direction}")
     else:
-        lines.append("sma600: regression=None")
+        lines.append("sma600         : regression=None")
 
-    lines.append("")
-    lines.append("WINDOW")
-    lines.append(f"pattern_minutes={signal_window.pattern_seconds / 60:g}")
-    lines.append(f"trade_minutes={signal_window.trade_seconds / 60:g}")
-    lines.append(f"valid_candidates={len(valid_candidates)}")
-    lines.append(f"passed_threshold={(pearson_scores >= pearson_min).sum()}")
-    lines.append(f"shown_top={len(shown_candidates)}")
+    append_info_section(lines, "WINDOW")
+    lines.append(f"pattern_min    : {signal_window.pattern_seconds / 60:g}")
+    lines.append(f"trade_min      : {signal_window.trade_seconds / 60:g}")
+    lines.append(f"valid_count    : {len(valid_candidates)}")
+    lines.append(f"passed_count   : {(pearson_scores >= pearson_min).sum()}")
+    lines.append(f"shown_top      : {len(shown_candidates)}")
+    lines.append(f"pearson_min    : {pearson_min:.4f}")
 
+    append_info_section(lines, "LINES")
     if current_sma_lines:
-        lines.append("")
-        lines.append("SMA LINES")
-        for sma_period_bars in sorted(current_sma_lines):
-            lines.append(f"SMA {sma_period_bars}")
+        lines.append(
+            "sma_present    : "
+            + ", ".join(str(period) for period in sorted(current_sma_lines))
+        )
+    else:
+        lines.append("sma_present    : none")
+    lines.append("current        : red")
+    lines.append("sma120         : orange")
+    lines.append("sma600         : blue")
+    lines.append("sma1200        : green")
 
-    lines.append("")
-    lines.append("CANDIDATES")
+    append_info_section(lines, "TOP CANDIDATES")
     if shown_candidates:
         for rank, candidate, pearson_value in shown_candidates:
             lines.append(
-                f"{rank}. {candidate.signal_bar_time_ct}"
+                f"{rank:02d} | r={pearson_value:.4f} | {candidate.signal_bar_time_ct}"
             )
-            lines.append(f"   r={pearson_value:.4f}")
     else:
         lines.append("No shown candidates")
 
@@ -300,8 +314,8 @@ def save_signal_candidate_plot(
     grid = fig.add_gridspec(
         nrows=1,
         ncols=2,
-        width_ratios=[3, 1],
-        wspace=0.05,
+        width_ratios=[4, 1],
+        wspace=0.04,
     )
     ax = fig.add_subplot(grid[0, 0])
     ax_info = fig.add_subplot(grid[0, 1])
@@ -412,13 +426,20 @@ def save_signal_candidate_plot(
         0.99,
         "\n".join(info_lines),
         transform=ax_info.transAxes,
-        fontsize=9,
+        fontsize=8.5,
         verticalalignment="top",
         horizontalalignment="left",
         family="monospace",
+        linespacing=1.12,
     )
 
-    fig.tight_layout()
+    fig.subplots_adjust(
+        left=0.05,
+        right=0.985,
+        top=0.90,
+        bottom=0.08,
+        wspace=0.035,
+    )
 
     plot_path = build_plot_path(
         instrument_code=instrument_code,
