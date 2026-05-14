@@ -11,7 +11,7 @@ from ib_signal.pearson import calculate_centered_pearson_batch
 from ib_signal.signal_candidates import find_candidate_windows, format_candidate_search_result
 from ib_signal.signal_pattern_matrix import build_pattern_matrix, format_pattern_matrix_result
 from ib_signal.signal_plot import save_signal_candidate_plot
-from ib_signal.signal_regression import build_linear_regression
+from ib_signal.signal_regression import build_linear_regression, format_regression_diagnostics
 from ib_signal.signal_sma_reader import read_current_sma_values
 from ib_signal.signal_window import build_current_signal_window, format_signal_window_for_log
 
@@ -232,6 +232,7 @@ async def run_signal_loop(
                     pearson_scores=pearson_scores,
                     price_source=settings.price_source,
                     pearson_min=settings.pearson_min,
+                    regression_flat_delta_threshold=settings.regression_flat_delta_threshold,
                 )
 
                 if saved_plot_path is not None:
@@ -270,10 +271,15 @@ async def run_signal_loop(
             candidate_text = format_candidate_search_result(candidate_search_result)
             matrix_text = format_pattern_matrix_result(pattern_matrix_result)
 
-            sma_600_regression_delta = (
-                f"{sma_600_regression.fitted_delta:.6f}"
-                if sma_600_regression is not None
-                else "None"
+            price_regression_text = format_regression_diagnostics(
+                "price",
+                price_regression,
+                flat_delta_threshold=settings.regression_flat_delta_threshold,
+            )
+            sma_600_regression_text = format_regression_diagnostics(
+                "sma600",
+                sma_600_regression,
+                flat_delta_threshold=settings.regression_flat_delta_threshold,
             )
 
             log_info(
@@ -283,7 +289,8 @@ async def run_signal_loop(
                 f"window={window_text}, "
                 f"candidate_search={candidate_text}, "
                 f"pattern_matrix={matrix_text}, "
-                f"regression=price_delta={price_regression.fitted_delta:.6f}, sma600_delta={sma_600_regression_delta}, "
+                f"regression_threshold={settings.regression_flat_delta_threshold:.6f}, "
+                f"regression={price_regression_text}, {sma_600_regression_text}, "
                 f"pearson_best={best_pearson:.6f}, "
                 f"pearson_passed={pearson_passed_count}",
                 to_telegram=False,

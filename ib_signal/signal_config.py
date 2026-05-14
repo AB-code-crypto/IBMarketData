@@ -33,6 +33,11 @@ class SignalConfig:
     slot_entry_minutes: int = 20  # Вход возможно только в первые 20 минут после анализа
     slot_close_before_end_seconds: int = 10  # Закрываем сделку за 10
 
+    # Диагностика наклона regression line.
+    # Значение задаётся в ценовых пунктах за всё pattern-window.
+    # Пока это диагностический порог: он влияет только на подпись up/down/flat, а не на отбор кандидатов.
+    regression_flat_delta_threshold: float = 1.0
+
     # Поиск кандидатов по Pearson.
     price_source: str = "mid_close"  #
     pearson_min: float = 0.7  # минимальный пирсон

@@ -1,10 +1,11 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TypeAlias
+from typing import Literal, TypeAlias
 
 import numpy as np
 
 NumberSeries: TypeAlias = Sequence[int | float] | np.ndarray
+RegressionDirection: TypeAlias = Literal["up", "down", "flat"]
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,52 @@ def build_linear_regression(values: NumberSeries) -> LinearRegressionResult:
     )
 
 
+def classify_regression_direction(
+        regression: LinearRegressionResult,
+        *,
+        flat_delta_threshold: float,
+) -> RegressionDirection:
+    """Что делает: классифицирует наклон regression line как up/down/flat по fitted_delta.
+    Зачем нужна: slope зависит от размера бара, а fitted_delta сразу показывает движение линии за всё окно."""
+    threshold = float(flat_delta_threshold)
+
+    if threshold < 0.0:
+        raise ValueError(
+            f"Порог flat_delta_threshold не может быть отрицательным: {threshold}"
+        )
+
+    if regression.fitted_delta > threshold:
+        return "up"
+
+    if regression.fitted_delta < -threshold:
+        return "down"
+
+    return "flat"
+
+
+def format_regression_diagnostics(
+        label: str,
+        regression: LinearRegressionResult | None,
+        *,
+        flat_delta_threshold: float,
+) -> str:
+    """Что делает: форматирует slope/delta/direction одной regression line для лога или PNG.
+    Зачем нужна: одинаковая диагностическая строка в консоли и на картинке снижает риск рассинхрона."""
+    if regression is None:
+        return f"{label}=None"
+
+    direction = classify_regression_direction(
+        regression,
+        flat_delta_threshold=flat_delta_threshold,
+    )
+
+    return (
+        f"{label}_slope={regression.slope:.6f}, "
+        f"{label}_delta={regression.fitted_delta:.6f}, "
+        f"{label}_direction={direction}"
+    )
+
+
 if __name__ == "__main__":
     demo_values = np.array(
         [100.0, 100.5, 100.7, 101.2, 101.5, 101.3, 102.0],
@@ -97,4 +144,5 @@ if __name__ == "__main__":
     print(f"fitted_start={regression.fitted_start:.6f}")
     print(f"fitted_end={regression.fitted_end:.6f}")
     print(f"fitted_delta={regression.fitted_delta:.6f}")
+    print(f"direction={classify_regression_direction(regression, flat_delta_threshold=1.0)}")
     print(f"line_values={np.round(regression.line_values, 6).tolist()}")

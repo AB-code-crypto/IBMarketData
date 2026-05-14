@@ -12,7 +12,10 @@ from core.sqlite_utils import open_sqlite_connection
 from ib_job_data.feature_db_sql import MID_PRICE_TABLE_NAME, quote_identifier
 from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 from ib_signal.signal_candidates import CandidateWindow
-from ib_signal.signal_regression import build_linear_regression
+from ib_signal.signal_regression import (
+    build_linear_regression,
+    classify_regression_direction,
+)
 from ib_signal.signal_sma_reader import read_current_sma_lines
 from ib_signal.signal_window import SignalWindow
 
@@ -89,6 +92,12 @@ def build_plot_path(
     return get_signal_png_dir() / filename
 
 
+def format_plot_regression_value(value: float) -> str:
+    """Что делает: компактно форматирует число regression-диагностики для PNG.
+    Зачем нужна: fixed-формат плох для EURUSD, а слишком длинные числа забивают картинку."""
+    return f"{value:.6g}"
+
+
 def read_candidate_full_values(
         *,
         instrument_code: str,
@@ -157,6 +166,7 @@ def save_signal_candidate_plot(
         pearson_scores: np.ndarray,
         price_source: str,
         pearson_min: float,
+        regression_flat_delta_threshold: float,
 ) -> Path | None:
     """Что делает: сохраняет PNG с текущим паттерном и лучшими историческими кандидатами.
     Зачем нужна: удобно визуально проверить, что signal-сервис нашёл похожие участки,
@@ -187,14 +197,30 @@ def save_signal_candidate_plot(
     )
     current_line = normalize_series_for_plot(np.asarray(current_values, dtype=float))
 
-    current_regression_line = (
-        build_linear_regression(current_values).line_values
-        - current_values[0]
+    current_regression = build_linear_regression(current_values)
+    current_regression_direction = classify_regression_direction(
+        current_regression,
+        flat_delta_threshold=regression_flat_delta_threshold,
     )
+    current_regression_line = current_regression.line_values - current_values[0]
+
     sma_600_values = current_sma_lines.get(600)
-    sma_600_regression_line = (
-        build_linear_regression(sma_600_values).line_values - current_values[0]
+    sma_600_regression = (
+        build_linear_regression(sma_600_values)
         if sma_600_values is not None
+        else None
+    )
+    sma_600_regression_direction = (
+        classify_regression_direction(
+            sma_600_regression,
+            flat_delta_threshold=regression_flat_delta_threshold,
+        )
+        if sma_600_regression is not None
+        else None
+    )
+    sma_600_regression_line = (
+        sma_600_regression.line_values - current_values[0]
+        if sma_600_regression is not None
         else None
     )
 
@@ -273,7 +299,11 @@ def save_signal_candidate_plot(
         alpha=0.95,
         zorder=8,
         color=current_pattern_line.get_color(),
-        label="Current regression",
+        label=(
+            f"Current regression "
+            f"delta={format_plot_regression_value(current_regression.fitted_delta)} "
+            f"dir={current_regression_direction}"
+        ),
     )
 
     if sma_600_regression_line is not None:
@@ -285,8 +315,45 @@ def save_signal_candidate_plot(
             alpha=0.95,
             zorder=6,
             color=sma_line_colors[600],
-            label="SMA 600 regression",
+            label=(
+                f"SMA 600 regression "
+                f"delta={format_plot_regression_value(sma_600_regression.fitted_delta)} "
+                f"dir={sma_600_regression_direction}"
+            ),
         )
+
+    regression_diagnostics_lines = [
+        f"flat_delta_threshold={format_plot_regression_value(regression_flat_delta_threshold)}",
+        (
+            f"price: slope={format_plot_regression_value(current_regression.slope)}, "
+            f"delta={format_plot_regression_value(current_regression.fitted_delta)}, "
+            f"direction={current_regression_direction}"
+        ),
+    ]
+
+    if sma_600_regression is not None:
+        regression_diagnostics_lines.append(
+            f"sma600: slope={format_plot_regression_value(sma_600_regression.slope)}, "
+            f"delta={format_plot_regression_value(sma_600_regression.fitted_delta)}, "
+            f"direction={sma_600_regression_direction}"
+        )
+    else:
+        regression_diagnostics_lines.append("sma600: regression=None")
+
+    ax.text(
+        0.01,
+        0.99,
+        "\n".join(regression_diagnostics_lines),
+        transform=ax.transAxes,
+        fontsize=9,
+        verticalalignment="top",
+        bbox={
+            "boxstyle": "round",
+            "facecolor": "white",
+            "alpha": 0.80,
+            "edgecolor": "gray",
+        },
+    )
 
     ax.axvline(0.0, linestyle="--", linewidth=1.2)
 
