@@ -171,7 +171,7 @@ def draw_info_section(
         y,
         title,
         transform=ax_info.transAxes,
-        fontsize=8.3,
+        fontsize=8.5,
         fontweight="bold",
         verticalalignment="top",
         horizontalalignment="left",
@@ -185,7 +185,7 @@ def draw_info_section(
         y,
         "-" * len(title),
         transform=ax_info.transAxes,
-        fontsize=8.0,
+        fontsize=8.2,
         verticalalignment="top",
         horizontalalignment="left",
         family="monospace",
@@ -199,7 +199,7 @@ def draw_info_section(
             y,
             text,
             transform=ax_info.transAxes,
-            fontsize=8.0,
+            fontsize=8.2,
             verticalalignment="top",
             horizontalalignment="left",
             family="monospace",
@@ -207,7 +207,7 @@ def draw_info_section(
         )
         y -= line_height
 
-    return y - line_height * 0.22
+    return y - line_height * 0.55
 
 
 def save_signal_candidate_plot(
@@ -383,10 +383,6 @@ def save_signal_candidate_plot(
             None,
         ),
         (
-            f"price  slope   : {format_plot_regression_value(current_regression.slope)}",
-            None,
-        ),
-        (
             f"price  delta   : {format_plot_regression_value(current_regression.fitted_delta)}",
             None,
         ),
@@ -395,10 +391,6 @@ def save_signal_candidate_plot(
 
     if sma_600_regression is not None:
         regression_rows.extend([
-            (
-                f"sma600 slope   : {format_plot_regression_value(sma_600_regression.slope)}",
-                None,
-            ),
             (
                 f"sma600 delta   : {format_plot_regression_value(sma_600_regression.fitted_delta)}",
                 None,
@@ -415,10 +407,9 @@ def save_signal_candidate_plot(
             + (", ".join(str(period) for period in sorted(current_sma_lines)) if current_sma_lines else "none"),
             None,
         ),
-        ("current        : red", CURRENT_PATTERN_COLOR),
-        ("sma 120         : orange", SMA_LINE_COLORS[120]),
-        ("sma 600         : blue", SMA_LINE_COLORS[600]),
-        ("sma 1200        : green", SMA_LINE_COLORS[1200]),
+        ("sma120         : orange", SMA_LINE_COLORS[120]),
+        ("sma600         : blue", SMA_LINE_COLORS[600]),
+        ("sma1200        : green", SMA_LINE_COLORS[1200]),
     ]
 
     candidate_rows: list[tuple[str, str | None]] = []
@@ -434,7 +425,7 @@ def save_signal_candidate_plot(
         candidate_rows.append(("No shown candidates", None))
 
     y = 0.99
-    line_height = 0.024
+    line_height = 0.031
     y = draw_info_section(
         ax_info,
         title="REGRESSION",
