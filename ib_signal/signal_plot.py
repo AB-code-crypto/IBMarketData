@@ -461,7 +461,6 @@ def save_signal_candidate_plot(
             None,
         ),
         (f"end_position  : {format_plot_regression_value(current_path_features.end_position)}", None),
-        (f"efficiency    : {format_plot_regression_value(current_path_features.path_efficiency)}", None),
     ]
 
     lines_rows: list[tuple[str, str | None]] = [

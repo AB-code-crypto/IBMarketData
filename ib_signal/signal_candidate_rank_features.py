@@ -34,15 +34,6 @@ class PatternPathFeatures:
     # Положение последней цены внутри диапазона min-max: 0=min, 1=max.
     end_position: float
 
-    # Полная длина пути цены в пунктах: сумма abs(delta между соседними точками).
-    path_length_points: float
-
-    # Полная длина пути цены в базисных пунктах.
-    path_length_bps: float
-
-    # Эффективность пути: abs(net_delta) / path_length.
-    path_efficiency: float
-
 
 @dataclass(frozen=True)
 class CandidatePathFeatureRow:
@@ -112,18 +103,6 @@ def calculate_pattern_path_features(values: np.ndarray) -> PatternPathFeatures:
     else:
         end_position = (last_value - min_value) / range_points
 
-    point_deltas = np.diff(y)
-    path_length_points = float(np.abs(point_deltas).sum())
-    path_length_bps = calculate_bps(
-        value=path_length_points,
-        base_value=first_value,
-    )
-
-    if path_length_points == 0.0:
-        path_efficiency = 0.0
-    else:
-        path_efficiency = abs(net_delta_points) / path_length_points
-
     return PatternPathFeatures(
         first_value=first_value,
         last_value=last_value,
@@ -134,9 +113,6 @@ def calculate_pattern_path_features(values: np.ndarray) -> PatternPathFeatures:
         range_points=float(range_points),
         range_bps=float(range_bps),
         end_position=float(end_position),
-        path_length_points=float(path_length_points),
-        path_length_bps=float(path_length_bps),
-        path_efficiency=float(path_efficiency),
     )
 
 
@@ -189,8 +165,7 @@ def format_path_features(features: PatternPathFeatures) -> str:
     return (
         f"net={features.net_delta_bps:.2f} bps / {features.net_delta_points:.2f} pt, "
         f"range={features.range_bps:.2f} bps / {features.range_points:.2f} pt, "
-        f"end={features.end_position:.2f}, "
-        f"eff={features.path_efficiency:.2f}"
+        f"end={features.end_position:.2f}"
     )
 
 
