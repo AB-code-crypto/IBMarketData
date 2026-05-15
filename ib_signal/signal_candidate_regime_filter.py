@@ -9,7 +9,12 @@ from ib_job_data.feature_db_sql import quote_identifier
 from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 from ib_job_data.sma_features import SMA_TABLE_NAME, get_sma_column_name
 from ib_signal.signal_candidates import CandidateWindow
-from ib_signal.signal_regression import build_linear_regression
+from ib_signal.signal_config import MarketRegimeFilterMode
+from ib_signal.signal_regression import (
+    RegressionDirection,
+    build_linear_regression,
+    classify_regression_direction,
+)
 from ib_signal.signal_regression_relation import (
     RegressionRelationKind,
     build_regression_relation,
@@ -18,8 +23,17 @@ from ib_signal.signal_regression_relation import (
 
 @dataclass(frozen=True)
 class CandidateRegimeFilterResult:
-    # Relation текущего паттерна, по которому фильтровали кандидатов.
+    # Активный режим фильтрации: OFF/SOFT/HARD.
+    mode: MarketRegimeFilterMode
+
+    # Relation текущего паттерна.
     current_relation: RegressionRelationKind
+
+    # Direction текущей price-regression.
+    current_price_direction: RegressionDirection
+
+    # Direction текущей SMA 600 regression.
+    current_sma600_direction: RegressionDirection
 
     # Количество candidate windows после проверки полноты pattern matrix.
     source_candidates_count: int
@@ -27,8 +41,14 @@ class CandidateRegimeFilterResult:
     # Количество кандидатов, прошедших Pearson threshold до regime-фильтра.
     pearson_passed_count: int
 
-    # Количество кандидатов, оставшихся после Pearson + regime-фильтра.
-    kept_candidates_count: int
+    # Диагностика: сколько кандидатов осталось бы при SOFT-фильтре.
+    soft_kept_count: int
+
+    # Диагностика: сколько кандидатов осталось бы при HARD-фильтре.
+    hard_kept_count: int
+
+    # Итоговое количество кандидатов по активному mode.
+    final_kept_count: int
 
     # Количество Pearson-прошедших кандидатов, у которых не удалось прочитать полную SMA.
     skipped_sma_count: int
@@ -36,7 +56,10 @@ class CandidateRegimeFilterResult:
     # Количество Pearson-прошедших кандидатов с другим relation.
     relation_mismatch_count: int
 
-    # Кандидаты, оставшиеся после regime-фильтра.
+    # Количество SOFT-прошедших кандидатов с другим direction.
+    direction_mismatch_count: int
+
+    # Кандидаты, оставшиеся после активного режима фильтрации.
     valid_candidates: list[CandidateWindow]
 
     # Price pattern matrix только по оставшимся кандидатам.
@@ -146,7 +169,37 @@ def read_candidate_sma_value_map(
     }
 
 
-def filter_candidates_by_regression_relation(
+def build_empty_filter_result(
+        *,
+        mode: MarketRegimeFilterMode,
+        current_relation: RegressionRelationKind,
+        current_price_direction: RegressionDirection,
+        current_sma600_direction: RegressionDirection,
+        source_candidates_count: int,
+        expected_points: int,
+) -> CandidateRegimeFilterResult:
+    """Что делает: возвращает пустой результат фильтра.
+    Зачем нужна: общий формат диагностики сохраняется даже когда Pearson никого не пропустил."""
+    return CandidateRegimeFilterResult(
+        mode=mode,
+        current_relation=current_relation,
+        current_price_direction=current_price_direction,
+        current_sma600_direction=current_sma600_direction,
+        source_candidates_count=source_candidates_count,
+        pearson_passed_count=0,
+        soft_kept_count=0,
+        hard_kept_count=0,
+        final_kept_count=0,
+        skipped_sma_count=0,
+        relation_mismatch_count=0,
+        direction_mismatch_count=0,
+        valid_candidates=[],
+        candidate_matrix=np.empty((0, expected_points), dtype=float),
+        pearson_scores=np.empty((0,), dtype=float),
+    )
+
+
+def filter_candidates_by_market_regime(
         *,
         instrument_code: str,
         candidates: list[CandidateWindow],
@@ -154,11 +207,15 @@ def filter_candidates_by_regression_relation(
         pearson_scores: np.ndarray,
         pearson_min: float,
         current_relation: RegressionRelationKind,
+        current_price_direction: RegressionDirection,
+        current_sma600_direction: RegressionDirection,
         near_threshold_bps: float,
+        flat_delta_threshold_bps: float,
+        mode: MarketRegimeFilterMode,
         sma_period_bars: int = 600,
 ) -> CandidateRegimeFilterResult:
-    """Что делает: оставляет только Pearson-прошедших кандидатов с тем же price-vs-SMA relation.
-    Зачем нужна: кандидаты должны совпадать не только по форме price pattern, но и по рыночному режиму."""
+    """Что делает: считает SOFT/HARD диагностику и возвращает кандидатов по активному mode.
+    Зачем нужна: можно сравнивать OFF/SOFT/HARD, не переписывая остальную signal-логику."""
     if candidate_matrix.ndim != 2:
         raise ValueError(
             f"candidate_matrix должен быть двумерным, получено shape={candidate_matrix.shape}"
@@ -177,22 +234,18 @@ def filter_candidates_by_regression_relation(
         )
 
     expected_points = int(candidate_matrix.shape[1])
-    passed_indices = np.flatnonzero(pearson_scores >= pearson_min)
-
     source_candidates_count = len(candidates)
+    passed_indices = np.flatnonzero(pearson_scores >= pearson_min)
     pearson_passed_count = int(passed_indices.size)
 
     if pearson_passed_count == 0:
-        return CandidateRegimeFilterResult(
+        return build_empty_filter_result(
+            mode=mode,
             current_relation=current_relation,
+            current_price_direction=current_price_direction,
+            current_sma600_direction=current_sma600_direction,
             source_candidates_count=source_candidates_count,
-            pearson_passed_count=0,
-            kept_candidates_count=0,
-            skipped_sma_count=0,
-            relation_mismatch_count=0,
-            valid_candidates=[],
-            candidate_matrix=np.empty((0, expected_points), dtype=float),
-            pearson_scores=np.empty((0,), dtype=float),
+            expected_points=expected_points,
         )
 
     passed_candidates = [
@@ -227,12 +280,17 @@ def filter_candidates_by_regression_relation(
     finally:
         conn.close()
 
-    kept_candidates: list[CandidateWindow] = []
-    kept_matrix_rows: list[np.ndarray] = []
-    kept_scores: list[float] = []
+    soft_candidates: list[CandidateWindow] = []
+    soft_matrix_rows: list[np.ndarray] = []
+    soft_scores: list[float] = []
+
+    hard_candidates: list[CandidateWindow] = []
+    hard_matrix_rows: list[np.ndarray] = []
+    hard_scores: list[float] = []
 
     skipped_sma_count = 0
     relation_mismatch_count = 0
+    direction_mismatch_count = 0
 
     for passed_index, candidate in enumerate(passed_candidates):
         sma_values = sma_value_map.get(passed_index)
@@ -253,40 +311,97 @@ def filter_candidates_by_regression_relation(
             relation_mismatch_count += 1
             continue
 
-        kept_candidates.append(candidate)
-        kept_matrix_rows.append(passed_matrix[passed_index].copy())
-        kept_scores.append(float(passed_scores[passed_index]))
+        soft_candidates.append(candidate)
+        soft_matrix_rows.append(passed_matrix[passed_index].copy())
+        soft_scores.append(float(passed_scores[passed_index]))
 
-    kept_matrix = (
-        np.vstack(kept_matrix_rows).astype(float)
-        if kept_matrix_rows
+        candidate_price_direction = classify_regression_direction(
+            candidate_price_regression,
+            flat_delta_threshold_bps=flat_delta_threshold_bps,
+        )
+        candidate_sma600_direction = classify_regression_direction(
+            candidate_sma_regression,
+            flat_delta_threshold_bps=flat_delta_threshold_bps,
+        )
+
+        if (
+                candidate_price_direction == current_price_direction
+                and candidate_sma600_direction == current_sma600_direction
+        ):
+            hard_candidates.append(candidate)
+            hard_matrix_rows.append(passed_matrix[passed_index].copy())
+            hard_scores.append(float(passed_scores[passed_index]))
+        else:
+            direction_mismatch_count += 1
+
+    if mode == MarketRegimeFilterMode.OFF:
+        final_candidates = passed_candidates
+        final_matrix_rows = [passed_matrix[index].copy() for index in range(passed_matrix.shape[0])]
+        final_scores = [float(score) for score in passed_scores]
+
+    elif mode == MarketRegimeFilterMode.SOFT:
+        final_candidates = soft_candidates
+        final_matrix_rows = soft_matrix_rows
+        final_scores = soft_scores
+
+    elif mode == MarketRegimeFilterMode.HARD:
+        final_candidates = hard_candidates
+        final_matrix_rows = hard_matrix_rows
+        final_scores = hard_scores
+
+    else:
+        raise ValueError(f"Неподдерживаемый MarketRegimeFilterMode: {mode}")
+
+    final_matrix = (
+        np.vstack(final_matrix_rows).astype(float)
+        if final_matrix_rows
         else np.empty((0, expected_points), dtype=float)
     )
-    kept_scores_array = np.asarray(kept_scores, dtype=float)
+    final_scores_array = np.asarray(final_scores, dtype=float)
 
     return CandidateRegimeFilterResult(
+        mode=mode,
         current_relation=current_relation,
+        current_price_direction=current_price_direction,
+        current_sma600_direction=current_sma600_direction,
         source_candidates_count=source_candidates_count,
         pearson_passed_count=pearson_passed_count,
-        kept_candidates_count=len(kept_candidates),
+        soft_kept_count=len(soft_candidates),
+        hard_kept_count=len(hard_candidates),
+        final_kept_count=len(final_candidates),
         skipped_sma_count=skipped_sma_count,
         relation_mismatch_count=relation_mismatch_count,
-        valid_candidates=kept_candidates,
-        candidate_matrix=kept_matrix,
-        pearson_scores=kept_scores_array,
+        direction_mismatch_count=direction_mismatch_count,
+        valid_candidates=final_candidates,
+        candidate_matrix=final_matrix,
+        pearson_scores=final_scores_array,
     )
 
 
-def format_candidate_regime_filter_result(result: CandidateRegimeFilterResult | None) -> str:
+def format_candidate_regime_filter_result(
+        result: CandidateRegimeFilterResult | None,
+        *,
+        mode: MarketRegimeFilterMode,
+        pearson_passed_count: int,
+) -> str:
     """Что делает: форматирует результат regime-фильтра кандидатов для runtime-лога.
-    Зачем нужна: финальный лог не должен дублировать общий Pearson summary."""
+    Зачем нужна: лог должен показывать OFF/SOFT/HARD и диагностические soft/hard counts."""
     if result is None:
-        return "off"
+        return (
+            f"mode={mode.value}, "
+            f"soft_kept=n/a, "
+            f"hard_kept=n/a, "
+            f"final_kept={pearson_passed_count}, "
+            f"diagnostics=not_calculated"
+        )
 
     return (
-        f"on, "
-        f"relation={result.current_relation}, "
-        f"kept={result.kept_candidates_count}, "
+        f"mode={result.mode.value}, "
+        f"current={result.current_price_direction}/{result.current_sma600_direction}/{result.current_relation}, "
+        f"soft_kept={result.soft_kept_count}, "
+        f"hard_kept={result.hard_kept_count}, "
+        f"final_kept={result.final_kept_count}, "
         f"skipped_sma={result.skipped_sma_count}, "
-        f"relation_mismatch={result.relation_mismatch_count}"
+        f"relation_mismatch={result.relation_mismatch_count}, "
+        f"direction_mismatch={result.direction_mismatch_count}"
     )

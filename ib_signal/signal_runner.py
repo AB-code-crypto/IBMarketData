@@ -5,15 +5,15 @@ from core.bar_utils import get_bar_size_seconds
 from core.logger import get_logger, log_info, setup_logging
 from ib_signal.job_reader import get_fresh_job_bar_status, read_job_bar_time_ct
 from ib_signal.signal_schedule import get_due_signal_bar_ts
-from ib_signal.signal_config import SignalConfig
+from ib_signal.signal_config import MarketRegimeFilterMode, SignalConfig
 from ib_signal.signal_errors import SignalDataNotReadyError
 from ib_signal.pearson import calculate_centered_pearson_batch
 from ib_signal.signal_candidate_regime_filter import (
-    filter_candidates_by_regression_relation,
+    filter_candidates_by_market_regime,
     format_candidate_regime_filter_result,
 )
-from ib_signal.signal_candidates import find_candidate_windows, format_candidate_search_result
-from ib_signal.signal_pattern_matrix import build_pattern_matrix, format_pattern_matrix_result
+from ib_signal.signal_candidates import find_candidate_windows
+from ib_signal.signal_pattern_matrix import build_pattern_matrix
 from ib_signal.signal_plot import save_signal_candidate_plot
 from ib_signal.signal_regression import (
     build_linear_regression,
@@ -62,18 +62,6 @@ def format_candidate_search_summary(result) -> str:
         f"found={len(result.candidates)}, "
         f"first={first_candidate.signal_bar_time_ct} CT, "
         f"last={last_candidate.signal_bar_time_ct} CT"
-    )
-
-
-def format_pattern_matrix_summary(result) -> str:
-    """Что делает: компактно форматирует размерности pattern matrix.
-    Зачем нужна: в логе нужны только ключевые размеры и число пропусков."""
-    return (
-        f"points={result.expected_points}, "
-        f"current={result.current_values.shape}, "
-        f"matrix={result.candidate_matrix.shape}, "
-        f"valid={len(result.valid_candidates)}, "
-        f"skipped={result.skipped_candidates_count}"
     )
 
 
@@ -312,42 +300,55 @@ async def run_signal_loop(
                 plot_pearson_scores = pearson_scores
                 candidate_regime_filter_result = None
 
-                if settings.filter_candidates_by_market_regime:
-                    if price_sma_600_relation is None:
-                        last_calculated_ts_by_instrument[instrument_code] = due_signal_bar_ts
-                        log_info(
-                            logger,
-                            f"{instrument_code}: пропускаю расчёт, market-regime filter включён, "
-                            f"но SMA 600 relation не рассчитан; "
-                            f"latest_job_row={status.last_bar_time_ct} CT",
-                            to_telegram=False,
-                        )
-                        continue
+                if (
+                        price_sma_600_relation is not None
+                        and price_sma_600_relation.relation != "mixed_sma"
+                        and sma_600_regression is not None
+                ):
+                    current_price_direction = classify_regression_direction(
+                        price_regression,
+                        flat_delta_threshold_bps=regression_flat_delta_threshold_bps,
+                    )
+                    current_sma600_direction = classify_regression_direction(
+                        sma_600_regression,
+                        flat_delta_threshold_bps=regression_flat_delta_threshold_bps,
+                    )
 
-                    if price_sma_600_relation.relation == "mixed_sma":
-                        last_calculated_ts_by_instrument[instrument_code] = due_signal_bar_ts
-                        log_info(
-                            logger,
-                            f"{instrument_code}: пропускаю расчёт, current_relation=mixed_sma "
-                            f"при включённом market-regime filter; "
-                            f"latest_job_row={status.last_bar_time_ct} CT, "
-                            f"pearson_passed={pearson_passed_count}",
-                            to_telegram=False,
-                        )
-                        continue
-
-                    candidate_regime_filter_result = filter_candidates_by_regression_relation(
+                    candidate_regime_filter_result = filter_candidates_by_market_regime(
                         instrument_code=instrument_code,
                         candidates=pattern_matrix_result.valid_candidates,
                         candidate_matrix=pattern_matrix_result.candidate_matrix,
                         pearson_scores=pearson_scores,
                         pearson_min=settings.pearson_min,
                         current_relation=price_sma_600_relation.relation,
+                        current_price_direction=current_price_direction,
+                        current_sma600_direction=current_sma600_direction,
                         near_threshold_bps=regression_flat_delta_threshold_bps,
+                        flat_delta_threshold_bps=regression_flat_delta_threshold_bps,
+                        mode=settings.market_regime_filter_mode,
                         sma_period_bars=600,
                     )
                     plot_valid_candidates = candidate_regime_filter_result.valid_candidates
                     plot_pearson_scores = candidate_regime_filter_result.pearson_scores
+
+                elif settings.market_regime_filter_mode != MarketRegimeFilterMode.OFF:
+                    last_calculated_ts_by_instrument[instrument_code] = due_signal_bar_ts
+                    skip_reason = (
+                        "current_relation=mixed_sma"
+                        if price_sma_600_relation is not None
+                        and price_sma_600_relation.relation == "mixed_sma"
+                        else "SMA 600 relation не рассчитан"
+                    )
+                    log_info(
+                        logger,
+                        f"{instrument_code}: пропускаю расчёт, "
+                        f"market_regime_filter_mode={settings.market_regime_filter_mode.value}, "
+                        f"{skip_reason}; "
+                        f"latest_job_row={status.last_bar_time_ct} CT, "
+                        f"pearson_passed={pearson_passed_count}",
+                        to_telegram=False,
+                    )
+                    continue
 
                 saved_plot_path = save_signal_candidate_plot(
                     instrument_code=instrument_code,
@@ -395,7 +396,6 @@ async def run_signal_loop(
                 lambda ts: read_job_bar_time_ct(instrument_code, ts),
             )
             candidate_search_text = format_candidate_search_summary(candidate_search_result)
-            matrix_text = format_pattern_matrix_summary(pattern_matrix_result)
 
             price_regression_text = format_regression_summary(
                 "price",
@@ -413,6 +413,8 @@ async def run_signal_loop(
             )
             candidate_regime_filter_text = format_candidate_regime_filter_result(
                 candidate_regime_filter_result,
+                mode=settings.market_regime_filter_mode,
+                pearson_passed_count=pearson_passed_count,
             )
 
             log_info(
@@ -422,7 +424,6 @@ async def run_signal_loop(
                     f"  time: latest_job_row={status.last_bar_time_ct} CT\n"
                     f"  window: {window_text}\n"
                     f"  candidates: {candidate_search_text}\n"
-                    f"  matrix: {matrix_text}\n"
                     f"  pearson: min={settings.pearson_min:.2f}, "
                     f"best={best_pearson:.4f}, "
                     f"passed={pearson_passed_count}/{len(pattern_matrix_result.valid_candidates)}\n"

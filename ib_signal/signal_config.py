@@ -7,6 +7,12 @@ class SignalWindowMode(Enum):
     GRID = "GRID"
 
 
+class MarketRegimeFilterMode(Enum):
+    OFF = "OFF"
+    SOFT = "SOFT"
+    HARD = "HARD"
+
+
 @dataclass(frozen=True)
 class SignalConfig:
     # Режим построения сигнальных окон.
@@ -41,9 +47,11 @@ class SignalConfig:
     history_lookback_days: int | None = 180  # None = вся доступная история
 
     # Фильтр кандидатов по market-regime.
-    # Сейчас market-regime = совпадение relation price-regression vs SMA 600 regression.
-    # Если текущий relation = mixed_sma, расчёт сигнала пока пропускается.
-    filter_candidates_by_market_regime: bool = True
+    # OFF: только Pearson.
+    # SOFT: Pearson + совпадение relation price-regression vs SMA 600 regression.
+    # HARD: SOFT + совпадение направлений price-regression и SMA 600 regression.
+    # Если текущий relation = mixed_sma, SOFT/HARD пока пропускают расчёт сигнала.
+    market_regime_filter_mode: MarketRegimeFilterMode = MarketRegimeFilterMode.HARD
 
 
 DEFAULT_SIGNAL_CONFIG = SignalConfig()
