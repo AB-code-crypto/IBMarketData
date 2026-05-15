@@ -244,8 +244,8 @@ def save_signal_candidate_plot(
     bar_size_seconds = get_bar_size_seconds(instrument_row["barSizeSetting"])
 
     current_x_minutes = (
-        np.arange(current_values.size, dtype=float) * bar_size_seconds / 60.0
-        - signal_window.pattern_seconds / 60.0
+            np.arange(current_values.size, dtype=float) * bar_size_seconds / 60.0
+            - signal_window.pattern_seconds / 60.0
     )
 
     current_sma_lines = read_current_sma_lines(
@@ -335,8 +335,8 @@ def save_signal_candidate_plot(
 
             candidate_line = normalize_series_for_plot(candidate_full_values)
             candidate_x_minutes = (
-                np.arange(candidate_line.size, dtype=float) * bar_size_seconds / 60.0
-                - signal_window.pattern_seconds / 60.0
+                    np.arange(candidate_line.size, dtype=float) * bar_size_seconds / 60.0
+                    - signal_window.pattern_seconds / 60.0
             )
 
             line = ax.plot(
@@ -415,15 +415,15 @@ def save_signal_candidate_plot(
         sma_600_regression_delta_bps = calculate_regression_delta_bps(sma_600_regression)
         regression_rows.extend([
             (
-                f"sma600 delta   : "
+                f"sma 600 delta : "
                 f"{format_plot_regression_value(sma_600_regression_delta_bps)} / "
                 f"{format_plot_regression_value(sma_600_regression.fitted_delta)}",
                 None,
             ),
-            (f"sma600 dir     : {sma_600_regression_direction}", None),
+            (f"sma 600 dir   : {sma_600_regression_direction}", None),
         ])
     else:
-        regression_rows.append(("sma600         : regression=None", None))
+        regression_rows.append(("sma 600       : regression=None", None))
 
     relation_rows: list[tuple[str, str | None]] = []
     if price_sma_600_relation is not None:
