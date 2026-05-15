@@ -40,5 +40,10 @@ class SignalConfig:
     max_candidates: int = 100  #
     history_lookback_days: int | None = 180  # None = вся доступная история
 
+    # Фильтр кандидатов по market-regime.
+    # Сейчас market-regime = совпадение relation price-regression vs SMA 600 regression.
+    # Если текущий relation = mixed_sma, расчёт сигнала пока пропускается.
+    filter_candidates_by_market_regime: bool = True
+
 
 DEFAULT_SIGNAL_CONFIG = SignalConfig()

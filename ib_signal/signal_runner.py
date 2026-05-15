@@ -8,6 +8,10 @@ from ib_signal.signal_schedule import get_due_signal_bar_ts
 from ib_signal.signal_config import SignalConfig
 from ib_signal.signal_errors import SignalDataNotReadyError
 from ib_signal.pearson import calculate_centered_pearson_batch
+from ib_signal.signal_candidate_regime_filter import (
+    filter_candidates_by_regression_relation,
+    format_candidate_regime_filter_result,
+)
 from ib_signal.signal_candidates import find_candidate_windows, format_candidate_search_result
 from ib_signal.signal_pattern_matrix import build_pattern_matrix, format_pattern_matrix_result
 from ib_signal.signal_plot import save_signal_candidate_plot
@@ -232,13 +236,54 @@ async def run_signal_loop(
                     else None
                 )
 
+                plot_valid_candidates = pattern_matrix_result.valid_candidates
+                plot_pearson_scores = pearson_scores
+                candidate_regime_filter_result = None
+
+                if settings.filter_candidates_by_market_regime:
+                    if price_sma_600_relation is None:
+                        last_calculated_ts_by_instrument[instrument_code] = due_signal_bar_ts
+                        log_info(
+                            logger,
+                            f"{instrument_code}: пропускаю расчёт, market-regime filter включён, "
+                            f"но SMA 600 relation не рассчитан; "
+                            f"latest_job_row={status.last_bar_time_ct} CT",
+                            to_telegram=False,
+                        )
+                        continue
+
+                    if price_sma_600_relation.relation == "mixed_sma":
+                        last_calculated_ts_by_instrument[instrument_code] = due_signal_bar_ts
+                        log_info(
+                            logger,
+                            f"{instrument_code}: пропускаю расчёт, current_relation=mixed_sma "
+                            f"при включённом market-regime filter; "
+                            f"latest_job_row={status.last_bar_time_ct} CT, "
+                            f"pearson_passed={pearson_passed_count}",
+                            to_telegram=False,
+                        )
+                        continue
+
+                    candidate_regime_filter_result = filter_candidates_by_regression_relation(
+                        instrument_code=instrument_code,
+                        candidates=pattern_matrix_result.valid_candidates,
+                        candidate_matrix=pattern_matrix_result.candidate_matrix,
+                        pearson_scores=pearson_scores,
+                        pearson_min=settings.pearson_min,
+                        current_relation=price_sma_600_relation.relation,
+                        near_threshold_bps=regression_flat_delta_threshold_bps,
+                        sma_period_bars=600,
+                    )
+                    plot_valid_candidates = candidate_regime_filter_result.valid_candidates
+                    plot_pearson_scores = candidate_regime_filter_result.pearson_scores
+
                 saved_plot_path = save_signal_candidate_plot(
                     instrument_code=instrument_code,
                     signal_bar_time_ct=candidate_search_result.current_signal_bar_time_ct,
                     signal_window=signal_window,
                     current_values=pattern_matrix_result.current_values,
-                    valid_candidates=pattern_matrix_result.valid_candidates,
-                    pearson_scores=pearson_scores,
+                    valid_candidates=plot_valid_candidates,
+                    pearson_scores=plot_pearson_scores,
                     price_source=settings.price_source,
                     pearson_min=settings.pearson_min,
                     regression_flat_delta_threshold_bps=regression_flat_delta_threshold_bps,
@@ -294,6 +339,9 @@ async def run_signal_loop(
                 "price_vs_sma600",
                 price_sma_600_relation,
             )
+            candidate_regime_filter_text = format_candidate_regime_filter_result(
+                candidate_regime_filter_result,
+            )
 
             log_info(
                 logger,
@@ -305,6 +353,7 @@ async def run_signal_loop(
                 f"regression_threshold_bps={regression_flat_delta_threshold_bps:.6f}, "
                 f"regression={price_regression_text}, {sma_600_regression_text}, "
                 f"regression_relation={price_sma_600_relation_text}, "
+                f"candidate_regime_filter={candidate_regime_filter_text}, "
                 f"pearson_best={best_pearson:.6f}, "
                 f"pearson_passed={pearson_passed_count}",
                 to_telegram=False,
