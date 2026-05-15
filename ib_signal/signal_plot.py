@@ -308,7 +308,7 @@ def save_signal_candidate_plot(
     ax_info = fig.add_subplot(grid[0, 1])
     ax_info.axis("off")
 
-    shown_candidates: list[tuple[int, CandidateWindow, float, str]] = []
+    shown_candidates: list[tuple[int, CandidateWindow, float, str, object]] = []
 
     for sma_period_bars, sma_values in current_sma_lines.items():
         ax.plot(
@@ -337,6 +337,9 @@ def save_signal_candidate_plot(
             if candidate_full_values is None:
                 continue
 
+            candidate_pattern_values = candidate_full_values[:current_values.size]
+            candidate_path_features = calculate_pattern_path_features(candidate_pattern_values)
+
             candidate_line = normalize_series_for_plot(candidate_full_values)
             candidate_x_minutes = (
                 np.arange(candidate_line.size, dtype=float) * bar_size_seconds / 60.0
@@ -350,7 +353,13 @@ def save_signal_candidate_plot(
                 alpha=0.4,
             )[0]
 
-            shown_candidates.append((rank, candidate, pearson_value, line.get_color()))
+            shown_candidates.append((
+                rank,
+                candidate,
+                pearson_value,
+                line.get_color(),
+                candidate_path_features,
+            ))
 
     ax.plot(
         current_x_minutes,
@@ -476,10 +485,15 @@ def save_signal_candidate_plot(
 
     candidate_rows: list[tuple[str, str | None]] = []
     if shown_candidates:
-        for rank, candidate, pearson_value, candidate_color in shown_candidates:
+        for rank, candidate, pearson_value, candidate_color, candidate_path_features in shown_candidates:
             candidate_rows.append(
                 (
-                    f"{rank:02d} | r={pearson_value:.2f} | {candidate.signal_bar_time_ct}",
+                    f"{rank:02d} | r={pearson_value:.2f} | "
+                    f"nd={format_plot_regression_value(candidate_path_features.net_delta_bps)}/"
+                    f"{format_plot_regression_value(candidate_path_features.net_delta_points)} | "
+                    f"rg={format_plot_regression_value(candidate_path_features.range_bps)}/"
+                    f"{format_plot_regression_value(candidate_path_features.range_points)} | "
+                    f"{candidate.signal_bar_time_ct}",
                     candidate_color,
                 )
             )
