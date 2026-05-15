@@ -92,7 +92,7 @@ from core.time_utils import format_utc_ts, parse_utc_iso_to_ts
 # Режимы:
 # - "SCAN"   -> только найти проблемные интервалы;
 # - "REPAIR" -> найти проблемные интервалы и докачать их.
-MODE = "SCAN"
+MODE = "REPAIR"
 
 # Логический инструмент, который проверяем.
 # Для фьючерсов указываем именно инструмент целиком, а не localSymbol контракта.
@@ -102,7 +102,7 @@ TARGET = "MNQ"
 # Форматы:
 #   "YYYY-MM-DD"
 #   "YYYY-MM-DD HH:MM:SS"
-CHECK_FROM_UTC = "2026-05-01 00:00:00"
+CHECK_FROM_UTC = "2026-05-08 00:00:00"
 
 # Ожидаемый шаг 5-секундных баров.
 EXPECTED_STEP_SECONDS = 5

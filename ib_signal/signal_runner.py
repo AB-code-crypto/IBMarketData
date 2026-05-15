@@ -344,12 +344,13 @@ async def run_signal_loop(
                     skip_reason = (
                         "current_relation=mixed_sma"
                         if price_sma_600_relation is not None
-                        and price_sma_600_relation.relation == "mixed_sma"
+                           and price_sma_600_relation.relation == "mixed_sma"
                         else "SMA 600 relation не рассчитан"
                     )
                     log_info(
                         logger,
                         f"{instrument_code}: пропускаю расчёт, "
+                        f"signal_window_mode={settings.signal_window_mode.value}, "
                         f"market_regime_filter_mode={settings.market_regime_filter_mode.value}, "
                         f"{skip_reason}; "
                         f"latest_job_row={status.last_bar_time_ct} CT, "
@@ -452,6 +453,8 @@ async def run_signal_loop(
                 (
                     f"{instrument_code}: signal_calc\n"
                     f"  time: latest_job_row={status.last_bar_time_ct} CT\n"
+                    f"  modes: signal_window={settings.signal_window_mode.value}, "
+                    f"market_regime_filter={settings.market_regime_filter_mode.value}\n"
                     f"  window: {window_text}\n"
                     f"  candidates: {candidate_search_text}\n"
                     f"  pearson: min={settings.pearson_min:.2f}, "

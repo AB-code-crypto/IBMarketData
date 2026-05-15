@@ -28,7 +28,7 @@ class SignalConfig:
 
     # ROLLING-режим.
     rolling_signal_step_seconds: int = 60  # считаем сигнал не на каждом баре, а через это кол-во секунд
-    rolling_back_minutes: int = 90  # Смотрим на столько минут назад
+    rolling_back_minutes: int = 30  # Смотрим на столько минут назад
     rolling_trade_minutes: int = 30  # Длительность сделки по времени
 
     # GRID-режим.
