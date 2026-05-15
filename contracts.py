@@ -25,7 +25,7 @@ FUT_DEFAULTS: InstrumentRow = {
     "session_model": "CME_EQUITY_INDEX",
     "price_digits": 2,
     "mid_price_digits": 3,
-    "regression_flat_delta_threshold": 1.0,
+    "regression_flat_delta_threshold_bps": 1.0,
 }
 
 FX_DEFAULTS: InstrumentRow = {
@@ -40,7 +40,7 @@ FX_DEFAULTS: InstrumentRow = {
     "history_lookback_days": 50,
     "price_digits": 5,
     "mid_price_digits": 6,
-    "regression_flat_delta_threshold": 1.0,
+    "regression_flat_delta_threshold_bps": 1.0,
 }
 
 CRYPTO_DEFAULTS: InstrumentRow = {
@@ -55,7 +55,7 @@ CRYPTO_DEFAULTS: InstrumentRow = {
     "history_lookback_days": 50,
     "price_digits": 2,
     "mid_price_digits": 3,
-    "regression_flat_delta_threshold": 1.0,
+    "regression_flat_delta_threshold_bps": 1.0,
 }
 
 # ==============================
@@ -71,7 +71,7 @@ Instrument: Registry = {
         "history_enabled": True,
         "realtime_enabled": True,
         "trading_enabled": True,
-        "regression_flat_delta_threshold": 10.0,
+        "regression_flat_delta_threshold_bps": 3.5,
         "contracts": [
             {"conId": 620730945, "localSymbol": "MNQM4", "lastTradeDateOrContractMonth": "20240621",
              "active_from_utc": "2024-03-13T22:00:00Z", "active_to_utc": "2024-06-19T17:00:00Z"},
@@ -114,7 +114,7 @@ Instrument: Registry = {
         "currency": "USD",
         "db_filename": "EURUSD.sqlite3",
         "history_start_utc": "2025-09-22T01:00:00Z",
-        "regression_flat_delta_threshold": 0.0002,
+        "regression_flat_delta_threshold_bps": 2.0,
     },
 
     "MES": {
@@ -123,7 +123,7 @@ Instrument: Registry = {
         "tradingClass": "MES",
         "multiplier": 5.0,
         "db_filename": "MES.sqlite3",
-        "regression_flat_delta_threshold": 10.0,
+        "regression_flat_delta_threshold_bps": 15.0,
         # Для нового инструмента ограничиваем начальную загрузку двумя неделями.
         # Если нужна более длинная история, увеличь history_lookback_days вручную.
         "contracts": [
@@ -168,7 +168,7 @@ Instrument: Registry = {
         "tradingClass": "NQ",
         "multiplier": 20.0,
         "db_filename": "NQ.sqlite3",
-        "regression_flat_delta_threshold": 10.0,
+        "regression_flat_delta_threshold_bps": 3.5,
         "contracts": [
             {"conId": 620730920, "localSymbol": "NQM4", "lastTradeDateOrContractMonth": "20240621",
              "active_from_utc": "2024-03-13T22:00:00Z", "active_to_utc": "2024-06-19T17:00:00Z"},
@@ -210,7 +210,7 @@ Instrument: Registry = {
         "tradingClass": "ES",
         "multiplier": 50.0,
         "db_filename": "ES.sqlite3",
-        "regression_flat_delta_threshold": 10.0,
+        "regression_flat_delta_threshold_bps": 15.0,
         # Для нового инструмента ограничиваем начальную загрузку двумя неделями.
         # Если нужна более длинная история, увеличь history_lookback_days вручную.
         # "history_lookback_days": 14,
@@ -256,6 +256,6 @@ Instrument: Registry = {
         "exchange": "PAXOS",
         "db_filename": "BTCUSD.sqlite3",
         "history_start_utc": "2025-09-15T01:00:00Z",
-        "regression_flat_delta_threshold": 100.0,
+        "regression_flat_delta_threshold_bps": 10.0,
     },
 }

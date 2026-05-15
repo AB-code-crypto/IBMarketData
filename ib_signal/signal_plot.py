@@ -14,6 +14,8 @@ from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 from ib_signal.signal_candidates import CandidateWindow
 from ib_signal.signal_regression import (
     build_linear_regression,
+    calculate_regression_delta_bps,
+    calculate_regression_threshold_points,
     classify_regression_direction,
 )
 from ib_signal.signal_sma_reader import read_current_sma_lines
@@ -93,9 +95,9 @@ def build_plot_path(
 
 
 def format_plot_regression_value(value: float) -> str:
-    """Что делает: компактно форматирует число regression-диагностики для PNG.
-    Зачем нужна: fixed-формат плох для EURUSD, а слишком длинные числа забивают картинку."""
-    return f"{value:.6g}"
+    """Что делает: форматирует regression-диагностику для PNG с двумя знаками после запятой.
+    Зачем нужна: картинка должна быть читаемой, а расчёты остаются без округления."""
+    return f"{value:.2f}"
 
 
 def read_candidate_full_values(
@@ -220,7 +222,7 @@ def save_signal_candidate_plot(
         pearson_scores: np.ndarray,
         price_source: str,
         pearson_min: float,
-        regression_flat_delta_threshold: float,
+        regression_flat_delta_threshold_bps: float,
 ) -> Path | None:
     """Что делает: сохраняет PNG с текущим паттерном и лучшими историческими кандидатами.
     Зачем нужна: удобно визуально проверить, что signal-сервис нашёл похожие участки,
@@ -254,7 +256,7 @@ def save_signal_candidate_plot(
     current_regression = build_linear_regression(current_values)
     current_regression_direction = classify_regression_direction(
         current_regression,
-        flat_delta_threshold=regression_flat_delta_threshold,
+        flat_delta_threshold_bps=regression_flat_delta_threshold_bps,
     )
     current_regression_line = current_regression.line_values - current_values[0]
 
@@ -267,7 +269,7 @@ def save_signal_candidate_plot(
     sma_600_regression_direction = (
         classify_regression_direction(
             sma_600_regression,
-            flat_delta_threshold=regression_flat_delta_threshold,
+            flat_delta_threshold_bps=regression_flat_delta_threshold_bps,
         )
         if sma_600_regression is not None
         else None
@@ -377,30 +379,35 @@ def save_signal_candidate_plot(
     )
     ax.grid(True)
 
+    current_regression_delta_bps = calculate_regression_delta_bps(current_regression)
+    current_regression_threshold_points = calculate_regression_threshold_points(
+        current_regression,
+        flat_delta_threshold_bps=regression_flat_delta_threshold_bps,
+    )
+
     regression_rows: list[tuple[str, str | None]] = [
         (
-            f"flat_threshold : {format_plot_regression_value(regression_flat_delta_threshold)}",
+            f"flat_threshold : "
+            f"{format_plot_regression_value(regression_flat_delta_threshold_bps)} bps / "
+            f"{format_plot_regression_value(current_regression_threshold_points)} pt",
             None,
         ),
         (
-            f"price  slope   : {format_plot_regression_value(current_regression.slope)}",
-            None,
-        ),
-        (
-            f"price  delta   : {format_plot_regression_value(current_regression.fitted_delta)}",
+            f"price  delta   : "
+            f"{format_plot_regression_value(current_regression_delta_bps)} bps / "
+            f"{format_plot_regression_value(current_regression.fitted_delta)} pt",
             None,
         ),
         (f"price  dir     : {current_regression_direction}", None),
     ]
 
     if sma_600_regression is not None:
+        sma_600_regression_delta_bps = calculate_regression_delta_bps(sma_600_regression)
         regression_rows.extend([
             (
-                f"sma600 slope   : {format_plot_regression_value(sma_600_regression.slope)}",
-                None,
-            ),
-            (
-                f"sma600 delta   : {format_plot_regression_value(sma_600_regression.fitted_delta)}",
+                f"sma600 delta   : "
+                f"{format_plot_regression_value(sma_600_regression_delta_bps)} bps / "
+                f"{format_plot_regression_value(sma_600_regression.fitted_delta)} pt",
                 None,
             ),
             (f"sma600 dir     : {sma_600_regression_direction}", None),
@@ -409,7 +416,7 @@ def save_signal_candidate_plot(
         regression_rows.append(("sma600         : regression=None", None))
 
     lines_rows: list[tuple[str, str | None]] = [
-        (f"pearson_min    : {pearson_min:.4f}", None),
+        (f"pearson_min    : {pearson_min:.2f}", None),
         ("sma 120       : orange", SMA_LINE_COLORS[120]),
         ("sma 600       : blue", SMA_LINE_COLORS[600]),
         ("sma 1200      : green", SMA_LINE_COLORS[1200]),
@@ -420,7 +427,7 @@ def save_signal_candidate_plot(
         for rank, candidate, pearson_value, candidate_color in shown_candidates:
             candidate_rows.append(
                 (
-                    f"{rank:02d} | r={pearson_value:.4f} | {candidate.signal_bar_time_ct}",
+                    f"{rank:02d} | r={pearson_value:.2f} | {candidate.signal_bar_time_ct}",
                     candidate_color,
                 )
             )

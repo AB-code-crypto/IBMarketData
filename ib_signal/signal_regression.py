@@ -84,24 +84,55 @@ def build_linear_regression(values: NumberSeries) -> LinearRegressionResult:
     )
 
 
+
+def calculate_regression_delta_bps(regression: LinearRegressionResult) -> float:
+    """Что делает: считает изменение regression line в базисных пунктах.
+    Зачем нужна: bps нормализуют движение относительно уровня цены и не зависят от абсолютной цены инструмента."""
+    base_value = abs(float(regression.fitted_start))
+
+    if base_value == 0.0:
+        raise ValueError("Невозможно посчитать delta bps: fitted_start равен нулю")
+
+    return float(regression.fitted_delta / base_value * 10000.0)
+
+
+def calculate_regression_threshold_points(
+        regression: LinearRegressionResult,
+        *,
+        flat_delta_threshold_bps: float,
+) -> float:
+    """Что делает: переводит bps-порог в ценовые пункты для конкретной regression line.
+    Зачем нужна: на PNG удобно видеть и относительный порог в bps, и его текущий эквивалент в пунктах."""
+    threshold_bps = float(flat_delta_threshold_bps)
+
+    if threshold_bps < 0.0:
+        raise ValueError(
+            f"Порог flat_delta_threshold_bps не может быть отрицательным: {threshold_bps}"
+        )
+
+    return abs(float(regression.fitted_start)) * threshold_bps / 10000.0
+
+
 def classify_regression_direction(
         regression: LinearRegressionResult,
         *,
-        flat_delta_threshold: float,
+        flat_delta_threshold_bps: float,
 ) -> RegressionDirection:
-    """Что делает: классифицирует наклон regression line как up/down/flat по fitted_delta.
-    Зачем нужна: fitted_delta сразу показывает движение regression line за всё окно."""
-    threshold = float(flat_delta_threshold)
+    """Что делает: классифицирует наклон regression line как up/down/flat по delta в базисных пунктах.
+    Зачем нужна: bps дают сопоставимую оценку движения при разных уровнях цены."""
+    threshold_bps = float(flat_delta_threshold_bps)
 
-    if threshold < 0.0:
+    if threshold_bps < 0.0:
         raise ValueError(
-            f"Порог flat_delta_threshold не может быть отрицательным: {threshold}"
+            f"Порог flat_delta_threshold_bps не может быть отрицательным: {threshold_bps}"
         )
 
-    if regression.fitted_delta > threshold:
+    delta_bps = calculate_regression_delta_bps(regression)
+
+    if delta_bps > threshold_bps:
         return "up"
 
-    if regression.fitted_delta < -threshold:
+    if delta_bps < -threshold_bps:
         return "down"
 
     return "flat"
@@ -111,20 +142,22 @@ def format_regression_diagnostics(
         label: str,
         regression: LinearRegressionResult | None,
         *,
-        flat_delta_threshold: float,
+        flat_delta_threshold_bps: float,
 ) -> str:
     """Что делает: форматирует delta/direction одной regression line для лога.
-    Зачем нужна: лог не должен содержать slope, потому что при фиксированном окне он дублирует delta."""
+    Зачем нужна: лог показывает delta и в bps, и в ценовых пунктах."""
     if regression is None:
         return f"{label}=None"
 
+    delta_bps = calculate_regression_delta_bps(regression)
     direction = classify_regression_direction(
         regression,
-        flat_delta_threshold=flat_delta_threshold,
+        flat_delta_threshold_bps=flat_delta_threshold_bps,
     )
 
     return (
-        f"{label}_delta={regression.fitted_delta:.6f}, "
+        f"{label}_delta_bps={delta_bps:.6f}, "
+        f"{label}_delta_points={regression.fitted_delta:.6f}, "
         f"{label}_direction={direction}"
     )
 
@@ -143,5 +176,6 @@ if __name__ == "__main__":
     print(f"fitted_start={regression.fitted_start:.6f}")
     print(f"fitted_end={regression.fitted_end:.6f}")
     print(f"fitted_delta={regression.fitted_delta:.6f}")
-    print(f"direction={classify_regression_direction(regression, flat_delta_threshold=1.0)}")
+    print(f"delta_bps={calculate_regression_delta_bps(regression):.6f}")
+    print(f"direction={classify_regression_direction(regression, flat_delta_threshold_bps=1.0)}")
     print(f"line_values={np.round(regression.line_values, 6).tolist()}")
