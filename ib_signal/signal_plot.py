@@ -225,6 +225,8 @@ def save_signal_candidate_plot(
         price_source: str,
         pearson_min: float,
         regression_flat_delta_threshold_bps: float,
+        signal_window_mode: str,
+        market_regime_filter_mode: str,
 ) -> Path | None:
     """Что делает: сохраняет PNG с текущим паттерном и лучшими историческими кандидатами.
     Зачем нужна: удобно визуально проверить, что signal-сервис нашёл похожие участки,
@@ -383,6 +385,8 @@ def save_signal_candidate_plot(
     ax.set_title(
         f"{instrument_code} | signal_bar={signal_bar_time_ct} CT | "
         f"price_source={price_source}\n"
+        f"window_mode={signal_window_mode} | "
+        f"regime_mode={market_regime_filter_mode}\n"
         f"pattern_minutes={signal_window.pattern_seconds / 60:g} | "
         f"trade_minutes={signal_window.trade_seconds / 60:g} | "
         f"valid_candidates={len(valid_candidates)} | "

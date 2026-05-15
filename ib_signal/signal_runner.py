@@ -384,6 +384,8 @@ async def run_signal_loop(
                     price_source=settings.price_source,
                     pearson_min=settings.pearson_min,
                     regression_flat_delta_threshold_bps=regression_flat_delta_threshold_bps,
+                    signal_window_mode=settings.signal_window_mode.value,
+                    market_regime_filter_mode=settings.market_regime_filter_mode.value,
                 )
 
                 if saved_plot_path is not None:
