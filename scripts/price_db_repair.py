@@ -102,10 +102,15 @@ TARGET = "MNQ"
 # Форматы:
 #   "YYYY-MM-DD"
 #   "YYYY-MM-DD HH:MM:SS"
-CHECK_FROM_UTC = "2026-05-08 00:00:00"
+CHECK_FROM_UTC = "2026-05-14 00:00:00"
 
 # Ожидаемый шаг 5-секундных баров.
 EXPECTED_STEP_SECONDS = 5
+
+# Размер одного repair-запроса в IB.
+# Даже если дырка занимает 5-10 секунд, запрашиваем час вперёд от начала дырки.
+# Пример: hole=17:16:30 -> 17:16:40, load=17:16:30 -> 18:16:30.
+REPAIR_LOAD_CHUNK_SECONDS = 3600
 
 # Максимальное количество интервалов, которые реально будем ремонтировать за один запуск.
 # None — без ограничения.
@@ -316,6 +321,86 @@ def get_repair_contract_context(instrument_code: str, instrument_row, contract_n
         contract_row=contract_row,
     )
     return contract, storage_name
+
+
+def clamp_repair_load_bounds_to_contract(
+        *,
+        instrument_row,
+        contract_name: str,
+        load_start_ts: int,
+        load_end_ts_exclusive: int,
+) -> tuple[int, int]:
+    """Что делает: зажимает repair-load интервал в active-границы фьючерсного контракта.
+    Зачем нужна: часовой repair-запрос может выйти за active_to_utc конкретного квартального контракта."""
+    if instrument_row["secType"] != "FUT":
+        return load_start_ts, load_end_ts_exclusive
+
+    contract_row = get_contract_row_for_storage_name(instrument_row, contract_name)
+
+    if contract_row is None:
+        raise ValueError(f"Не найден контракт {contract_name} в contracts.py")
+
+    active_from_ts, active_to_ts = parse_contract_bounds(contract_row)
+
+    return (
+        max(load_start_ts, active_from_ts),
+        min(load_end_ts_exclusive, active_to_ts),
+    )
+
+
+def build_repair_load_intervals(
+        *,
+        instrument_row,
+        contract_name: str,
+        hole_start_ts: int,
+        hole_end_ts_exclusive: int,
+) -> list[tuple[int, int]]:
+    """Что делает: строит часовые repair-load интервалы от начала дырки.
+    Зачем нужна: IB плохо отдаёт слишком короткие historical-запросы, поэтому маленькую дырку качаем часовым запросом.
+
+    Пример:
+        hole = 17:16:30 -> 17:16:40
+        load = 17:16:30 -> 18:16:30
+
+    Для длинной дырки:
+        hole = 17:16:30 -> 19:20:00
+        load #1 = 17:16:30 -> 18:16:30
+        load #2 = 18:16:30 -> 19:16:30
+        load #3 = 19:16:30 -> 20:16:30
+    """
+    if hole_end_ts_exclusive <= hole_start_ts:
+        raise ValueError(
+            f"Некорректный repair interval: "
+            f"hole={utc_text(hole_start_ts)} -> {utc_text(hole_end_ts_exclusive)}"
+        )
+
+    load_intervals: list[tuple[int, int]] = []
+    current_start_ts = int(hole_start_ts)
+
+    while current_start_ts < hole_end_ts_exclusive:
+        raw_load_start_ts = current_start_ts
+        raw_load_end_ts = current_start_ts + REPAIR_LOAD_CHUNK_SECONDS
+
+        load_start_ts, load_end_ts = clamp_repair_load_bounds_to_contract(
+            instrument_row=instrument_row,
+            contract_name=contract_name,
+            load_start_ts=raw_load_start_ts,
+            load_end_ts_exclusive=raw_load_end_ts,
+        )
+
+        if load_end_ts <= load_start_ts:
+            raise ValueError(
+                f"Пустой repair-load интервал после зажима в active-границы: "
+                f"contract={contract_name}, "
+                f"hole={utc_text(hole_start_ts)} -> {utc_text(hole_end_ts_exclusive)}, "
+                f"raw_load={utc_text(raw_load_start_ts)} -> {utc_text(raw_load_end_ts)}, "
+                f"load={utc_text(load_start_ts)} -> {utc_text(load_end_ts)}"
+            )
+
+        load_intervals.append((load_start_ts, load_end_ts))
+        current_start_ts += REPAIR_LOAD_CHUNK_SECONDS
+
+    return load_intervals
 
 
 def ensure_table_exists(conn, db_path: str, table_name: str) -> None:
@@ -787,23 +872,40 @@ async def repair_interval(
             f"Внутренняя ошибка contract_name: interval={contract_name}, storage={storage_name}"
         )
 
-    rows_written = await load_quotes_segment(
-        ib=ib,
-        ib_health=ib_health,
-        db_path=db_path,
-        table_name=table_name,
-        contract=contract,
+    load_intervals = build_repair_load_intervals(
+        instrument_row=instrument_row,
         contract_name=contract_name,
-        sec_type=instrument_row["secType"],
-        session_model=instrument_row["session_model"],
-        bar_size_setting=instrument_row["barSizeSetting"],
-        use_rth=instrument_row["useRTH"],
-        segment_start_ts=interval["start_ts"],
-        segment_end_ts=interval["end_ts_exclusive"],
-        segment_kind="manual-repair",
+        hole_start_ts=interval["start_ts"],
+        hole_end_ts_exclusive=interval["end_ts_exclusive"],
     )
 
-    return rows_written
+    total_rows_written = 0
+
+    for load_index, (load_start_ts, load_end_ts) in enumerate(load_intervals, start=1):
+        print(
+            f"    load [{load_index}/{len(load_intervals)}]: "
+            f"{utc_text(load_start_ts)} -> {utc_text(load_end_ts)}"
+        )
+
+        rows_written = await load_quotes_segment(
+            ib=ib,
+            ib_health=ib_health,
+            db_path=db_path,
+            table_name=table_name,
+            contract=contract,
+            contract_name=contract_name,
+            sec_type=instrument_row["secType"],
+            session_model=instrument_row["session_model"],
+            bar_size_setting=instrument_row["barSizeSetting"],
+            use_rth=instrument_row["useRTH"],
+            segment_start_ts=load_start_ts,
+            segment_end_ts=load_end_ts,
+            segment_kind="manual-repair",
+        )
+
+        total_rows_written += rows_written
+
+    return total_rows_written
 
 
 async def repair_intervals(
@@ -823,10 +925,18 @@ async def repair_intervals(
 
     try:
         for index, interval in enumerate(intervals, start=1):
+            load_intervals = build_repair_load_intervals(
+                instrument_row=instrument_row,
+                contract_name=interval["contract_name"],
+                hole_start_ts=interval["start_ts"],
+                hole_end_ts_exclusive=interval["end_ts_exclusive"],
+            )
+
             print(
                 f"Ремонт [{index}/{len(intervals)}]: "
                 f"contract={interval['contract_name']} | "
-                f"{utc_text(interval['start_ts'])} -> {utc_text(interval['end_ts_exclusive'])}"
+                f"hole={utc_text(interval['start_ts'])} -> {utc_text(interval['end_ts_exclusive'])} | "
+                f"loads={len(load_intervals)}"
             )
 
             rows_written = await repair_interval(
