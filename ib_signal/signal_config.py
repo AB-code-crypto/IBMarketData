@@ -51,7 +51,7 @@ class SignalConfig:
     # SOFT: Pearson + совпадение relation price-regression vs SMA 600 regression.
     # HARD: SOFT + совпадение направлений price-regression и SMA 600 regression.
     # Если текущий relation = mixed_sma, SOFT/HARD пока пропускают расчёт сигнала.
-    market_regime_filter_mode: MarketRegimeFilterMode = MarketRegimeFilterMode.HARD
+    market_regime_filter_mode: MarketRegimeFilterMode = MarketRegimeFilterMode.SOFT
 
 
 DEFAULT_SIGNAL_CONFIG = SignalConfig()
