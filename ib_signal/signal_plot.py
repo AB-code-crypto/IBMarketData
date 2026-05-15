@@ -388,14 +388,14 @@ def save_signal_candidate_plot(
     regression_rows: list[tuple[str, str | None]] = [
         (
             f"flat_threshold : "
-            f"{format_plot_regression_value(regression_flat_delta_threshold_bps)} bps / "
-            f"{format_plot_regression_value(current_regression_threshold_points)} pt",
+            f"{format_plot_regression_value(regression_flat_delta_threshold_bps)} / "
+            f"{format_plot_regression_value(current_regression_threshold_points)}",
             None,
         ),
         (
             f"price  delta   : "
-            f"{format_plot_regression_value(current_regression_delta_bps)} bps / "
-            f"{format_plot_regression_value(current_regression.fitted_delta)} pt",
+            f"{format_plot_regression_value(current_regression_delta_bps)} / "
+            f"{format_plot_regression_value(current_regression.fitted_delta)}",
             None,
         ),
         (f"price  dir     : {current_regression_direction}", None),
@@ -405,12 +405,12 @@ def save_signal_candidate_plot(
         sma_600_regression_delta_bps = calculate_regression_delta_bps(sma_600_regression)
         regression_rows.extend([
             (
-                f"sma600 delta   : "
-                f"{format_plot_regression_value(sma_600_regression_delta_bps)} bps / "
-                f"{format_plot_regression_value(sma_600_regression.fitted_delta)} pt",
+                f"sma 600 delta   : "
+                f"{format_plot_regression_value(sma_600_regression_delta_bps)} / "
+                f"{format_plot_regression_value(sma_600_regression.fitted_delta)}",
                 None,
             ),
-            (f"sma600 dir     : {sma_600_regression_direction}", None),
+            (f"sma 600 dir     : {sma_600_regression_direction}", None),
         ])
     else:
         regression_rows.append(("sma600         : regression=None", None))
@@ -438,7 +438,7 @@ def save_signal_candidate_plot(
     line_height = 0.024
     y = draw_info_section(
         ax_info,
-        title="REGRESSION",
+        title="REGRESSION (bps / pt)",
         rows=regression_rows,
         y=y,
         line_height=line_height,
