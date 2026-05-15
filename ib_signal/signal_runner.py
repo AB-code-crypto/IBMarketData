@@ -13,6 +13,10 @@ from ib_signal.signal_pattern_matrix import build_pattern_matrix, format_pattern
 from ib_signal.signal_plot import save_signal_candidate_plot
 from ib_signal.signal_regression import build_linear_regression, format_regression_diagnostics
 from ib_signal.signal_regression_threshold import get_regression_flat_delta_threshold_bps
+from ib_signal.signal_regression_relation import (
+    build_regression_relation,
+    format_regression_relation_diagnostics,
+)
 from ib_signal.signal_sma_reader import read_current_sma_values
 from ib_signal.signal_window import build_current_signal_window, format_signal_window_for_log
 
@@ -218,6 +222,15 @@ async def run_signal_loop(
                     if sma_600_values is not None
                     else None
                 )
+                price_sma_600_relation = (
+                    build_regression_relation(
+                        base_regression=price_regression,
+                        reference_regression=sma_600_regression,
+                        near_threshold_bps=regression_flat_delta_threshold_bps,
+                    )
+                    if sma_600_regression is not None
+                    else None
+                )
 
                 saved_plot_path = save_signal_candidate_plot(
                     instrument_code=instrument_code,
@@ -277,6 +290,10 @@ async def run_signal_loop(
                 sma_600_regression,
                 flat_delta_threshold_bps=regression_flat_delta_threshold_bps,
             )
+            price_sma_600_relation_text = format_regression_relation_diagnostics(
+                "price_vs_sma600",
+                price_sma_600_relation,
+            )
 
             log_info(
                 logger,
@@ -287,6 +304,7 @@ async def run_signal_loop(
                 f"pattern_matrix={matrix_text}, "
                 f"regression_threshold_bps={regression_flat_delta_threshold_bps:.6f}, "
                 f"regression={price_regression_text}, {sma_600_regression_text}, "
+                f"regression_relation={price_sma_600_relation_text}, "
                 f"pearson_best={best_pearson:.6f}, "
                 f"pearson_passed={pearson_passed_count}",
                 to_telegram=False,

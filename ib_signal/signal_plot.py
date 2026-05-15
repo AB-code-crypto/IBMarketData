@@ -18,6 +18,7 @@ from ib_signal.signal_regression import (
     calculate_regression_threshold_points,
     classify_regression_direction,
 )
+from ib_signal.signal_regression_relation import build_regression_relation
 from ib_signal.signal_sma_reader import read_current_sma_lines
 from ib_signal.signal_window import SignalWindow
 
@@ -279,6 +280,15 @@ def save_signal_candidate_plot(
         if sma_600_regression is not None
         else None
     )
+    price_sma_600_relation = (
+        build_regression_relation(
+            base_regression=current_regression,
+            reference_regression=sma_600_regression,
+            near_threshold_bps=regression_flat_delta_threshold_bps,
+        )
+        if sma_600_regression is not None
+        else None
+    )
 
     trade_points = signal_window.trade_seconds // bar_size_seconds
     full_points = current_values.size + trade_points
@@ -405,15 +415,35 @@ def save_signal_candidate_plot(
         sma_600_regression_delta_bps = calculate_regression_delta_bps(sma_600_regression)
         regression_rows.extend([
             (
-                f"sma 600 delta   : "
+                f"sma600 delta   : "
                 f"{format_plot_regression_value(sma_600_regression_delta_bps)} / "
                 f"{format_plot_regression_value(sma_600_regression.fitted_delta)}",
                 None,
             ),
-            (f"sma 600 dir     : {sma_600_regression_direction}", None),
+            (f"sma600 dir     : {sma_600_regression_direction}", None),
         ])
     else:
         regression_rows.append(("sma600         : regression=None", None))
+
+    relation_rows: list[tuple[str, str | None]] = []
+    if price_sma_600_relation is not None:
+        relation_rows.extend([
+            (f"price/sma 600  : {price_sma_600_relation.relation}", None),
+            (
+                f"start_diff     : "
+                f"{format_plot_regression_value(price_sma_600_relation.diff_start_bps)} / "
+                f"{format_plot_regression_value(price_sma_600_relation.diff_start_points)}",
+                None,
+            ),
+            (
+                f"end_diff       : "
+                f"{format_plot_regression_value(price_sma_600_relation.diff_end_bps)} / "
+                f"{format_plot_regression_value(price_sma_600_relation.diff_end_points)}",
+                None,
+            ),
+        ])
+    else:
+        relation_rows.append(("price/sma 600  : None", None))
 
     lines_rows: list[tuple[str, str | None]] = [
         (f"pearson_min    : {pearson_min:.2f}", None),
@@ -440,6 +470,13 @@ def save_signal_candidate_plot(
         ax_info,
         title="REGRESSION (bps / pt)",
         rows=regression_rows,
+        y=y,
+        line_height=line_height,
+    )
+    y = draw_info_section(
+        ax_info,
+        title="RELATION (bps / pt)",
+        rows=relation_rows,
         y=y,
         line_height=line_height,
     )
