@@ -1,5 +1,7 @@
 import asyncio
 
+import numpy as np
+
 from contracts import Instrument
 from core.bar_utils import get_bar_size_seconds
 from core.logger import get_logger, log_info, setup_logging
@@ -11,6 +13,10 @@ from ib_signal.pearson import calculate_centered_pearson_batch
 from ib_signal.signal_candidate_regime_filter import (
     filter_candidates_by_market_regime,
     format_candidate_regime_filter_result,
+)
+from ib_signal.signal_candidate_rank_features import (
+    build_candidate_path_feature_result,
+    format_candidate_path_feature_result,
 )
 from ib_signal.signal_candidates import find_candidate_windows
 from ib_signal.signal_pattern_matrix import build_pattern_matrix
@@ -297,6 +303,7 @@ async def run_signal_loop(
                 )
 
                 plot_valid_candidates = pattern_matrix_result.valid_candidates
+                plot_candidate_matrix = pattern_matrix_result.candidate_matrix
                 plot_pearson_scores = pearson_scores
                 candidate_regime_filter_result = None
 
@@ -329,6 +336,7 @@ async def run_signal_loop(
                         sma_period_bars=600,
                     )
                     plot_valid_candidates = candidate_regime_filter_result.valid_candidates
+                    plot_candidate_matrix = candidate_regime_filter_result.candidate_matrix
                     plot_pearson_scores = candidate_regime_filter_result.pearson_scores
 
                 elif settings.market_regime_filter_mode != MarketRegimeFilterMode.OFF:
@@ -349,6 +357,22 @@ async def run_signal_loop(
                         to_telegram=False,
                     )
                     continue
+
+                if candidate_regime_filter_result is None:
+                    passed_indices = np.flatnonzero(plot_pearson_scores >= settings.pearson_min)
+                    plot_valid_candidates = [
+                        plot_valid_candidates[int(index)]
+                        for index in passed_indices
+                    ]
+                    plot_candidate_matrix = plot_candidate_matrix[passed_indices, :]
+                    plot_pearson_scores = plot_pearson_scores[passed_indices]
+
+                candidate_path_feature_result = build_candidate_path_feature_result(
+                    current_values=pattern_matrix_result.current_values,
+                    candidates=plot_valid_candidates,
+                    candidate_matrix=plot_candidate_matrix,
+                    pearson_scores=plot_pearson_scores,
+                )
 
                 saved_plot_path = save_signal_candidate_plot(
                     instrument_code=instrument_code,
@@ -416,6 +440,10 @@ async def run_signal_loop(
                 mode=settings.market_regime_filter_mode,
                 pearson_passed_count=pearson_passed_count,
             )
+            path_features_text = format_candidate_path_feature_result(
+                candidate_path_feature_result,
+                top_limit=3,
+            )
 
             log_info(
                 logger,
@@ -430,7 +458,8 @@ async def run_signal_loop(
                     f"  regression: threshold={regression_flat_delta_threshold_bps:.2f} bps; "
                     f"{price_regression_text}; {sma_600_regression_text}\n"
                     f"  relation: {price_sma_600_relation_text}\n"
-                    f"  regime_filter: {candidate_regime_filter_text}"
+                    f"  regime_filter: {candidate_regime_filter_text}\n"
+                    f"  path_features: {path_features_text}"
                 ),
                 to_telegram=False,
             )

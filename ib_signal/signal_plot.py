@@ -11,6 +11,7 @@ from core.bar_utils import get_bar_size_seconds
 from core.sqlite_utils import open_sqlite_connection
 from ib_job_data.feature_db_sql import MID_PRICE_TABLE_NAME, quote_identifier
 from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
+from ib_signal.signal_candidate_rank_features import calculate_pattern_path_features
 from ib_signal.signal_candidates import CandidateWindow
 from ib_signal.signal_regression import (
     build_linear_regression,
@@ -244,8 +245,8 @@ def save_signal_candidate_plot(
     bar_size_seconds = get_bar_size_seconds(instrument_row["barSizeSetting"])
 
     current_x_minutes = (
-            np.arange(current_values.size, dtype=float) * bar_size_seconds / 60.0
-            - signal_window.pattern_seconds / 60.0
+        np.arange(current_values.size, dtype=float) * bar_size_seconds / 60.0
+        - signal_window.pattern_seconds / 60.0
     )
 
     current_sma_lines = read_current_sma_lines(
@@ -253,6 +254,7 @@ def save_signal_candidate_plot(
         signal_window=signal_window,
     )
     current_line = normalize_series_for_plot(np.asarray(current_values, dtype=float))
+    current_path_features = calculate_pattern_path_features(current_values)
 
     current_regression = build_linear_regression(current_values)
     current_regression_direction = classify_regression_direction(
@@ -335,8 +337,8 @@ def save_signal_candidate_plot(
 
             candidate_line = normalize_series_for_plot(candidate_full_values)
             candidate_x_minutes = (
-                    np.arange(candidate_line.size, dtype=float) * bar_size_seconds / 60.0
-                    - signal_window.pattern_seconds / 60.0
+                np.arange(candidate_line.size, dtype=float) * bar_size_seconds / 60.0
+                - signal_window.pattern_seconds / 60.0
             )
 
             line = ax.plot(
@@ -445,6 +447,23 @@ def save_signal_candidate_plot(
     else:
         relation_rows.append(("price/sma 600  : None", None))
 
+    path_rows: list[tuple[str, str | None]] = [
+        (
+            f"net_delta     : "
+            f"{format_plot_regression_value(current_path_features.net_delta_bps)} / "
+            f"{format_plot_regression_value(current_path_features.net_delta_points)}",
+            None,
+        ),
+        (
+            f"range         : "
+            f"{format_plot_regression_value(current_path_features.range_bps)} / "
+            f"{format_plot_regression_value(current_path_features.range_points)}",
+            None,
+        ),
+        (f"end_position  : {format_plot_regression_value(current_path_features.end_position)}", None),
+        (f"efficiency    : {format_plot_regression_value(current_path_features.path_efficiency)}", None),
+    ]
+
     lines_rows: list[tuple[str, str | None]] = [
         (f"pearson_min    : {pearson_min:.2f}", None),
         ("sma 120       : orange", SMA_LINE_COLORS[120]),
@@ -477,6 +496,13 @@ def save_signal_candidate_plot(
         ax_info,
         title="RELATION (bps / pt)",
         rows=relation_rows,
+        y=y,
+        line_height=line_height,
+    )
+    y = draw_info_section(
+        ax_info,
+        title="PATH (bps / pt)",
+        rows=path_rows,
         y=y,
         line_height=line_height,
     )
