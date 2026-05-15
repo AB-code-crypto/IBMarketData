@@ -279,15 +279,13 @@ def filter_candidates_by_regression_relation(
 
 def format_candidate_regime_filter_result(result: CandidateRegimeFilterResult | None) -> str:
     """Что делает: форматирует результат regime-фильтра кандидатов для runtime-лога.
-    Зачем нужна: видно, сколько кандидатов отсекает совпадение relation."""
+    Зачем нужна: финальный лог не должен дублировать общий Pearson summary."""
     if result is None:
-        return "disabled"
+        return "off"
 
     return (
-        f"enabled=True, "
-        f"current_relation={result.current_relation}, "
-        f"source_candidates={result.source_candidates_count}, "
-        f"pearson_passed={result.pearson_passed_count}, "
+        f"on, "
+        f"relation={result.current_relation}, "
         f"kept={result.kept_candidates_count}, "
         f"skipped_sma={result.skipped_sma_count}, "
         f"relation_mismatch={result.relation_mismatch_count}"

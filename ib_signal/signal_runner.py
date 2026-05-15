@@ -15,12 +15,13 @@ from ib_signal.signal_candidate_regime_filter import (
 from ib_signal.signal_candidates import find_candidate_windows, format_candidate_search_result
 from ib_signal.signal_pattern_matrix import build_pattern_matrix, format_pattern_matrix_result
 from ib_signal.signal_plot import save_signal_candidate_plot
-from ib_signal.signal_regression import build_linear_regression, format_regression_diagnostics
-from ib_signal.signal_regression_threshold import get_regression_flat_delta_threshold_bps
-from ib_signal.signal_regression_relation import (
-    build_regression_relation,
-    format_regression_relation_diagnostics,
+from ib_signal.signal_regression import (
+    build_linear_regression,
+    calculate_regression_delta_bps,
+    classify_regression_direction,
 )
+from ib_signal.signal_regression_threshold import get_regression_flat_delta_threshold_bps
+from ib_signal.signal_regression_relation import build_regression_relation
 from ib_signal.signal_sma_reader import read_current_sma_values
 from ib_signal.signal_window import build_current_signal_window, format_signal_window_for_log
 
@@ -39,6 +40,77 @@ def format_fresh_job_bar_status(status) -> str:
         f"reason={status.reason}, "
         f"last_bar={status.last_bar_time_ct}, "
         f"lag={status.last_bar_lag_seconds}"
+    )
+
+
+def format_candidate_search_summary(result) -> str:
+    """Что делает: компактно форматирует первичный поиск кандидатов.
+    Зачем нужна: финальный runtime-лог должен читаться человеком, а не превращаться в кашу."""
+    if not result.candidates:
+        return (
+            f"hour={result.current_hour_slot_ct}, "
+            f"allowed={result.allowed_hour_slots_ct}, "
+            f"found=0"
+        )
+
+    first_candidate = result.candidates[0]
+    last_candidate = result.candidates[-1]
+
+    return (
+        f"hour={result.current_hour_slot_ct}, "
+        f"allowed={result.allowed_hour_slots_ct}, "
+        f"found={len(result.candidates)}, "
+        f"first={first_candidate.signal_bar_time_ct} CT, "
+        f"last={last_candidate.signal_bar_time_ct} CT"
+    )
+
+
+def format_pattern_matrix_summary(result) -> str:
+    """Что делает: компактно форматирует размерности pattern matrix.
+    Зачем нужна: в логе нужны только ключевые размеры и число пропусков."""
+    return (
+        f"points={result.expected_points}, "
+        f"current={result.current_values.shape}, "
+        f"matrix={result.candidate_matrix.shape}, "
+        f"valid={len(result.valid_candidates)}, "
+        f"skipped={result.skipped_candidates_count}"
+    )
+
+
+def format_regression_summary(
+        label: str,
+        regression,
+        *,
+        flat_delta_threshold_bps: float,
+) -> str:
+    """Что делает: форматирует regression delta и direction в человекочитаемом виде.
+    Зачем нужна: bps и пункты должны быть рядом, без длинных внутренних имён."""
+    if regression is None:
+        return f"{label}=None"
+
+    delta_bps = calculate_regression_delta_bps(regression)
+    direction = classify_regression_direction(
+        regression,
+        flat_delta_threshold_bps=flat_delta_threshold_bps,
+    )
+
+    return (
+        f"{label}: "
+        f"delta={delta_bps:.2f} bps / {regression.fitted_delta:.2f} pt, "
+        f"dir={direction}"
+    )
+
+
+def format_regression_relation_summary(label: str, relation) -> str:
+    """Что делает: форматирует взаимное расположение regression lines.
+    Зачем нужна: relation должен быть виден одной компактной строкой."""
+    if relation is None:
+        return f"{label}=None"
+
+    return (
+        f"{label}: {relation.relation}, "
+        f"start={relation.diff_start_bps:.2f} bps / {relation.diff_start_points:.2f} pt, "
+        f"end={relation.diff_end_bps:.2f} bps / {relation.diff_end_points:.2f} pt"
     )
 
 
@@ -322,20 +394,20 @@ async def run_signal_loop(
                 signal_window,
                 lambda ts: read_job_bar_time_ct(instrument_code, ts),
             )
-            candidate_text = format_candidate_search_result(candidate_search_result)
-            matrix_text = format_pattern_matrix_result(pattern_matrix_result)
+            candidate_search_text = format_candidate_search_summary(candidate_search_result)
+            matrix_text = format_pattern_matrix_summary(pattern_matrix_result)
 
-            price_regression_text = format_regression_diagnostics(
+            price_regression_text = format_regression_summary(
                 "price",
                 price_regression,
                 flat_delta_threshold_bps=regression_flat_delta_threshold_bps,
             )
-            sma_600_regression_text = format_regression_diagnostics(
+            sma_600_regression_text = format_regression_summary(
                 "sma600",
                 sma_600_regression,
                 flat_delta_threshold_bps=regression_flat_delta_threshold_bps,
             )
-            price_sma_600_relation_text = format_regression_relation_diagnostics(
+            price_sma_600_relation_text = format_regression_relation_summary(
                 "price_vs_sma600",
                 price_sma_600_relation,
             )
@@ -345,17 +417,20 @@ async def run_signal_loop(
 
             log_info(
                 logger,
-                f"{instrument_code}: пора считать сигнал, "
-                f"latest_job_row={status.last_bar_time_ct} CT, "
-                f"window={window_text}, "
-                f"candidate_search={candidate_text}, "
-                f"pattern_matrix={matrix_text}, "
-                f"regression_threshold_bps={regression_flat_delta_threshold_bps:.6f}, "
-                f"regression={price_regression_text}, {sma_600_regression_text}, "
-                f"regression_relation={price_sma_600_relation_text}, "
-                f"candidate_regime_filter={candidate_regime_filter_text}, "
-                f"pearson_best={best_pearson:.6f}, "
-                f"pearson_passed={pearson_passed_count}",
+                (
+                    f"{instrument_code}: signal_calc\n"
+                    f"  time: latest_job_row={status.last_bar_time_ct} CT\n"
+                    f"  window: {window_text}\n"
+                    f"  candidates: {candidate_search_text}\n"
+                    f"  matrix: {matrix_text}\n"
+                    f"  pearson: min={settings.pearson_min:.2f}, "
+                    f"best={best_pearson:.4f}, "
+                    f"passed={pearson_passed_count}/{len(pattern_matrix_result.valid_candidates)}\n"
+                    f"  regression: threshold={regression_flat_delta_threshold_bps:.2f} bps; "
+                    f"{price_regression_text}; {sma_600_regression_text}\n"
+                    f"  relation: {price_sma_600_relation_text}\n"
+                    f"  regime_filter: {candidate_regime_filter_text}"
+                ),
                 to_telegram=False,
             )
 
