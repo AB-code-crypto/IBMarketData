@@ -33,19 +33,6 @@ class PatternPathFeatures:
 
 
 @dataclass(frozen=True)
-class CandidatePathFeatureRow:
-    candidate: CandidateWindow
-    pearson_score: float
-    path_features: PatternPathFeatures
-
-
-@dataclass(frozen=True)
-class CandidatePathFeatureResult:
-    current_features: PatternPathFeatures
-    candidate_rows: list[CandidatePathFeatureRow]
-
-
-@dataclass(frozen=True)
 class CandidateMinmaxHardFilterResult:
     # Максимально допустимое отношение minmax_bps.
     max_ratio: float
@@ -172,38 +159,6 @@ def calculate_pattern_path_features(values: np.ndarray) -> PatternPathFeatures:
         end_delta_bps=float(end_delta_bps),
         minmax_points=float(minmax_points),
         minmax_bps=float(minmax_bps),
-    )
-
-
-def build_candidate_path_feature_result(
-        *,
-        current_values: np.ndarray,
-        candidates: list[CandidateWindow],
-        candidate_matrix: np.ndarray,
-        pearson_scores: np.ndarray,
-) -> CandidatePathFeatureResult:
-    """Что делает: считает path-features текущего паттерна и выбранных кандидатов.
-    Зачем нужна: это диагностический слой для просмотра raw-признаков."""
-    validate_candidate_feature_inputs(
-        candidates=candidates,
-        candidate_matrix=candidate_matrix,
-        pearson_scores=pearson_scores,
-    )
-
-    current_features = calculate_pattern_path_features(current_values)
-
-    candidate_rows = [
-        CandidatePathFeatureRow(
-            candidate=candidates[index],
-            pearson_score=float(pearson_scores[index]),
-            path_features=calculate_pattern_path_features(candidate_matrix[index, :]),
-        )
-        for index in range(len(candidates))
-    ]
-
-    return CandidatePathFeatureResult(
-        current_features=current_features,
-        candidate_rows=candidate_rows,
     )
 
 

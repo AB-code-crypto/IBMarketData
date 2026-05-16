@@ -13,7 +13,7 @@ Registry = Dict[str, InstrumentRow]
 # Такой conId не передаётся в IB Contract, пока ты не заменишь его на настоящий.
 PLACEHOLDER_CON_ID = 111
 
-DEFAULTS_DATA = {
+DEFAULTS_DATA: InstrumentRow = {
     "history_enabled": False,
     "realtime_enabled": False,
     "trading_enabled": False,
