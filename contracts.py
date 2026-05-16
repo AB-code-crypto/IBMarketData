@@ -13,49 +13,41 @@ Registry = Dict[str, InstrumentRow]
 # Такой conId не передаётся в IB Contract, пока ты не заменишь его на настоящий.
 PLACEHOLDER_CON_ID = 111
 
-FUT_DEFAULTS: InstrumentRow = {
+DEFAULTS_DATA = {
     "history_enabled": False,
     "realtime_enabled": False,
     "trading_enabled": False,
-    "secType": "FUT",
-    "exchange": "CME",
-    "currency": "USD",
-    "barSizeSetting": "5 secs",
     "useRTH": False,
-    "session_model": "CME_EQUITY_INDEX",
+    "barSizeSetting": "5 secs",
     "price_digits": 2,
     "mid_price_digits": 3,
     "regression_flat_delta_threshold_bps": 1.0,
 }
 
+FUT_DEFAULTS: InstrumentRow = {
+    **DEFAULTS_DATA,
+    "secType": "FUT",
+    "exchange": "CME",
+    "currency": "USD",
+    "session_model": "CME_EQUITY_INDEX",
+}
+
 FX_DEFAULTS: InstrumentRow = {
-    "history_enabled": True,
-    "realtime_enabled": False,
-    "trading_enabled": False,
+    **DEFAULTS_DATA,
     "secType": "CASH",
     "exchange": "IDEALPRO",
-    "barSizeSetting": "5 secs",
-    "useRTH": False,
     "session_model": "FX_24_5",
     "history_lookback_days": 50,
     "price_digits": 5,
     "mid_price_digits": 6,
-    "regression_flat_delta_threshold_bps": 1.0,
 }
 
 CRYPTO_DEFAULTS: InstrumentRow = {
-    "history_enabled": False,
-    "realtime_enabled": False,
-    "trading_enabled": False,
+    **DEFAULTS_DATA,
     "secType": "CRYPTO",
     "currency": "USD",
-    "barSizeSetting": "5 secs",
-    "useRTH": False,
     "session_model": "CRYPTO_24_7",
     "history_lookback_days": 50,
-    "price_digits": 2,
-    "mid_price_digits": 3,
-    "regression_flat_delta_threshold_bps": 1.0,
 }
 
 # ==============================
@@ -71,7 +63,6 @@ Instrument: Registry = {
         "history_enabled": True,
         "realtime_enabled": True,
         "trading_enabled": True,
-        "regression_flat_delta_threshold_bps": 1.0,
         "contracts": [
             {"conId": 620730945, "localSymbol": "MNQM4", "lastTradeDateOrContractMonth": "20240621",
              "active_from_utc": "2024-03-13T22:00:00Z", "active_to_utc": "2024-06-19T17:00:00Z"},
@@ -123,7 +114,6 @@ Instrument: Registry = {
         "tradingClass": "MES",
         "multiplier": 5.0,
         "db_filename": "MES.sqlite3",
-        "regression_flat_delta_threshold_bps": 15.0,
         # Для нового инструмента ограничиваем начальную загрузку двумя неделями.
         # Если нужна более длинная история, увеличь history_lookback_days вручную.
         "contracts": [
@@ -168,7 +158,6 @@ Instrument: Registry = {
         "tradingClass": "NQ",
         "multiplier": 20.0,
         "db_filename": "NQ.sqlite3",
-        "regression_flat_delta_threshold_bps": 3.5,
         "contracts": [
             {"conId": 620730920, "localSymbol": "NQM4", "lastTradeDateOrContractMonth": "20240621",
              "active_from_utc": "2024-03-13T22:00:00Z", "active_to_utc": "2024-06-19T17:00:00Z"},
@@ -210,7 +199,6 @@ Instrument: Registry = {
         "tradingClass": "ES",
         "multiplier": 50.0,
         "db_filename": "ES.sqlite3",
-        "regression_flat_delta_threshold_bps": 15.0,
         # Для нового инструмента ограничиваем начальную загрузку двумя неделями.
         # Если нужна более длинная история, увеличь history_lookback_days вручную.
         # "history_lookback_days": 14,

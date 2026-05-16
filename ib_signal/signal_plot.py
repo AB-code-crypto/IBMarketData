@@ -489,10 +489,8 @@ def save_signal_candidate_plot(
             candidate_rows.append(
                 (
                     f"{rank:02d} | r={pearson_value:.2f} | "
-                    f"nd={format_plot_regression_value(candidate_path_features.net_delta_bps)}/"
-                    f"{format_plot_regression_value(candidate_path_features.net_delta_points)} | "
-                    f"rg={format_plot_regression_value(candidate_path_features.range_bps)}/"
-                    f"{format_plot_regression_value(candidate_path_features.range_points)} | "
+                    f"nd={format_plot_regression_value(candidate_path_features.net_delta_points)} | "
+                    f"rg={format_plot_regression_value(candidate_path_features.range_points)} | "
                     f"{candidate.signal_bar_time_ct}",
                     candidate_color,
                 )

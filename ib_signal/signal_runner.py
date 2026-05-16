@@ -16,7 +16,9 @@ from ib_signal.signal_candidate_regime_filter import (
 )
 from ib_signal.signal_candidate_rank_features import (
     build_candidate_path_feature_result,
+    filter_candidates_by_range_ratio,
     format_candidate_path_feature_result,
+    format_candidate_range_hard_filter_result,
 )
 from ib_signal.signal_candidates import find_candidate_windows
 from ib_signal.signal_pattern_matrix import build_pattern_matrix
@@ -344,7 +346,7 @@ async def run_signal_loop(
                     skip_reason = (
                         "current_relation=mixed_sma"
                         if price_sma_600_relation is not None
-                           and price_sma_600_relation.relation == "mixed_sma"
+                        and price_sma_600_relation.relation == "mixed_sma"
                         else "SMA 600 relation не рассчитан"
                     )
                     log_info(
@@ -367,6 +369,17 @@ async def run_signal_loop(
                     ]
                     plot_candidate_matrix = plot_candidate_matrix[passed_indices, :]
                     plot_pearson_scores = plot_pearson_scores[passed_indices]
+
+                candidate_range_filter_result = filter_candidates_by_range_ratio(
+                    current_values=pattern_matrix_result.current_values,
+                    candidates=plot_valid_candidates,
+                    candidate_matrix=plot_candidate_matrix,
+                    pearson_scores=plot_pearson_scores,
+                    max_ratio=settings.candidate_range_hard_filter_max_ratio,
+                )
+                plot_valid_candidates = candidate_range_filter_result.valid_candidates
+                plot_candidate_matrix = candidate_range_filter_result.candidate_matrix
+                plot_pearson_scores = candidate_range_filter_result.pearson_scores
 
                 candidate_path_feature_result = build_candidate_path_feature_result(
                     current_values=pattern_matrix_result.current_values,
@@ -443,6 +456,9 @@ async def run_signal_loop(
                 mode=settings.market_regime_filter_mode,
                 pearson_passed_count=pearson_passed_count,
             )
+            candidate_range_filter_text = format_candidate_range_hard_filter_result(
+                candidate_range_filter_result,
+            )
             path_features_text = format_candidate_path_feature_result(
                 candidate_path_feature_result,
                 top_limit=3,
@@ -464,6 +480,7 @@ async def run_signal_loop(
                     f"{price_regression_text}; {sma_600_regression_text}\n"
                     f"  relation: {price_sma_600_relation_text}\n"
                     f"  regime_filter: {candidate_regime_filter_text}\n"
+                    f"  range_filter: {candidate_range_filter_text}\n"
                     f"  path_features: {path_features_text}"
                 ),
                 to_telegram=False,

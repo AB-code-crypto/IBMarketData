@@ -28,7 +28,7 @@ class SignalConfig:
 
     # ROLLING-режим.
     rolling_signal_step_seconds: int = 60  # считаем сигнал не на каждом баре, а через это кол-во секунд
-    rolling_back_minutes: int = 30  # Смотрим на столько минут назад
+    rolling_back_minutes: int = 90  # Смотрим на столько минут назад
     rolling_trade_minutes: int = 30  # Длительность сделки по времени
 
     # GRID-режим.
@@ -51,7 +51,12 @@ class SignalConfig:
     # SOFT: Pearson + совпадение relation price-regression vs SMA 600 regression.
     # HARD: SOFT + совпадение направлений price-regression и SMA 600 regression.
     # Если текущий relation = mixed_sma, SOFT/HARD пока пропускают расчёт сигнала.
-    market_regime_filter_mode: MarketRegimeFilterMode = MarketRegimeFilterMode.SOFT
+    market_regime_filter_mode: MarketRegimeFilterMode = MarketRegimeFilterMode.HARD
+
+    # Жёсткий отсев кандидатов по размаху движения pattern-window.
+    # Сравнение идёт по range_bps: max(current_range, candidate_range) / min(...).
+    # Если значение <= 0, фильтр выключен.
+    candidate_range_hard_filter_max_ratio: float = 1.5
 
 
 DEFAULT_SIGNAL_CONFIG = SignalConfig()

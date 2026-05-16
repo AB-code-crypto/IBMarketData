@@ -48,6 +48,36 @@ class CandidatePathFeatureResult:
     candidate_rows: list[CandidatePathFeatureRow]
 
 
+@dataclass(frozen=True)
+class CandidateRangeHardFilterResult:
+    # Максимально допустимое отношение range_bps.
+    max_ratio: float
+
+    # Причина отключения фильтра. None означает, что фильтр реально работал.
+    disabled_reason: str | None
+
+    # Range текущего паттерна в bps.
+    current_range_bps: float
+
+    # Количество кандидатов на входе фильтра.
+    source_candidates_count: int
+
+    # Количество кандидатов, оставшихся после фильтра.
+    kept_candidates_count: int
+
+    # Количество кандидатов, отброшенных по range-ratio.
+    dropped_candidates_count: int
+
+    # Кандидаты, оставшиеся после range hard filter.
+    valid_candidates: list[CandidateWindow]
+
+    # Candidate matrix только по оставшимся кандидатам.
+    candidate_matrix: np.ndarray
+
+    # Pearson scores только по оставшимся кандидатам.
+    pearson_scores: np.ndarray
+
+
 def calculate_bps(
         *,
         value: float,
@@ -156,6 +186,148 @@ def build_candidate_path_feature_result(
     return CandidatePathFeatureResult(
         current_features=current_features,
         candidate_rows=candidate_rows,
+    )
+
+
+def calculate_range_ratio(
+        *,
+        current_range_bps: float,
+        candidate_range_bps: float,
+) -> float:
+    """Что делает: считает симметричное отношение range кандидата и текущего паттерна.
+    Зачем нужна: range hard filter должен одинаково отсекать слишком широкий и слишком узкий масштаб."""
+    current_range = float(current_range_bps)
+    candidate_range = float(candidate_range_bps)
+
+    if current_range < 0.0 or candidate_range < 0.0:
+        raise ValueError(
+            f"Range не может быть отрицательным: "
+            f"current={current_range}, candidate={candidate_range}"
+        )
+
+    if current_range == 0.0 and candidate_range == 0.0:
+        return 1.0
+
+    if current_range == 0.0 or candidate_range == 0.0:
+        return float("inf")
+
+    return max(current_range, candidate_range) / min(current_range, candidate_range)
+
+
+def filter_candidates_by_range_ratio(
+        *,
+        current_values: np.ndarray,
+        candidates: list[CandidateWindow],
+        candidate_matrix: np.ndarray,
+        pearson_scores: np.ndarray,
+        max_ratio: float,
+) -> CandidateRangeHardFilterResult:
+    """Что делает: отсекает кандидатов с резко отличающимся range_bps.
+    Зачем нужна: Pearson может находить похожую форму при совершенно другом масштабе движения."""
+    if candidate_matrix.ndim != 2:
+        raise ValueError(
+            f"candidate_matrix должен быть двумерным, получено shape={candidate_matrix.shape}"
+        )
+
+    if len(candidates) != int(candidate_matrix.shape[0]):
+        raise ValueError(
+            f"candidates и candidate_matrix не совпадают по длине: "
+            f"candidates={len(candidates)}, matrix_rows={candidate_matrix.shape[0]}"
+        )
+
+    if pearson_scores.shape[0] != candidate_matrix.shape[0]:
+        raise ValueError(
+            f"pearson_scores и candidate_matrix не совпадают по длине: "
+            f"scores={pearson_scores.shape[0]}, matrix_rows={candidate_matrix.shape[0]}"
+        )
+
+    expected_points = int(candidate_matrix.shape[1])
+    source_candidates_count = len(candidates)
+    current_features = calculate_pattern_path_features(current_values)
+    threshold_ratio = float(max_ratio)
+
+    if threshold_ratio <= 0.0:
+        return CandidateRangeHardFilterResult(
+            max_ratio=threshold_ratio,
+            disabled_reason="max_ratio_disabled",
+            current_range_bps=current_features.range_bps,
+            source_candidates_count=source_candidates_count,
+            kept_candidates_count=source_candidates_count,
+            dropped_candidates_count=0,
+            valid_candidates=list(candidates),
+            candidate_matrix=candidate_matrix.copy(),
+            pearson_scores=pearson_scores.copy(),
+        )
+
+    if current_features.range_bps == 0.0:
+        return CandidateRangeHardFilterResult(
+            max_ratio=threshold_ratio,
+            disabled_reason="current_range_zero",
+            current_range_bps=current_features.range_bps,
+            source_candidates_count=source_candidates_count,
+            kept_candidates_count=source_candidates_count,
+            dropped_candidates_count=0,
+            valid_candidates=list(candidates),
+            candidate_matrix=candidate_matrix.copy(),
+            pearson_scores=pearson_scores.copy(),
+        )
+
+    kept_candidates: list[CandidateWindow] = []
+    kept_matrix_rows: list[np.ndarray] = []
+    kept_scores: list[float] = []
+    dropped_count = 0
+
+    for index, candidate in enumerate(candidates):
+        candidate_features = calculate_pattern_path_features(candidate_matrix[index, :])
+        range_ratio = calculate_range_ratio(
+            current_range_bps=current_features.range_bps,
+            candidate_range_bps=candidate_features.range_bps,
+        )
+
+        if range_ratio > threshold_ratio:
+            dropped_count += 1
+            continue
+
+        kept_candidates.append(candidate)
+        kept_matrix_rows.append(candidate_matrix[index, :].copy())
+        kept_scores.append(float(pearson_scores[index]))
+
+    kept_matrix = (
+        np.vstack(kept_matrix_rows).astype(float)
+        if kept_matrix_rows
+        else np.empty((0, expected_points), dtype=float)
+    )
+    kept_scores_array = np.asarray(kept_scores, dtype=float)
+
+    return CandidateRangeHardFilterResult(
+        max_ratio=threshold_ratio,
+        disabled_reason=None,
+        current_range_bps=current_features.range_bps,
+        source_candidates_count=source_candidates_count,
+        kept_candidates_count=len(kept_candidates),
+        dropped_candidates_count=dropped_count,
+        valid_candidates=kept_candidates,
+        candidate_matrix=kept_matrix,
+        pearson_scores=kept_scores_array,
+    )
+
+
+def format_candidate_range_hard_filter_result(result: CandidateRangeHardFilterResult) -> str:
+    """Что делает: форматирует результат hard filter по range.
+    Зачем нужна: в runtime-логе должно быть видно, сколько кандидатов убил масштабный фильтр."""
+    if result.disabled_reason is not None:
+        return (
+            f"off, reason={result.disabled_reason}, "
+            f"max_ratio={result.max_ratio:.2f}, "
+            f"current_range={result.current_range_bps:.2f} bps, "
+            f"kept={result.kept_candidates_count}/{result.source_candidates_count}"
+        )
+
+    return (
+        f"on, max_ratio={result.max_ratio:.2f}, "
+        f"current_range={result.current_range_bps:.2f} bps, "
+        f"kept={result.kept_candidates_count}/{result.source_candidates_count}, "
+        f"dropped={result.dropped_candidates_count}"
     )
 
 
