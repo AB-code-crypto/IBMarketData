@@ -154,7 +154,6 @@ Instrument: Registry = {
 
     "NQ": {
         **FUT_DEFAULTS,
-        "history_enabled": True,
         "tradingClass": "NQ",
         "multiplier": 20.0,
         "db_filename": "NQ.sqlite3",
@@ -199,6 +198,7 @@ Instrument: Registry = {
         "tradingClass": "ES",
         "multiplier": 50.0,
         "db_filename": "ES.sqlite3",
+        "history_enabled": True,
         # Для нового инструмента ограничиваем начальную загрузку двумя неделями.
         # Если нужна более длинная история, увеличь history_lookback_days вручную.
         # "history_lookback_days": 14,
