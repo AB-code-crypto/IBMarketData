@@ -54,9 +54,15 @@ class SignalConfig:
     market_regime_filter_mode: MarketRegimeFilterMode = MarketRegimeFilterMode.HARD
 
     # Жёсткий отсев кандидатов по размаху движения pattern-window.
-    # Сравнение идёт по range_bps: max(current_range, candidate_range) / min(...).
+    # Сравнение идёт по minmax_bps: max(current_minmax, candidate_minmax) / min(...).
     # Если значение <= 0, фильтр выключен.
-    candidate_range_hard_filter_max_ratio: float = 1.5
+    candidate_minmax_hard_filter_max_ratio: float = 1.5
+
+    # Веса компонентов итогового score кандидата.
+    # Если вес <= 0, соответствующий компонент не участвует в score.
+    candidate_score_pearson_weight: float = 1.0
+    candidate_score_end_delta_weight: float = 1.0
+    candidate_score_minmax_weight: float = 1.0
 
 
 DEFAULT_SIGNAL_CONFIG = SignalConfig()

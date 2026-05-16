@@ -64,9 +64,10 @@ def get_top_passed_candidate_indices(
         pearson_scores: np.ndarray,
         pearson_min: float,
         limit: int,
+        candidate_scores: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Что делает: выбирает лучшие candidate-индексы только среди тех, кто прошёл pearson_min.
-    Зачем нужна: на картинке нужны только реально допущенные кандидаты, а не просто top-N вообще."""
+    """Что делает: выбирает top candidate-индексы для PNG.
+    Зачем нужна: после scoring top должен идти по candidate_score, а не только по Pearson."""
     if pearson_scores.size == 0 or limit <= 0:
         return np.empty((0,), dtype=int)
 
@@ -75,8 +76,17 @@ def get_top_passed_candidate_indices(
     if passed_indices.size == 0:
         return np.empty((0,), dtype=int)
 
-    passed_scores = pearson_scores[passed_indices]
-    passed_order = np.argsort(passed_scores)[::-1]
+    if candidate_scores is not None:
+        if candidate_scores.shape[0] != pearson_scores.shape[0]:
+            raise ValueError(
+                f"candidate_scores и pearson_scores не совпадают по длине: "
+                f"scores={candidate_scores.shape[0]}, pearson={pearson_scores.shape[0]}"
+            )
+        sort_values = candidate_scores[passed_indices]
+    else:
+        sort_values = pearson_scores[passed_indices]
+
+    passed_order = np.argsort(sort_values)[::-1]
     top_passed = passed_indices[passed_order[:limit]]
 
     return top_passed.astype(int)
@@ -227,6 +237,7 @@ def save_signal_candidate_plot(
         regression_flat_delta_threshold_bps: float,
         signal_window_mode: str,
         market_regime_filter_mode: str,
+        candidate_scores: np.ndarray | None = None,
 ) -> Path | None:
     """Что делает: сохраняет PNG с текущим паттерном и лучшими историческими кандидатами.
     Зачем нужна: удобно визуально проверить, что signal-сервис нашёл похожие участки,
@@ -238,6 +249,7 @@ def save_signal_candidate_plot(
         pearson_scores=pearson_scores,
         pearson_min=pearson_min,
         limit=min(PLOT_TOP_CANDIDATES, len(valid_candidates)),
+        candidate_scores=candidate_scores,
     )
 
     if top_indices.size == 0:
@@ -308,7 +320,7 @@ def save_signal_candidate_plot(
     ax_info = fig.add_subplot(grid[0, 1])
     ax_info.axis("off")
 
-    shown_candidates: list[tuple[int, CandidateWindow, float, str, object]] = []
+    shown_candidates: list[tuple[int, CandidateWindow, float, str, float | None, object]] = []
 
     for sma_period_bars, sma_values in current_sma_lines.items():
         ax.plot(
@@ -325,6 +337,11 @@ def save_signal_candidate_plot(
         for rank, candidate_index in enumerate(top_indices, start=1):
             candidate = valid_candidates[int(candidate_index)]
             pearson_value = float(pearson_scores[int(candidate_index)])
+            candidate_score = (
+                float(candidate_scores[int(candidate_index)])
+                if candidate_scores is not None
+                else None
+            )
 
             candidate_full_values = read_candidate_full_values(
                 instrument_code=instrument_code,
@@ -358,6 +375,7 @@ def save_signal_candidate_plot(
                 candidate,
                 pearson_value,
                 line.get_color(),
+                candidate_score,
                 candidate_path_features,
             ))
 
@@ -462,18 +480,17 @@ def save_signal_candidate_plot(
 
     path_rows: list[tuple[str, str | None]] = [
         (
-            f"net_delta     : "
-            f"{format_plot_regression_value(current_path_features.net_delta_bps)} / "
-            f"{format_plot_regression_value(current_path_features.net_delta_points)}",
+            f"end_delta    : "
+            f"{format_plot_regression_value(current_path_features.end_delta_bps)} / "
+            f"{format_plot_regression_value(current_path_features.end_delta_points)}",
             None,
         ),
         (
-            f"range         : "
-            f"{format_plot_regression_value(current_path_features.range_bps)} / "
-            f"{format_plot_regression_value(current_path_features.range_points)}",
+            f"minmax       : "
+            f"{format_plot_regression_value(current_path_features.minmax_bps)} / "
+            f"{format_plot_regression_value(current_path_features.minmax_points)}",
             None,
         ),
-        (f"end_position  : {format_plot_regression_value(current_path_features.end_position)}", None),
     ]
 
     lines_rows: list[tuple[str, str | None]] = [
@@ -485,12 +502,17 @@ def save_signal_candidate_plot(
 
     candidate_rows: list[tuple[str, str | None]] = []
     if shown_candidates:
-        for rank, candidate, pearson_value, candidate_color, candidate_path_features in shown_candidates:
+        for rank, candidate, pearson_value, candidate_color, candidate_score, candidate_path_features in shown_candidates:
+            score_text = (
+                f"s={candidate_score:.2f} | "
+                if candidate_score is not None
+                else ""
+            )
             candidate_rows.append(
                 (
-                    f"{rank:02d} | r={pearson_value:.2f} | "
-                    f"nd={format_plot_regression_value(candidate_path_features.net_delta_points)} | "
-                    f"rg={format_plot_regression_value(candidate_path_features.range_points)} | "
+                    f"{rank:02d} | {score_text}r={pearson_value:.2f} | "
+                    f"ed={format_plot_regression_value(candidate_path_features.end_delta_points)} | "
+                    f"mm={format_plot_regression_value(candidate_path_features.minmax_points)} | "
                     f"{candidate.signal_bar_time_ct}",
                     candidate_color,
                 )

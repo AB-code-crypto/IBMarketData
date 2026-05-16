@@ -15,10 +15,10 @@ from ib_signal.signal_candidate_regime_filter import (
     format_candidate_regime_filter_result,
 )
 from ib_signal.signal_candidate_rank_features import (
-    build_candidate_path_feature_result,
-    filter_candidates_by_range_ratio,
-    format_candidate_path_feature_result,
-    format_candidate_range_hard_filter_result,
+    filter_candidates_by_minmax_ratio,
+    format_candidate_minmax_hard_filter_result,
+    format_candidate_score_result,
+    rank_candidates_by_score,
 )
 from ib_signal.signal_candidates import find_candidate_windows
 from ib_signal.signal_pattern_matrix import build_pattern_matrix
@@ -370,23 +370,30 @@ async def run_signal_loop(
                     plot_candidate_matrix = plot_candidate_matrix[passed_indices, :]
                     plot_pearson_scores = plot_pearson_scores[passed_indices]
 
-                candidate_range_filter_result = filter_candidates_by_range_ratio(
+                candidate_minmax_filter_result = filter_candidates_by_minmax_ratio(
                     current_values=pattern_matrix_result.current_values,
                     candidates=plot_valid_candidates,
                     candidate_matrix=plot_candidate_matrix,
                     pearson_scores=plot_pearson_scores,
-                    max_ratio=settings.candidate_range_hard_filter_max_ratio,
+                    max_ratio=settings.candidate_minmax_hard_filter_max_ratio,
                 )
-                plot_valid_candidates = candidate_range_filter_result.valid_candidates
-                plot_candidate_matrix = candidate_range_filter_result.candidate_matrix
-                plot_pearson_scores = candidate_range_filter_result.pearson_scores
+                plot_valid_candidates = candidate_minmax_filter_result.valid_candidates
+                plot_candidate_matrix = candidate_minmax_filter_result.candidate_matrix
+                plot_pearson_scores = candidate_minmax_filter_result.pearson_scores
 
-                candidate_path_feature_result = build_candidate_path_feature_result(
+                candidate_score_result = rank_candidates_by_score(
                     current_values=pattern_matrix_result.current_values,
                     candidates=plot_valid_candidates,
                     candidate_matrix=plot_candidate_matrix,
                     pearson_scores=plot_pearson_scores,
+                    pearson_weight=settings.candidate_score_pearson_weight,
+                    end_delta_weight=settings.candidate_score_end_delta_weight,
+                    minmax_weight=settings.candidate_score_minmax_weight,
                 )
+                plot_valid_candidates = candidate_score_result.valid_candidates
+                plot_candidate_matrix = candidate_score_result.candidate_matrix
+                plot_pearson_scores = candidate_score_result.pearson_scores
+                plot_candidate_scores = candidate_score_result.candidate_scores
 
                 saved_plot_path = save_signal_candidate_plot(
                     instrument_code=instrument_code,
@@ -400,6 +407,7 @@ async def run_signal_loop(
                     regression_flat_delta_threshold_bps=regression_flat_delta_threshold_bps,
                     signal_window_mode=settings.signal_window_mode.value,
                     market_regime_filter_mode=settings.market_regime_filter_mode.value,
+                    candidate_scores=plot_candidate_scores,
                 )
 
                 if saved_plot_path is not None:
@@ -456,11 +464,11 @@ async def run_signal_loop(
                 mode=settings.market_regime_filter_mode,
                 pearson_passed_count=pearson_passed_count,
             )
-            candidate_range_filter_text = format_candidate_range_hard_filter_result(
-                candidate_range_filter_result,
+            candidate_minmax_filter_text = format_candidate_minmax_hard_filter_result(
+                candidate_minmax_filter_result,
             )
-            path_features_text = format_candidate_path_feature_result(
-                candidate_path_feature_result,
+            candidate_score_text = format_candidate_score_result(
+                candidate_score_result,
                 top_limit=3,
             )
 
@@ -480,8 +488,8 @@ async def run_signal_loop(
                     f"{price_regression_text}; {sma_600_regression_text}\n"
                     f"  relation: {price_sma_600_relation_text}\n"
                     f"  regime_filter: {candidate_regime_filter_text}\n"
-                    f"  range_filter: {candidate_range_filter_text}\n"
-                    f"  path_features: {path_features_text}"
+                    f"  minmax_filter: {candidate_minmax_filter_text}\n"
+                    f"  candidate_score: {candidate_score_text}"
                 ),
                 to_telegram=False,
             )
