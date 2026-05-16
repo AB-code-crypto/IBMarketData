@@ -95,15 +95,20 @@ def get_top_passed_candidate_indices(
 def build_plot_path(
         instrument_code: str,
         signal_bar_time_ct: str,
+        output_dir: Path | None = None,
 ) -> Path:
     """Что делает: строит путь к итоговому PNG-файлу.
-    Зачем нужна: каждый расчёт должен сохранять отдельную картинку с понятным именем."""
+    Зачем нужна: live-картинки сохраняются в png, а тестовые можно сразу писать в отдельный каталог."""
     filename = (
         f"signal_candidates_"
         f"{instrument_code.lower()}_"
         f"{sanitize_filename_part(signal_bar_time_ct)}_CT.png"
     )
-    return get_signal_png_dir() / filename
+
+    png_dir = output_dir or get_signal_png_dir()
+    png_dir.mkdir(parents=True, exist_ok=True)
+
+    return png_dir / filename
 
 
 def format_plot_regression_value(value: float) -> str:
@@ -238,6 +243,7 @@ def save_signal_candidate_plot(
         signal_window_mode: str,
         market_regime_filter_mode: str,
         candidate_scores: np.ndarray | None = None,
+        output_dir: Path | None = None,
 ) -> Path | None:
     """Что делает: сохраняет PNG с текущим паттерном и лучшими историческими кандидатами.
     Зачем нужна: удобно визуально проверить, что signal-сервис нашёл похожие участки,
@@ -569,6 +575,7 @@ def save_signal_candidate_plot(
     plot_path = build_plot_path(
         instrument_code=instrument_code,
         signal_bar_time_ct=signal_bar_time_ct,
+        output_dir=output_dir,
     )
     fig.savefig(plot_path, dpi=150)
     plt.close(fig)
