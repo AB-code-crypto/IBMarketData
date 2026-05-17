@@ -3,7 +3,7 @@ from ib_signal.signal_config import SignalConfig, SignalWindowMode
 
 def format_signal_config(settings: SignalConfig) -> str:
     """Что делает: собирает текст активных signal-настроек.
-    Зачем нужна: при старте сервиса Telegram получает только реально используемый режим и параметры Pearson."""
+    Зачем нужна: при старте сервиса Telegram получает реальные параметры текущего signal-пайплайна."""
     history_lookback_days_text = (
         "all"
         if settings.history_lookback_days is None
@@ -52,9 +52,22 @@ def format_signal_config(settings: SignalConfig) -> str:
             "PEARSON:",
             f"price_source={settings.price_source}",
             f"pearson_min={settings.pearson_min}",
-            f"min_candidates={settings.min_candidates}",
-            f"max_candidates={settings.max_candidates}",
             f"history_lookback_days={history_lookback_days_text}",
+            "",
+            "REGIME:",
+            f"market_regime_filter_mode={settings.market_regime_filter_mode.value}",
+            "",
+            "MINMAX HARD FILTER:",
+            f"candidate_minmax_hard_filter_max_ratio={settings.candidate_minmax_hard_filter_max_ratio}",
+            "",
+            "SCORING:",
+            f"candidate_score_pearson_weight={settings.candidate_score_pearson_weight}",
+            f"candidate_score_end_delta_weight={settings.candidate_score_end_delta_weight}",
+            f"candidate_score_minmax_weight={settings.candidate_score_minmax_weight}",
+            "",
+            "POTENTIAL:",
+            f"candidate_potential_min_count={settings.candidate_potential_min_count}",
+            f"candidate_potential_max_count={settings.candidate_potential_max_count}",
         ]
     )
 

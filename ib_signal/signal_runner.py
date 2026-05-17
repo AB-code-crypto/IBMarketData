@@ -395,7 +395,6 @@ async def run_signal_loop(
                     minmax_weight=settings.candidate_score_minmax_weight,
                 )
                 plot_valid_candidates = candidate_score_result.valid_candidates
-                plot_candidate_matrix = candidate_score_result.candidate_matrix
                 plot_pearson_scores = candidate_score_result.pearson_scores
                 plot_candidate_scores = candidate_score_result.candidate_scores
 

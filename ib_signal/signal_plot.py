@@ -8,10 +8,7 @@ import numpy as np
 
 from contracts import Instrument
 from core.bar_utils import get_bar_size_seconds
-from core.sqlite_utils import open_sqlite_connection
-from ib_job_data.feature_db_sql import MID_PRICE_TABLE_NAME, quote_identifier
-from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
-from ib_signal.signal_candidate_potential import CandidatePotentialResult
+from ib_signal.signal_candidate_potential import CandidatePotentialResult, read_candidate_full_values
 from ib_signal.signal_candidate_rank_features import calculate_pattern_path_features
 from ib_signal.signal_candidates import CandidateWindow
 from ib_signal.signal_regression import (
@@ -127,64 +124,6 @@ def format_potential_time_for_plot(value: str) -> str:
         return text[11:19]
 
     return text
-
-
-def read_candidate_full_values(
-        *,
-        instrument_code: str,
-        candidate: CandidateWindow,
-        price_source: str,
-        expected_points: int,
-        bar_size_seconds: int,
-) -> np.ndarray | None:
-    """Что делает: читает полный historical window кандидата: pattern + дальнейшее движение trade-window.
-    Зачем нужна: на картинке нужно показать не только похожий паттерн до входа, но и то,
-    как исторический кандидат вёл себя после точки входа."""
-    instrument_row = Instrument[instrument_code]
-    job_db_path = get_instrument_feature_db_path(
-        instrument_code=instrument_code,
-        instrument_row=instrument_row,
-    )
-
-    conn = open_sqlite_connection(
-        str(job_db_path),
-        require_existing_file=True,
-        use_wal=False,
-    )
-
-    try:
-        rows = conn.execute(
-            f"""
-            SELECT
-                bar_time_ts,
-                {quote_identifier(price_source)}
-            FROM {quote_identifier(MID_PRICE_TABLE_NAME)}
-            WHERE bar_time_ts >= ?
-              AND bar_time_ts < ?
-            ORDER BY bar_time_ts
-            """,
-            (candidate.pattern_start_ts, candidate.trade_end_ts),
-        ).fetchall()
-
-    finally:
-        conn.close()
-
-    if len(rows) != expected_points:
-        return None
-
-    values = np.empty((expected_points,), dtype=float)
-
-    for index, row in enumerate(rows):
-        bar_time_ts = int(row[0])
-        value = row[1]
-        expected_ts = candidate.pattern_start_ts + index * bar_size_seconds
-
-        if bar_time_ts != expected_ts or value is None:
-            return None
-
-        values[index] = float(value)
-
-    return values
 
 
 def draw_info_section(

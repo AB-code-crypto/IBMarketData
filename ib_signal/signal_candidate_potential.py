@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Literal, TypeAlias
 
 import numpy as np
@@ -15,19 +14,6 @@ from ib_signal.signal_candidates import CandidateWindow
 from ib_signal.signal_window import SignalWindow
 
 PotentialDirection: TypeAlias = Literal["LONG", "SHORT", "NONE"]
-
-
-@dataclass(frozen=True)
-class CandidatePotentialRow:
-    candidate: CandidateWindow
-    candidate_score: float
-    weight: float
-
-    # Future path кандидата от его entry в bps. Первая точка всегда 0.
-    future_delta_bps: np.ndarray
-
-    # Финальная future-дельта кандидата.
-    final_delta_bps: float
 
 
 @dataclass(frozen=True)
@@ -85,8 +71,6 @@ class CandidatePotentialResult:
     same_direction_weight_share: float
     opposite_direction_weight_share: float
     flat_weight_share: float
-
-    rows: list[CandidatePotentialRow]
 
 
 def read_candidate_full_values(
@@ -262,7 +246,6 @@ def build_empty_potential_result(
         same_direction_weight_share=0.0,
         opposite_direction_weight_share=0.0,
         flat_weight_share=0.0,
-        rows=[],
     )
 
 
@@ -484,22 +467,6 @@ def build_candidate_potential_result(
         weights=weights,
     )
 
-    rows = [
-        CandidatePotentialRow(
-            candidate=candidate,
-            candidate_score=float(score),
-            weight=float(weight),
-            future_delta_bps=future_delta,
-            final_delta_bps=float(future_delta[-1]),
-        )
-        for candidate, score, weight, future_delta in zip(
-            valid_candidates,
-            score_array,
-            weights,
-            future_matrix,
-        )
-    ]
-
     max_profit_ts = signal_window.signal_bar_ts + max_profit_index * bar_size_seconds
     max_drawdown_ts = signal_window.signal_bar_ts + max_drawdown_index * bar_size_seconds
 
@@ -528,14 +495,7 @@ def build_candidate_potential_result(
         same_direction_weight_share=same_weight,
         opposite_direction_weight_share=opposite_weight,
         flat_weight_share=flat_weight,
-        rows=rows,
     )
-
-
-def format_signed_points(value: float) -> str:
-    """Что делает: форматирует signed points со знаком.
-    Зачем нужна: в логе легче читать направление потенциала."""
-    return f"{float(value):+.2f} pt"
 
 
 def format_candidate_potential_result(result: CandidatePotentialResult) -> str:

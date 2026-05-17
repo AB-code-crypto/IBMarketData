@@ -42,8 +42,6 @@ class SignalConfig:
     # Поиск кандидатов по Pearson.
     price_source: str = "mid_close"  #
     pearson_min: float = 0.7  # минимальный пирсон
-    min_candidates: int = 10  # мин и макс сколько нужно кандидатов выше pearson_min
-    max_candidates: int = 100  #
     history_lookback_days: int | None = 180  # None = вся доступная история
 
     # Фильтр кандидатов по market-regime.
