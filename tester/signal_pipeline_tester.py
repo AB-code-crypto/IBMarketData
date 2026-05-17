@@ -337,7 +337,7 @@ def run_single_signal_test() -> None:
             skip_reason = (
                 "current_relation=mixed_sma"
                 if price_sma_600_relation is not None
-                and price_sma_600_relation.relation == "mixed_sma"
+                   and price_sma_600_relation.relation == "mixed_sma"
                 else "SMA 600 relation не рассчитан"
             )
             log_info(

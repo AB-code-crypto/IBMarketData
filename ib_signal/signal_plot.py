@@ -265,8 +265,8 @@ def save_signal_candidate_plot(
     bar_size_seconds = get_bar_size_seconds(instrument_row["barSizeSetting"])
 
     current_x_minutes = (
-        np.arange(current_values.size, dtype=float) * bar_size_seconds / 60.0
-        - signal_window.pattern_seconds / 60.0
+            np.arange(current_values.size, dtype=float) * bar_size_seconds / 60.0
+            - signal_window.pattern_seconds / 60.0
     )
 
     current_sma_lines = read_current_sma_lines(
@@ -314,6 +314,7 @@ def save_signal_candidate_plot(
 
     trade_points = signal_window.trade_seconds // bar_size_seconds
     full_points = current_values.size + trade_points
+    candidate_label_padding_minutes = max(bar_size_seconds / 60.0 * 2.0, 0.35)
 
     fig = plt.figure(figsize=(18, 9))
     grid = fig.add_gridspec(
@@ -326,7 +327,7 @@ def save_signal_candidate_plot(
     ax_info = fig.add_subplot(grid[0, 1])
     ax_info.axis("off")
 
-    shown_candidates: list[tuple[int, CandidateWindow, float, str, float | None, object]] = []
+    shown_candidates: list[tuple[int, CandidateWindow, float, str, float | None, object, float, float]] = []
 
     for sma_period_bars, sma_values in current_sma_lines.items():
         ax.plot(
@@ -365,8 +366,8 @@ def save_signal_candidate_plot(
 
             candidate_line = normalize_series_for_plot(candidate_full_values)
             candidate_x_minutes = (
-                np.arange(candidate_line.size, dtype=float) * bar_size_seconds / 60.0
-                - signal_window.pattern_seconds / 60.0
+                    np.arange(candidate_line.size, dtype=float) * bar_size_seconds / 60.0
+                    - signal_window.pattern_seconds / 60.0
             )
 
             line = ax.plot(
@@ -383,7 +384,37 @@ def save_signal_candidate_plot(
                 line.get_color(),
                 candidate_score,
                 candidate_path_features,
+                float(candidate_x_minutes[-1]) + candidate_label_padding_minutes,
+                float(candidate_line[-1]),
             ))
+
+    for (
+            rank,
+            candidate,
+            pearson_value,
+            candidate_color,
+            candidate_score,
+            candidate_path_features,
+            candidate_label_x,
+            candidate_label_y,
+    ) in reversed(shown_candidates):
+        ax.text(
+            candidate_label_x,
+            candidate_label_y,
+            f"{rank}",
+            color=candidate_color,
+            fontsize=8.5,
+            fontweight="bold",
+            verticalalignment="center",
+            horizontalalignment="left",
+            bbox={
+                "facecolor": "white",
+                "edgecolor": candidate_color,
+                "boxstyle": "round,pad=0.18",
+                "alpha": 0.95,
+            },
+            zorder=9,
+        )
 
     ax.plot(
         current_x_minutes,
@@ -426,6 +457,12 @@ def save_signal_candidate_plot(
         f"passed_threshold={(pearson_scores >= pearson_min).sum()} | "
         f"shown_top={len(shown_candidates)}"
     )
+    if shown_candidates:
+        ax.set_xlim(
+            float(current_x_minutes[0]),
+            float(signal_window.trade_seconds / 60.0) + candidate_label_padding_minutes * 4.0,
+        )
+
     ax.grid(True)
 
     current_regression_delta_bps = calculate_regression_delta_bps(current_regression)
@@ -508,7 +545,7 @@ def save_signal_candidate_plot(
 
     candidate_rows: list[tuple[str, str | None]] = []
     if shown_candidates:
-        for rank, candidate, pearson_value, candidate_color, candidate_score, candidate_path_features in shown_candidates:
+        for rank, candidate, pearson_value, candidate_color, candidate_score, candidate_path_features, candidate_label_x, candidate_label_y in shown_candidates:
             score_text = (
                 f"s={candidate_score:.2f} | "
                 if candidate_score is not None
