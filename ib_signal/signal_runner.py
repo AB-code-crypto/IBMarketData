@@ -20,6 +20,10 @@ from ib_signal.signal_candidate_rank_features import (
     format_candidate_score_result,
     rank_candidates_by_score,
 )
+from ib_signal.signal_candidate_potential import (
+    build_candidate_potential_result,
+    format_candidate_potential_result,
+)
 from ib_signal.signal_candidates import find_candidate_windows
 from ib_signal.signal_pattern_matrix import build_pattern_matrix
 from ib_signal.signal_plot import save_signal_candidate_plot
@@ -395,6 +399,17 @@ async def run_signal_loop(
                 plot_pearson_scores = candidate_score_result.pearson_scores
                 plot_candidate_scores = candidate_score_result.candidate_scores
 
+                candidate_potential_result = build_candidate_potential_result(
+                    instrument_code=instrument_code,
+                    signal_window=signal_window,
+                    current_values=pattern_matrix_result.current_values,
+                    candidates=plot_valid_candidates,
+                    candidate_scores=plot_candidate_scores,
+                    price_source=settings.price_source,
+                    min_count=settings.candidate_potential_min_count,
+                    max_count=settings.candidate_potential_max_count,
+                )
+
                 saved_plot_path = save_signal_candidate_plot(
                     instrument_code=instrument_code,
                     signal_bar_time_ct=candidate_search_result.current_signal_bar_time_ct,
@@ -408,6 +423,7 @@ async def run_signal_loop(
                     signal_window_mode=settings.signal_window_mode.value,
                     market_regime_filter_mode=settings.market_regime_filter_mode.value,
                     candidate_scores=plot_candidate_scores,
+                    candidate_potential_result=candidate_potential_result,
                 )
 
                 if saved_plot_path is not None:
@@ -471,6 +487,9 @@ async def run_signal_loop(
                 candidate_score_result,
                 top_limit=3,
             )
+            candidate_potential_text = format_candidate_potential_result(
+                candidate_potential_result,
+            )
 
             log_info(
                 logger,
@@ -489,7 +508,8 @@ async def run_signal_loop(
                     f"  relation: {price_sma_600_relation_text}\n"
                     f"  regime_filter: {candidate_regime_filter_text}\n"
                     f"  minmax_filter: {candidate_minmax_filter_text}\n"
-                    f"  candidate_score: {candidate_score_text}"
+                    f"  candidate_score: {candidate_score_text}\n"
+                    f"  potential: {candidate_potential_text}"
                 ),
                 to_telegram=False,
             )

@@ -25,6 +25,8 @@
 скрипт честно пропускает расчёт.
 """
 
+from __future__ import annotations
+
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,6 +64,10 @@ from ib_signal.signal_candidate_rank_features import (
     format_candidate_score_result,
     rank_candidates_by_score,
 )
+from ib_signal.signal_candidate_potential import (
+    build_candidate_potential_result,
+    format_candidate_potential_result,
+)
 from ib_signal.signal_errors import SignalDataNotReadyError
 from ib_signal.signal_plot import save_signal_candidate_plot
 from core.logger import get_logger, log_info, setup_logging
@@ -82,7 +88,7 @@ TEST_INSTRUMENT_CODE = "MNQ"
 # current_bar_ts / closed_bar_ts = 2026-05-15 09:23:00 CT
 #
 # Здесь указываем UTC-время, не CT.
-TEST_CURRENT_BAR_UTC = "2026-05-15 09:23:00"
+TEST_CURRENT_BAR_UTC = "2026-05-15 07:23:00"
 
 # Текущие настройки signal-сервиса.
 # Скрипт намеренно берёт DEFAULT_SIGNAL_CONFIG, чтобы тестировать тот же режим,
@@ -337,7 +343,7 @@ def run_single_signal_test() -> None:
             skip_reason = (
                 "current_relation=mixed_sma"
                 if price_sma_600_relation is not None
-                   and price_sma_600_relation.relation == "mixed_sma"
+                and price_sma_600_relation.relation == "mixed_sma"
                 else "SMA 600 relation не рассчитан"
             )
             log_info(
@@ -390,6 +396,17 @@ def run_single_signal_test() -> None:
         plot_pearson_scores = candidate_score_result.pearson_scores
         plot_candidate_scores = candidate_score_result.candidate_scores
 
+        candidate_potential_result = build_candidate_potential_result(
+            instrument_code=instrument_code,
+            signal_window=signal_window,
+            current_values=pattern_matrix_result.current_values,
+            candidates=plot_valid_candidates,
+            candidate_scores=plot_candidate_scores,
+            price_source=settings.price_source,
+            min_count=settings.candidate_potential_min_count,
+            max_count=settings.candidate_potential_max_count,
+        )
+
         saved_plot_path = save_signal_candidate_plot(
             instrument_code=instrument_code,
             signal_bar_time_ct=candidate_search_result.current_signal_bar_time_ct,
@@ -403,6 +420,7 @@ def run_single_signal_test() -> None:
             signal_window_mode=settings.signal_window_mode.value,
             market_regime_filter_mode=settings.market_regime_filter_mode.value,
             candidate_scores=plot_candidate_scores,
+            candidate_potential_result=candidate_potential_result,
             output_dir=PROJECT_ROOT / "png" / "test",
         )
 
@@ -457,6 +475,9 @@ def run_single_signal_test() -> None:
         candidate_score_result,
         top_limit=LOG_TOP_CANDIDATES,
     )
+    candidate_potential_text = format_candidate_potential_result(
+        candidate_potential_result,
+    )
 
     plot_text = str(saved_plot_path) if saved_plot_path is not None else "not_saved"
 
@@ -479,7 +500,8 @@ def run_single_signal_test() -> None:
             f"  relation: {price_sma_600_relation_text}\n"
             f"  regime_filter: {candidate_regime_filter_text}\n"
             f"  minmax_filter: {candidate_minmax_filter_text}\n"
-            f"  candidate_score: {candidate_score_text}"
+            f"  candidate_score: {candidate_score_text}\n"
+            f"  potential: {candidate_potential_text}"
         ),
         to_telegram=False,
     )

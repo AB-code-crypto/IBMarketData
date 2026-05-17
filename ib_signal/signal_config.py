@@ -64,5 +64,10 @@ class SignalConfig:
     candidate_score_end_delta_weight: float = 1.0
     candidate_score_minmax_weight: float = 1.0
 
+    # Сколько top-score кандидатов использовать для расчёта potential path.
+    # Если кандидатов меньше min_count, потенциал не считается.
+    candidate_potential_min_count: int = 3
+    candidate_potential_max_count: int = 10
+
 
 DEFAULT_SIGNAL_CONFIG = SignalConfig()

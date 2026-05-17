@@ -11,6 +11,7 @@ from core.bar_utils import get_bar_size_seconds
 from core.sqlite_utils import open_sqlite_connection
 from ib_job_data.feature_db_sql import MID_PRICE_TABLE_NAME, quote_identifier
 from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
+from ib_signal.signal_candidate_potential import CandidatePotentialResult
 from ib_signal.signal_candidate_rank_features import calculate_pattern_path_features
 from ib_signal.signal_candidates import CandidateWindow
 from ib_signal.signal_regression import (
@@ -115,6 +116,17 @@ def format_plot_regression_value(value: float) -> str:
     """Что делает: форматирует regression-диагностику для PNG с двумя знаками после запятой.
     Зачем нужна: картинка должна быть читаемой, а расчёты остаются без округления."""
     return f"{value:.2f}"
+
+
+def format_potential_time_for_plot(value: str) -> str:
+    """Что делает: сокращает CT timestamp до времени для PNG.
+    Зачем нужна: полный timestamp слишком длинный для правой панели."""
+    text = str(value)
+
+    if len(text) >= 19:
+        return text[11:19]
+
+    return text
 
 
 def read_candidate_full_values(
@@ -243,6 +255,7 @@ def save_signal_candidate_plot(
         signal_window_mode: str,
         market_regime_filter_mode: str,
         candidate_scores: np.ndarray | None = None,
+        candidate_potential_result: CandidatePotentialResult | None = None,
         output_dir: Path | None = None,
 ) -> Path | None:
     """Что делает: сохраняет PNG с текущим паттерном и лучшими историческими кандидатами.
@@ -265,8 +278,8 @@ def save_signal_candidate_plot(
     bar_size_seconds = get_bar_size_seconds(instrument_row["barSizeSetting"])
 
     current_x_minutes = (
-            np.arange(current_values.size, dtype=float) * bar_size_seconds / 60.0
-            - signal_window.pattern_seconds / 60.0
+        np.arange(current_values.size, dtype=float) * bar_size_seconds / 60.0
+        - signal_window.pattern_seconds / 60.0
     )
 
     current_sma_lines = read_current_sma_lines(
@@ -366,8 +379,8 @@ def save_signal_candidate_plot(
 
             candidate_line = normalize_series_for_plot(candidate_full_values)
             candidate_x_minutes = (
-                    np.arange(candidate_line.size, dtype=float) * bar_size_seconds / 60.0
-                    - signal_window.pattern_seconds / 60.0
+                np.arange(candidate_line.size, dtype=float) * bar_size_seconds / 60.0
+                - signal_window.pattern_seconds / 60.0
             )
 
             line = ax.plot(
@@ -416,6 +429,44 @@ def save_signal_candidate_plot(
             zorder=9,
         )
 
+    if (
+            candidate_potential_result is not None
+            and candidate_potential_result.is_available
+            and candidate_potential_result.weighted_future_delta_points.size > 0
+    ):
+        potential_x_minutes = candidate_potential_result.x_minutes
+        potential_line = (
+            current_line[-1]
+            + candidate_potential_result.weighted_future_delta_points
+        )
+
+        ax.plot(
+            potential_x_minutes,
+            potential_line,
+            linewidth=2.8,
+            alpha=0.95,
+            zorder=10,
+            color="black",
+        )
+
+        ax.text(
+            float(potential_x_minutes[-1]) + candidate_label_padding_minutes,
+            float(potential_line[-1]),
+            "POT",
+            color="black",
+            fontsize=8.5,
+            fontweight="bold",
+            verticalalignment="center",
+            horizontalalignment="left",
+            bbox={
+                "facecolor": "white",
+                "edgecolor": "black",
+                "boxstyle": "round,pad=0.18",
+                "alpha": 0.95,
+            },
+            zorder=11,
+        )
+
     ax.plot(
         current_x_minutes,
         current_line,
@@ -457,7 +508,10 @@ def save_signal_candidate_plot(
         f"passed_threshold={(pearson_scores >= pearson_min).sum()} | "
         f"shown_top={len(shown_candidates)}"
     )
-    if shown_candidates:
+    if shown_candidates or (
+            candidate_potential_result is not None
+            and candidate_potential_result.is_available
+    ):
         ax.set_xlim(
             float(current_x_minutes[0]),
             float(signal_window.trade_seconds / 60.0) + candidate_label_padding_minutes * 4.0,
@@ -536,8 +590,55 @@ def save_signal_candidate_plot(
         ),
     ]
 
+    potential_rows: list[tuple[str, str | None]] = []
+    if candidate_potential_result is not None and candidate_potential_result.is_available:
+        potential_rows.extend([
+            (f"dir          : {candidate_potential_result.direction}", None),
+            (
+                f"used         : "
+                f"{candidate_potential_result.used_candidates_count}/"
+                f"{candidate_potential_result.max_count}",
+                None,
+            ),
+            (
+                f"end          : "
+                f"{candidate_potential_result.end_delta_points:+.2f}",
+                None,
+            ),
+            (
+                f"profit       : "
+                f"+{candidate_potential_result.max_profit_points:.2f} @ "
+                f"{format_potential_time_for_plot(candidate_potential_result.max_profit_time_ct)}",
+                None,
+            ),
+            (
+                f"drawdown     : "
+                f"{candidate_potential_result.max_drawdown_points:.2f} @ "
+                f"{format_potential_time_for_plot(candidate_potential_result.max_drawdown_time_ct)}",
+                None,
+            ),
+            (
+                f"same/opp/fl  : "
+                f"{candidate_potential_result.same_direction_count}/"
+                f"{candidate_potential_result.opposite_direction_count}/"
+                f"{candidate_potential_result.flat_count}",
+                None,
+            ),
+            (
+                f"w same/opp   : "
+                f"{candidate_potential_result.same_direction_weight_share:.2f}/"
+                f"{candidate_potential_result.opposite_direction_weight_share:.2f}",
+                None,
+            ),
+        ])
+    elif candidate_potential_result is not None:
+        potential_rows.append((f"status       : {candidate_potential_result.unavailable_reason}", None))
+    else:
+        potential_rows.append(("status       : None", None))
+
     lines_rows: list[tuple[str, str | None]] = [
         (f"pearson_min    : {pearson_min:.2f}", None),
+        ("potential    : black", "black"),
         ("sma 120       : orange", SMA_LINE_COLORS[120]),
         ("sma 600       : blue", SMA_LINE_COLORS[600]),
         ("sma 1200      : green", SMA_LINE_COLORS[1200]),
@@ -564,7 +665,7 @@ def save_signal_candidate_plot(
         candidate_rows.append(("No shown candidates", None))
 
     y = 0.99
-    line_height = 0.024
+    line_height = 0.0215
     y = draw_info_section(
         ax_info,
         title="REGRESSION (bps / pt)",
@@ -583,6 +684,13 @@ def save_signal_candidate_plot(
         ax_info,
         title="PATH (bps / pt)",
         rows=path_rows,
+        y=y,
+        line_height=line_height,
+    )
+    y = draw_info_section(
+        ax_info,
+        title="POTENTIAL (pt)",
+        rows=potential_rows,
         y=y,
         line_height=line_height,
     )
