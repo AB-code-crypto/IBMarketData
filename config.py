@@ -29,6 +29,17 @@ class Settings:
     # data/prices/MNQ.sqlite3, data/prices/MES.sqlite3 и т.д.
     price_db_dir: str = str(BASE_DIR / "data" / "prices")
 
+    # Глубина расчёта profile-нормы отклонения цены от SMA.
+    # Считаем в 5-секундных свечах, чтобы не пересчитывать календарное время.
+    # Один торговый день = 23 часа, потому что один час рынок закрыт на клиринг.
+    sma_distance_ema_lookback_bars: int = 5 * 23 * 60 * 60 // 5
+
+    # Когда обновляем редкие profile-характеристики инструмента.
+    # Время задаётся в Chicago time, потому что расписание инструмента привязано к CT.
+    profile_update_timezone: str = "America/Chicago"
+    profile_daily_update_hour_ct: int = 16
+    profile_daily_update_minute_ct: int = 0
+
     # Telegram-бот, группа и тема для сообщений о подключении/состоянии.
     telegram_bot_token: str = os.environ["TELEGRAM_BOT_TOKEN"].strip()
     telegram_chat_id_tech: int = int(os.environ["TELEGRAM_CHAT_ID"])
