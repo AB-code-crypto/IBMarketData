@@ -14,7 +14,7 @@ Registry = Dict[str, InstrumentRow]
 PLACEHOLDER_CON_ID = 111
 
 DEFAULTS_DATA: InstrumentRow = {
-    "history_enabled": False,
+    "history_enabled": True,
     "realtime_enabled": False,
     "trading_enabled": False,
     "useRTH": False,

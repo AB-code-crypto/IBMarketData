@@ -577,7 +577,7 @@ def save_signal_candidate_plot(
 
     lines_rows: list[tuple[str, str | None]] = [
         (f"pearson_min    : {pearson_min:.2f}", None),
-        ("potential    : black", "black"),
+        ("potential     : black", "black"),
         ("sma 120       : orange", SMA_LINE_COLORS[120]),
         ("sma 600       : blue", SMA_LINE_COLORS[600]),
         ("sma 1200      : green", SMA_LINE_COLORS[1200]),
