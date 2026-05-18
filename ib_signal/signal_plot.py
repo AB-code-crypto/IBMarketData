@@ -8,7 +8,6 @@ import numpy as np
 
 from contracts import Instrument
 from core.bar_utils import get_bar_size_seconds
-from ib_job_data.profile_features import PROFILE_VOL_MINUS_NAME, PROFILE_VOL_PLUS_NAME
 from ib_signal.signal_candidate_potential import CandidatePotentialResult, read_candidate_full_values
 from ib_signal.signal_candidate_rank_features import calculate_pattern_path_features
 from ib_signal.signal_candidates import CandidateWindow
@@ -597,12 +596,12 @@ def save_signal_candidate_plot(
     volatility_rows: list[tuple[str, str | None]] = [
         (
             f"plus         : "
-            f"{format_plot_optional_value(current_profile_values.get(PROFILE_VOL_PLUS_NAME))}",
+            f"{format_plot_optional_value(current_profile_values.ewm_avg_vol_plus)}",
             None,
         ),
         (
             f"minus        : "
-            f"{format_plot_optional_value(current_profile_values.get(PROFILE_VOL_MINUS_NAME))}",
+            f"{format_plot_optional_value(current_profile_values.ewm_avg_vol_minus)}",
             None,
         ),
     ]
