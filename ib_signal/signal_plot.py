@@ -227,8 +227,8 @@ def save_signal_candidate_plot(
     bar_size_seconds = get_bar_size_seconds(instrument_row["barSizeSetting"])
 
     current_x_minutes = (
-        np.arange(current_values.size, dtype=float) * bar_size_seconds / 60.0
-        - signal_window.pattern_seconds / 60.0
+            np.arange(current_values.size, dtype=float) * bar_size_seconds / 60.0
+            - signal_window.pattern_seconds / 60.0
     )
 
     current_sma_lines = read_current_sma_lines(
@@ -330,8 +330,8 @@ def save_signal_candidate_plot(
 
             candidate_line = normalize_series_for_plot(candidate_full_values)
             candidate_x_minutes = (
-                np.arange(candidate_line.size, dtype=float) * bar_size_seconds / 60.0
-                - signal_window.pattern_seconds / 60.0
+                    np.arange(candidate_line.size, dtype=float) * bar_size_seconds / 60.0
+                    - signal_window.pattern_seconds / 60.0
             )
 
             line = ax.plot(
@@ -387,8 +387,8 @@ def save_signal_candidate_plot(
     ):
         potential_x_minutes = candidate_potential_result.x_minutes
         potential_line = (
-            current_line[-1]
-            + candidate_potential_result.weighted_future_delta_points
+                current_line[-1]
+                + candidate_potential_result.weighted_future_delta_points
         )
 
         ax.plot(
