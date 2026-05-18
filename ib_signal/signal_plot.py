@@ -610,15 +610,15 @@ def save_signal_candidate_plot(
     if shown_candidates:
         for rank, candidate, pearson_value, candidate_color, candidate_score, candidate_path_features, candidate_label_x, candidate_label_y in shown_candidates:
             score_text = (
-                f"s={candidate_score:.2f} | "
+                f"s={candidate_score:.2f} "
                 if candidate_score is not None
                 else ""
             )
             candidate_rows.append(
                 (
-                    f"{rank:02d} | {score_text}r={pearson_value:.2f} | "
-                    f"ed={format_plot_regression_value(candidate_path_features.end_delta_points)} | "
-                    f"mm={format_plot_regression_value(candidate_path_features.minmax_points)} | "
+                    f"{rank:02d} {score_text}r={pearson_value:.2f} "
+                    f"ed={format_plot_regression_value(candidate_path_features.end_delta_points)} "
+                    f"mm={format_plot_regression_value(candidate_path_features.minmax_points)} "
                     f"{candidate.signal_bar_time_ct}",
                     candidate_color,
                 )
