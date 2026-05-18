@@ -12,7 +12,7 @@ from ib_job_data.profile_features import PROFILE_VOL_MINUS_NAME, PROFILE_VOL_PLU
 from ib_signal.signal_candidate_potential import CandidatePotentialResult, read_candidate_full_values
 from ib_signal.signal_candidate_rank_features import calculate_pattern_path_features
 from ib_signal.signal_candidates import CandidateWindow
-from ib_signal.signal_profile_reader import read_signal_profile_values
+from ib_signal.signal_profile_reader import read_profile_values
 from ib_signal.signal_regression import (
     build_linear_regression,
     calculate_regression_delta_bps,
@@ -235,7 +235,7 @@ def save_signal_candidate_plot(
         instrument_code=instrument_code,
         signal_window=signal_window,
     )
-    current_profile_values = read_signal_profile_values(instrument_code=instrument_code)
+    current_profile_values = read_profile_values(instrument_code=instrument_code)
 
     current_line = normalize_series_for_plot(np.asarray(current_values, dtype=float))
     current_path_features = calculate_pattern_path_features(current_values)
