@@ -3,12 +3,19 @@ from ib_job_data.feature_db_sql import MID_PRICE_TABLE_NAME, quote_identifier
 SMA_TABLE_NAME = "sma_5s"
 SMA_PRICE_SOURCE = "mid_close"
 SMA_PERIODS = (120, 600, 1200)
+SMA_DISTANCE_PERIOD_BARS = 600
 
 
 def get_sma_column_name(period_bars: int) -> str:
     """Что делает: возвращает имя SMA-колонки по периоду в барах.
     Зачем нужна: имя признака явно содержит период, чтобы не путать SMA разных длин."""
     return f"sma_{int(period_bars)}"
+
+
+def get_sma_distance_points_column_name(period_bars: int) -> str:
+    """Что делает: возвращает имя колонки signed-расстояния mid_close до SMA в пунктах.
+    Зачем нужна: downstream-сервисы должны явно понимать знак: плюс выше SMA, минус ниже SMA."""
+    return f"mid_minus_sma_{int(period_bars)}"
 
 
 def create_sma_table_sql() -> str:
@@ -19,10 +26,15 @@ def create_sma_table_sql() -> str:
         for period_bars in SMA_PERIODS
     )
 
+    distance_column_sql = (
+        f"{quote_identifier(get_sma_distance_points_column_name(SMA_DISTANCE_PERIOD_BARS))} REAL"
+    )
+
     return f"""
     CREATE TABLE IF NOT EXISTS {quote_identifier(SMA_TABLE_NAME)} (
         bar_time_ts INTEGER PRIMARY KEY,
-        {sma_columns_sql}
+        {sma_columns_sql},
+        {distance_column_sql}
     );
     """
 
@@ -63,21 +75,39 @@ def build_full_sma_insert_sql(mid_price_digits: int) -> str:
             """
         )
 
+    distance_sma_column_name = get_sma_column_name(SMA_DISTANCE_PERIOD_BARS)
+    distance_points_column_name = get_sma_distance_points_column_name(SMA_DISTANCE_PERIOD_BARS)
+
+    distance_output_column = f"""
+            CASE
+                WHEN row_number_value >= {SMA_DISTANCE_PERIOD_BARS}
+                THEN ROUND(
+                    {quote_identifier(SMA_PRICE_SOURCE)}
+                    - ROUND({quote_identifier(distance_sma_column_name)}, {mid_price_digits}),
+                    {mid_price_digits}
+                )
+                ELSE NULL
+            END AS {quote_identifier(distance_points_column_name)}
+            """
+
     return f"""
     INSERT INTO {quote_identifier(SMA_TABLE_NAME)} (
         bar_time_ts,
-        {", ".join(quote_identifier(get_sma_column_name(period_bars)) for period_bars in SMA_PERIODS)}
+        {", ".join(quote_identifier(get_sma_column_name(period_bars)) for period_bars in SMA_PERIODS)},
+        {quote_identifier(distance_points_column_name)}
     )
     WITH calculated AS (
         SELECT
             bar_time_ts,
+            {quote_identifier(SMA_PRICE_SOURCE)},
             ROW_NUMBER() OVER (ORDER BY bar_time_ts) AS row_number_value,
             {", ".join(window_columns)}
         FROM {quote_identifier(MID_PRICE_TABLE_NAME)}
     )
     SELECT
         bar_time_ts,
-        {", ".join(output_columns)}
+        {", ".join(output_columns)},
+        {distance_output_column}
     FROM calculated
     ORDER BY bar_time_ts;
     """
@@ -120,10 +150,44 @@ def build_incremental_sma_insert_sql(mid_price_digits: int) -> str:
             """
         )
 
+    distance_points_column_name = get_sma_distance_points_column_name(SMA_DISTANCE_PERIOD_BARS)
+    select_columns.append(
+        f"""
+            CASE
+                WHEN (
+                    SELECT COUNT(*)
+                    FROM (
+                        SELECT 1
+                        FROM {quote_identifier(MID_PRICE_TABLE_NAME)} AS source
+                        WHERE source.bar_time_ts <= target.bar_time_ts
+                        ORDER BY source.bar_time_ts DESC
+                        LIMIT {SMA_DISTANCE_PERIOD_BARS}
+                    )
+                ) = {SMA_DISTANCE_PERIOD_BARS}
+                THEN ROUND(
+                    target.{quote_identifier(SMA_PRICE_SOURCE)}
+                    - ROUND((
+                        SELECT AVG({quote_identifier(SMA_PRICE_SOURCE)})
+                        FROM (
+                            SELECT {quote_identifier(SMA_PRICE_SOURCE)}
+                            FROM {quote_identifier(MID_PRICE_TABLE_NAME)} AS source
+                            WHERE source.bar_time_ts <= target.bar_time_ts
+                            ORDER BY source.bar_time_ts DESC
+                            LIMIT {SMA_DISTANCE_PERIOD_BARS}
+                        )
+                    ), {mid_price_digits}),
+                    {mid_price_digits}
+                )
+                ELSE NULL
+            END AS {quote_identifier(distance_points_column_name)}
+            """
+    )
+
     return f"""
     INSERT OR REPLACE INTO {quote_identifier(SMA_TABLE_NAME)} (
         bar_time_ts,
-        {", ".join(quote_identifier(get_sma_column_name(period_bars)) for period_bars in SMA_PERIODS)}
+        {", ".join(quote_identifier(get_sma_column_name(period_bars)) for period_bars in SMA_PERIODS)},
+        {quote_identifier(distance_points_column_name)}
     )
     SELECT
         target.bar_time_ts,
