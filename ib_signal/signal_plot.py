@@ -8,9 +8,11 @@ import numpy as np
 
 from contracts import Instrument
 from core.bar_utils import get_bar_size_seconds
+from ib_job_data.profile_features import PROFILE_VOL_MINUS_NAME, PROFILE_VOL_PLUS_NAME
 from ib_signal.signal_candidate_potential import CandidatePotentialResult, read_candidate_full_values
 from ib_signal.signal_candidate_rank_features import calculate_pattern_path_features
 from ib_signal.signal_candidates import CandidateWindow
+from ib_signal.signal_profile_reader import read_signal_profile_values
 from ib_signal.signal_regression import (
     build_linear_regression,
     calculate_regression_delta_bps,
@@ -112,6 +114,14 @@ def build_plot_path(
 def format_plot_regression_value(value: float) -> str:
     """Что делает: форматирует regression-диагностику для PNG с двумя знаками после запятой.
     Зачем нужна: картинка должна быть читаемой, а расчёты остаются без округления."""
+    return f"{value:.2f}"
+
+
+def format_plot_optional_value(value: float | None) -> str:
+    """Что делает: форматирует optional profile-значение для PNG.
+    Зачем нужна: если profile ещё не рассчитан, картинка должна выводить n/a, а не падать."""
+    if value is None:
+        return "n/a"
     return f"{value:.2f}"
 
 
@@ -225,6 +235,8 @@ def save_signal_candidate_plot(
         instrument_code=instrument_code,
         signal_window=signal_window,
     )
+    current_profile_values = read_signal_profile_values(instrument_code=instrument_code)
+
     current_line = normalize_series_for_plot(np.asarray(current_values, dtype=float))
     current_path_features = calculate_pattern_path_features(current_values)
 
@@ -272,7 +284,7 @@ def save_signal_candidate_plot(
     grid = fig.add_gridspec(
         nrows=1,
         ncols=2,
-        width_ratios=[4, 1],
+        width_ratios=[3, 1],
         wspace=0.04,
     )
     ax = fig.add_subplot(grid[0, 0])
@@ -577,10 +589,22 @@ def save_signal_candidate_plot(
 
     lines_rows: list[tuple[str, str | None]] = [
         (f"pearson_min    : {pearson_min:.2f}", None),
-        ("potential     : black", "black"),
         ("sma 120       : orange", SMA_LINE_COLORS[120]),
         ("sma 600       : blue", SMA_LINE_COLORS[600]),
         ("sma 1200      : green", SMA_LINE_COLORS[1200]),
+    ]
+
+    volatility_rows: list[tuple[str, str | None]] = [
+        (
+            f"plus         : "
+            f"{format_plot_optional_value(current_profile_values.get(PROFILE_VOL_PLUS_NAME))}",
+            None,
+        ),
+        (
+            f"minus        : "
+            f"{format_plot_optional_value(current_profile_values.get(PROFILE_VOL_MINUS_NAME))}",
+            None,
+        ),
     ]
 
     candidate_rows: list[tuple[str, str | None]] = []
@@ -637,6 +661,13 @@ def save_signal_candidate_plot(
         ax_info,
         title="LINES",
         rows=lines_rows,
+        y=y,
+        line_height=line_height,
+    )
+    y = draw_info_section(
+        ax_info,
+        title="VOLATILITY (pt)",
+        rows=volatility_rows,
         y=y,
         line_height=line_height,
     )
