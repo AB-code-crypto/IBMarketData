@@ -120,7 +120,6 @@ def rebuild_instrument_mid_price_features(instrument_code: str) -> None:
             conn,
             lookback_bars=settings.sma_distance_ema_lookback_bars,
             mid_price_digits=instrument_row["mid_price_digits"],
-            timezone_name=settings.profile_update_timezone,
         )
 
         conn.commit()
