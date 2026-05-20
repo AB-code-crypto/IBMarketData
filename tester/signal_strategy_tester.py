@@ -96,7 +96,7 @@ TEST_INSTRUMENT_CODE = "MNQ"
 
 # Интервалы задаются в UTC. End включается по последнему закрытому бару <= end.
 TEST_INTERVALS_UTC: list[tuple[str, str]] = [
-    ("2026-01-01 00:00:00", "2026-05-15 12:00:00"),
+    ("2026-05-01 00:00:00", "2026-05-15 12:00:00"),
 ]
 
 # Базовые настройки берём из проекта. Всё, чего нет в TESTER_CONFIG,
@@ -120,8 +120,7 @@ BASE_SETTINGS: SignalConfig = DEFAULT_SIGNAL_CONFIG
 # }
 TESTER_CONFIG: dict[str, list[Any]] = {
     "SignalWindowMode": ["ROLLING"],
-    "MarketRegimeFilterMode": ["HARD"],
-    "rolling_back_minutes": [120],
+    "candidate_potential_min_abs_end_delta_points": [0.0],
 }
 
 # Для smoke-test можно поставить 20/50/100. None = без лимита.
@@ -1301,14 +1300,32 @@ def build_signal_from_selection(
         max_count=settings.candidate_potential_max_count,
     )
 
+    potential_min_abs_end_delta_points = abs(
+        float(settings.candidate_potential_min_abs_end_delta_points),
+    )
+
     direction: Direction | None = None
-    if candidate_potential_result.is_available and candidate_potential_result.direction in ("LONG", "SHORT"):
+    potential_is_strong_enough = (
+            potential_min_abs_end_delta_points <= 0.0
+            or abs(candidate_potential_result.end_delta_points) > potential_min_abs_end_delta_points
+    )
+
+    if (
+            candidate_potential_result.is_available
+            and candidate_potential_result.direction in ("LONG", "SHORT")
+            and potential_is_strong_enough
+    ):
         direction = candidate_potential_result.direction  # type: ignore[assignment]
 
     status: SignalStatus = "SIGNAL" if direction is not None else "NO_SIGNAL"
     reason = None
     if not candidate_potential_result.is_available:
         reason = candidate_potential_result.unavailable_reason
+    elif not potential_is_strong_enough:
+        reason = (
+            f"potential_abs_end_delta_below_min:"
+            f"{abs(candidate_potential_result.end_delta_points):.2f}<={potential_min_abs_end_delta_points:.2f}"
+        )
     elif candidate_potential_result.direction == "NONE":
         reason = "potential_direction_none"
 
@@ -1795,6 +1812,7 @@ def build_summary_row(*, state: BacktestState, start_ts: int, end_ts: int, setti
         "candidate_minmax_hard_filter_max_ratio": settings.candidate_minmax_hard_filter_max_ratio,
         "candidate_potential_min_count": settings.candidate_potential_min_count,
         "candidate_potential_max_count": settings.candidate_potential_max_count,
+        "candidate_potential_min_abs_end_delta_points": settings.candidate_potential_min_abs_end_delta_points,
         "closed_bars_seen": state.counters.closed_bars_seen,
         "due_signals": state.counters.due_signals,
         "calculations": state.counters.calculations,
