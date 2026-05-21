@@ -37,7 +37,6 @@ FX_DEFAULTS: InstrumentRow = {
     "secType": "CASH",
     "exchange": "IDEALPRO",
     "session_model": "FX_24_5",
-    "history_lookback_days": 50,
     "price_digits": 5,
     "mid_price_digits": 6,
 }
@@ -47,7 +46,7 @@ CRYPTO_DEFAULTS: InstrumentRow = {
     "secType": "CRYPTO",
     "currency": "USD",
     "session_model": "CRYPTO_24_7",
-    "history_lookback_days": 50,
+    # "history_lookback_days": 50,
 }
 
 # ==============================
@@ -60,7 +59,6 @@ Instrument: Registry = {
         "tradingClass": "MNQ",
         "multiplier": 2.0,
         "db_filename": "MNQ.sqlite3",
-        "history_enabled": True,
         "realtime_enabled": True,
         "trading_enabled": True,
         "regression_flat_delta_threshold_bps": 3.0,
@@ -111,7 +109,6 @@ Instrument: Registry = {
 
     "MES": {
         **FUT_DEFAULTS,
-        "history_enabled": True,
         "tradingClass": "MES",
         "multiplier": 5.0,
         "db_filename": "MES.sqlite3",
@@ -199,7 +196,6 @@ Instrument: Registry = {
         "tradingClass": "ES",
         "multiplier": 50.0,
         "db_filename": "ES.sqlite3",
-        "history_enabled": True,
         # Для нового инструмента ограничиваем начальную загрузку двумя неделями.
         # Если нужна более длинная история, увеличь history_lookback_days вручную.
         # "history_lookback_days": 14,

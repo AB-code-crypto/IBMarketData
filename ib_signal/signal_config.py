@@ -12,6 +12,7 @@ class MarketRegimeFilterMode(Enum):
     SOFT = "SOFT"
     HARD = "HARD"
 
+PLOT_TOP_CANDIDATES = 10 # сколько выводится кандидатов на PNG
 
 @dataclass(frozen=True)
 class SignalConfig:
@@ -65,7 +66,7 @@ class SignalConfig:
     # Сколько top-score кандидатов использовать для расчёта potential path.
     # Если кандидатов меньше min_count, потенциал не считается.
     candidate_potential_min_count: int = 3
-    candidate_potential_max_count: int = 7
+    candidate_potential_max_count: int = 5
     candidate_potential_min_abs_end_delta_points: float = 10.0
 
 

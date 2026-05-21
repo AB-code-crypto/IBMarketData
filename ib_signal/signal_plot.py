@@ -2,6 +2,8 @@ from pathlib import Path
 
 import matplotlib
 
+from ib_signal.signal_config import PLOT_TOP_CANDIDATES
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -21,8 +23,6 @@ from ib_signal.signal_regression import (
 from ib_signal.signal_regression_relation import build_regression_relation
 from ib_signal.signal_sma_reader import read_current_sma_lines
 from ib_signal.signal_window import SignalWindow
-
-PLOT_TOP_CANDIDATES = 10
 
 CURRENT_PATTERN_COLOR = "red"
 SMA_LINE_COLORS: dict[int, str] = {
