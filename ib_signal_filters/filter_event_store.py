@@ -22,15 +22,13 @@ class LatestSignalEvent:
     signal_time_utc: str
     signal_time_ct: str | None
     signal_time_msk: str
-    source_signal_created_at_ts: int
     direction: str
-    entry_price: float
 
 
 @dataclass(frozen=True)
 class FilteredSignalLatest:
     """Что делает: хранит последний результат фильтрации по одному инструменту.
-    Зачем нужна: следующий слой видит не очередь старых сигналов, а актуальный разрешённый/запрещённый сигнал."""
+    Зачем нужна: следующий слой видит актуальный разрешённый/запрещённый сигнал без дубляжа signal_events."""
     instrument_code: str
     source_signal_id: int
 
@@ -38,11 +36,8 @@ class FilteredSignalLatest:
     signal_time_utc: str
     signal_time_ct: str | None
     signal_time_msk: str
-    source_signal_created_at_ts: int
-    created_at_ts: int
 
     direction: str
-    entry_price: float
 
     allowed: bool
     rejected_by: str | None
@@ -64,18 +59,14 @@ def create_filtered_signal_latest_table_sql() -> str:
         signal_time_ct TEXT,
         signal_time_msk TEXT NOT NULL,
 
-        source_signal_created_at_ts INTEGER NOT NULL,
-        created_at_ts INTEGER NOT NULL,
-
         direction TEXT NOT NULL,
-        entry_price REAL NOT NULL,
 
         allowed INTEGER NOT NULL,
         rejected_by TEXT,
         reject_reason TEXT,
         filter_details_json TEXT NOT NULL
     );
-    """
+    ""
 
 
 def initialize_filtered_signal_latest_table(conn) -> None:
@@ -92,12 +83,6 @@ def initialize_filtered_signal_latest_table(conn) -> None:
         f"""
         CREATE INDEX IF NOT EXISTS idx_filtered_signal_latest_allowed_ts
         ON {FILTERED_SIGNAL_LATEST_TABLE_NAME}(allowed, signal_bar_ts);
-        """
-    )
-    conn.execute(
-        f"""
-        CREATE INDEX IF NOT EXISTS idx_filtered_signal_latest_created_at_ts
-        ON {FILTERED_SIGNAL_LATEST_TABLE_NAME}(created_at_ts);
         """
     )
 
@@ -158,9 +143,7 @@ def read_latest_fresh_signal_events(
             se.signal_time_utc,
             se.signal_time_ct,
             se.signal_time_msk,
-            se.created_at_ts,
-            se.direction,
-            se.entry_price
+            se.direction
         FROM {SIGNAL_EVENTS_TABLE_NAME} AS se
         LEFT JOIN {FILTERED_SIGNAL_LATEST_TABLE_NAME} AS fl
           ON fl.instrument_code = se.instrument_code
@@ -176,7 +159,6 @@ def read_latest_fresh_signal_events(
           AND (
               fl.instrument_code IS NULL
               OR fl.source_signal_id != se.signal_id
-              OR fl.source_signal_created_at_ts < se.created_at_ts
           )
         ORDER BY se.instrument_code ASC
         """,
@@ -191,9 +173,7 @@ def read_latest_fresh_signal_events(
             signal_time_utc=str(row[3]),
             signal_time_ct=None if row[4] is None else str(row[4]),
             signal_time_msk=str(row[5]),
-            source_signal_created_at_ts=int(row[6]),
-            direction=str(row[7]),
-            entry_price=float(row[8]),
+            direction=str(row[6]),
         )
         for row in rows
     ]
@@ -214,10 +194,7 @@ def build_allow_all_filtered_latest(signal_event: LatestSignalEvent) -> Filtered
         signal_time_utc=signal_event.signal_time_utc,
         signal_time_ct=signal_event.signal_time_ct,
         signal_time_msk=signal_event.signal_time_msk,
-        source_signal_created_at_ts=signal_event.source_signal_created_at_ts,
-        created_at_ts=int(time.time()),
         direction=signal_event.direction,
-        entry_price=signal_event.entry_price,
         allowed=True,
         rejected_by=None,
         reject_reason=None,
@@ -246,18 +223,14 @@ def write_filtered_signal_latest(conn, event: FilteredSignalLatest) -> None:
             signal_time_ct,
             signal_time_msk,
 
-            source_signal_created_at_ts,
-            created_at_ts,
-
             direction,
-            entry_price,
 
             allowed,
             rejected_by,
             reject_reason,
             filter_details_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
         ON CONFLICT(instrument_code) DO UPDATE SET
             source_signal_id = excluded.source_signal_id,
@@ -267,11 +240,7 @@ def write_filtered_signal_latest(conn, event: FilteredSignalLatest) -> None:
             signal_time_ct = excluded.signal_time_ct,
             signal_time_msk = excluded.signal_time_msk,
 
-            source_signal_created_at_ts = excluded.source_signal_created_at_ts,
-            created_at_ts = excluded.created_at_ts,
-
             direction = excluded.direction,
-            entry_price = excluded.entry_price,
 
             allowed = excluded.allowed,
             rejected_by = excluded.rejected_by,
@@ -286,10 +255,7 @@ def write_filtered_signal_latest(conn, event: FilteredSignalLatest) -> None:
             event.signal_time_utc,
             event.signal_time_ct,
             event.signal_time_msk,
-            event.source_signal_created_at_ts,
-            event.created_at_ts,
             event.direction,
-            event.entry_price,
             1 if event.allowed else 0,
             event.rejected_by,
             event.reject_reason,
