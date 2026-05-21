@@ -14,7 +14,7 @@ Registry = Dict[str, InstrumentRow]
 PLACEHOLDER_CON_ID = 111
 
 DEFAULTS_DATA: InstrumentRow = {
-    "history_enabled": True,
+    "history_enabled": False,
     "realtime_enabled": False,
     "trading_enabled": False,
     "useRTH": False,
@@ -59,6 +59,7 @@ Instrument: Registry = {
         "tradingClass": "MNQ",
         "multiplier": 2.0,
         "db_filename": "MNQ.sqlite3",
+        "history_enabled": True,
         "realtime_enabled": True,
         "trading_enabled": True,
         "regression_flat_delta_threshold_bps": 3.0,
