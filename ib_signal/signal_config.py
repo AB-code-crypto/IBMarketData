@@ -12,7 +12,7 @@ class MarketRegimeFilterMode(Enum):
     SOFT = "SOFT"
     HARD = "HARD"
 
-PLOT_TOP_CANDIDATES = 10  # сколько выводится кандидатов на PNG
+PLOT_TOP_CANDIDATES = 5  # сколько выводится кандидатов на PNG
 
 @dataclass(frozen=True)
 class SignalConfig:
