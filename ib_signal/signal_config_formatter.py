@@ -68,6 +68,10 @@ def format_signal_config(settings: SignalConfig) -> str:
             "POTENTIAL:",
             f"candidate_potential_min_count={settings.candidate_potential_min_count}",
             f"candidate_potential_max_count={settings.candidate_potential_max_count}",
+            f"candidate_potential_min_abs_end_delta_points={settings.candidate_potential_min_abs_end_delta_points}",
+            "",
+            "SIGNAL EVENTS:",
+            f"signal_event_retention_days={settings.signal_event_retention_days}",
         ]
     )
 

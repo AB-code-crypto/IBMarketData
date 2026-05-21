@@ -12,7 +12,7 @@ class MarketRegimeFilterMode(Enum):
     SOFT = "SOFT"
     HARD = "HARD"
 
-PLOT_TOP_CANDIDATES = 10 # сколько выводится кандидатов на PNG
+PLOT_TOP_CANDIDATES = 10  # сколько выводится кандидатов на PNG
 
 @dataclass(frozen=True)
 class SignalConfig:
@@ -68,6 +68,10 @@ class SignalConfig:
     candidate_potential_min_count: int = 3
     candidate_potential_max_count: int = 5
     candidate_potential_min_abs_end_delta_points: float = 10.0
+
+    # Сколько дней храним live signal_events в state DB.
+    # Если значение <= 0, cleanup отключён.
+    signal_event_retention_days: int = 7
 
 
 DEFAULT_SIGNAL_CONFIG = SignalConfig()

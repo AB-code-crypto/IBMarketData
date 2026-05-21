@@ -9,6 +9,8 @@ from ib_signal.job_reader import get_fresh_job_bar_status, read_job_bar_time_ct
 from ib_signal.signal_schedule import get_due_signal_bar_ts
 from ib_signal.signal_config import MarketRegimeFilterMode, SignalConfig
 from ib_signal.signal_errors import SignalDataNotReadyError
+from ib_signal.signal_event import build_signal_event
+from ib_signal.signal_event_store import write_signal_event
 from ib_signal.pearson import calculate_centered_pearson_batch
 from ib_signal.signal_candidate_regime_filter import (
     filter_candidates_by_market_regime,
@@ -408,6 +410,50 @@ async def run_signal_loop(
                     min_count=settings.candidate_potential_min_count,
                     max_count=settings.candidate_potential_max_count,
                 )
+
+                potential_min_abs_end_delta_points = abs(
+                    float(settings.candidate_potential_min_abs_end_delta_points),
+                )
+                signal_event_best_pearson = (
+                    float(plot_pearson_scores.max())
+                    if plot_pearson_scores.size > 0
+                    else 0.0
+                )
+                signal_event_candidate_score_best = (
+                    float(plot_candidate_scores.max())
+                    if plot_candidate_scores.size > 0
+                    else None
+                )
+
+                if (
+                        candidate_potential_result.is_available
+                        and candidate_potential_result.direction in ("LONG", "SHORT")
+                        and abs(candidate_potential_result.end_delta_points) > potential_min_abs_end_delta_points
+                ):
+                    signal_event = build_signal_event(
+                        instrument_code=instrument_code,
+                        signal_bar_ts=due_signal_bar_ts,
+                        signal_time_ct=candidate_search_result.current_signal_bar_time_ct,
+                        direction=candidate_potential_result.direction,
+                        entry_price=float(pattern_matrix_result.current_values[-1]),
+                        settings=settings,
+                        best_pearson=signal_event_best_pearson,
+                        candidate_score_best=signal_event_candidate_score_best,
+                        potential_end_delta_points=candidate_potential_result.end_delta_points,
+                        potential_max_profit_points=candidate_potential_result.max_profit_points,
+                        potential_max_drawdown_points=candidate_potential_result.max_drawdown_points,
+                        potential_used=candidate_potential_result.used_candidates_count,
+                    )
+                    signal_id = write_signal_event(signal_event)
+                    log_info(
+                        logger,
+                        f"{instrument_code}: signal_event записан: "
+                        f"signal_id={signal_id}, "
+                        f"direction={signal_event.direction}, "
+                        f"entry={signal_event.entry_price:.2f}, "
+                        f"potential_end={signal_event.potential_end_delta_points:+.2f}",
+                        to_telegram=False,
+                    )
 
                 saved_plot_path = save_signal_candidate_plot(
                     instrument_code=instrument_code,

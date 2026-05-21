@@ -16,6 +16,7 @@ from core.telegram_sender import TelegramSender
 from ib_signal.signal_runner import run_signal_loop, wait_for_fresh_job_bars
 from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG
 from ib_signal.signal_config_formatter import format_signal_config
+from ib_signal.signal_event_store import cleanup_old_signal_events
 
 setup_logging()
 logger = get_logger(__name__)
@@ -65,6 +66,16 @@ async def main() -> None:
         signal_config = DEFAULT_SIGNAL_CONFIG  # Блок ниже нужен также только для отладки
         # from dataclasses import replace
         # signal_config = replace(DEFAULT_SIGNAL_CONFIG,max_job_bar_lag_seconds=10 ** 9,)
+
+        deleted_signal_events = cleanup_old_signal_events(
+            retention_days=signal_config.signal_event_retention_days,
+        )
+        log_info(
+            logger,
+            f"signal_events cleanup: deleted={deleted_signal_events}, "
+            f"retention_days={signal_config.signal_event_retention_days}",
+            to_telegram=False,
+        )
 
         await send_service_message(format_signal_config(signal_config))
 
