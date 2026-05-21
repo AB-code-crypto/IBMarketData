@@ -21,6 +21,7 @@ class LatestSignalEvent:
     signal_bar_ts: int
     signal_time_utc: str
     signal_time_ct: str | None
+    signal_time_msk: str
     source_signal_created_at_ts: int
     direction: str
     entry_price: float
@@ -36,6 +37,7 @@ class FilteredSignalLatest:
     signal_bar_ts: int
     signal_time_utc: str
     signal_time_ct: str | None
+    signal_time_msk: str
     source_signal_created_at_ts: int
     created_at_ts: int
 
@@ -60,6 +62,7 @@ def create_filtered_signal_latest_table_sql() -> str:
         signal_bar_ts INTEGER NOT NULL,
         signal_time_utc TEXT NOT NULL,
         signal_time_ct TEXT,
+        signal_time_msk TEXT NOT NULL,
 
         source_signal_created_at_ts INTEGER NOT NULL,
         created_at_ts INTEGER NOT NULL,
@@ -77,7 +80,7 @@ def create_filtered_signal_latest_table_sql() -> str:
 
 def initialize_filtered_signal_latest_table(conn) -> None:
     """Что делает: создаёт filtered_signal_latest и индексы.
-    Зачем нужна: runner может запускаться отдельно и сам готовить state DB."""
+    Зачем нужна: runner может запускаться отдельно и сам готовить чистую state DB."""
     conn.execute(create_filtered_signal_latest_table_sql())
     conn.execute(
         f"""
@@ -154,6 +157,7 @@ def read_latest_fresh_signal_events(
             se.signal_bar_ts,
             se.signal_time_utc,
             se.signal_time_ct,
+            se.signal_time_msk,
             se.created_at_ts,
             se.direction,
             se.entry_price
@@ -186,9 +190,10 @@ def read_latest_fresh_signal_events(
             signal_bar_ts=int(row[2]),
             signal_time_utc=str(row[3]),
             signal_time_ct=None if row[4] is None else str(row[4]),
-            source_signal_created_at_ts=int(row[5]),
-            direction=str(row[6]),
-            entry_price=float(row[7]),
+            signal_time_msk=str(row[5]),
+            source_signal_created_at_ts=int(row[6]),
+            direction=str(row[7]),
+            entry_price=float(row[8]),
         )
         for row in rows
     ]
@@ -208,6 +213,7 @@ def build_allow_all_filtered_latest(signal_event: LatestSignalEvent) -> Filtered
         signal_bar_ts=signal_event.signal_bar_ts,
         signal_time_utc=signal_event.signal_time_utc,
         signal_time_ct=signal_event.signal_time_ct,
+        signal_time_msk=signal_event.signal_time_msk,
         source_signal_created_at_ts=signal_event.source_signal_created_at_ts,
         created_at_ts=int(time.time()),
         direction=signal_event.direction,
@@ -238,6 +244,7 @@ def write_filtered_signal_latest(conn, event: FilteredSignalLatest) -> None:
             signal_bar_ts,
             signal_time_utc,
             signal_time_ct,
+            signal_time_msk,
 
             source_signal_created_at_ts,
             created_at_ts,
@@ -250,7 +257,7 @@ def write_filtered_signal_latest(conn, event: FilteredSignalLatest) -> None:
             reject_reason,
             filter_details_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
         ON CONFLICT(instrument_code) DO UPDATE SET
             source_signal_id = excluded.source_signal_id,
@@ -258,6 +265,7 @@ def write_filtered_signal_latest(conn, event: FilteredSignalLatest) -> None:
             signal_bar_ts = excluded.signal_bar_ts,
             signal_time_utc = excluded.signal_time_utc,
             signal_time_ct = excluded.signal_time_ct,
+            signal_time_msk = excluded.signal_time_msk,
 
             source_signal_created_at_ts = excluded.source_signal_created_at_ts,
             created_at_ts = excluded.created_at_ts,
@@ -277,6 +285,7 @@ def write_filtered_signal_latest(conn, event: FilteredSignalLatest) -> None:
             event.signal_bar_ts,
             event.signal_time_utc,
             event.signal_time_ct,
+            event.signal_time_msk,
             event.source_signal_created_at_ts,
             event.created_at_ts,
             event.direction,

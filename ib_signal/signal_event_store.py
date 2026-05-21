@@ -19,6 +19,7 @@ def create_signal_events_table_sql() -> str:
         signal_bar_ts INTEGER NOT NULL,
         signal_time_utc TEXT NOT NULL,
         signal_time_ct TEXT,
+        signal_time_msk TEXT NOT NULL,
         created_at_ts INTEGER NOT NULL,
 
         direction TEXT NOT NULL,
@@ -49,7 +50,7 @@ def create_signal_events_table_sql() -> str:
 
 def initialize_signal_events_table(conn) -> None:
     """Что делает: создаёт signal_events и индексы.
-    Зачем нужна: writer/cleanup могут безопасно вызываться при старте без отдельной миграции."""
+    Зачем нужна: writer/cleanup могут безопасно вызываться при старте чистой state DB."""
     conn.execute(create_signal_events_table_sql())
     conn.execute(
         f"""
@@ -87,6 +88,7 @@ def write_signal_event(event: SignalEvent) -> int:
                 signal_bar_ts,
                 signal_time_utc,
                 signal_time_ct,
+                signal_time_msk,
                 created_at_ts,
 
                 direction,
@@ -105,7 +107,7 @@ def write_signal_event(event: SignalEvent) -> int:
 
                 settings_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
             ON CONFLICT (
                 instrument_code,
@@ -115,6 +117,7 @@ def write_signal_event(event: SignalEvent) -> int:
             ) DO UPDATE SET
                 signal_time_utc = excluded.signal_time_utc,
                 signal_time_ct = excluded.signal_time_ct,
+                signal_time_msk = excluded.signal_time_msk,
                 created_at_ts = excluded.created_at_ts,
 
                 direction = excluded.direction,
@@ -136,6 +139,7 @@ def write_signal_event(event: SignalEvent) -> int:
                 event.signal_bar_ts,
                 event.signal_time_utc,
                 event.signal_time_ct,
+                event.signal_time_msk,
                 event.created_at_ts,
                 event.direction,
                 event.entry_price,

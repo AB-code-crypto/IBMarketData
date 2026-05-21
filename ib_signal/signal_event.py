@@ -5,6 +5,7 @@ import json
 import time
 from typing import Any
 
+from core.time_utils import build_bar_time_fields_from_utc_dt
 from ib_signal.signal_config import SignalConfig
 
 
@@ -19,6 +20,7 @@ class SignalEvent:
     signal_bar_ts: int
     signal_time_utc: str
     signal_time_ct: str | None
+    signal_time_msk: str
     created_at_ts: int
 
     direction: str
@@ -65,10 +67,11 @@ def signal_config_to_json(settings: SignalConfig) -> str:
     )
 
 
-def format_signal_time_utc(signal_bar_ts: int) -> str:
-    """Что делает: форматирует timestamp сигнала в UTC ISO-строку.
-    Зачем нужна: в signal_events храним и машинный ts, и читаемое UTC-время сигнала."""
-    return datetime.fromtimestamp(int(signal_bar_ts), tz=timezone.utc).isoformat()
+def get_signal_time_fields(signal_bar_ts: int) -> dict[str, str | int]:
+    """Что делает: строит UTC/CT/MSK метки времени сигнального бара.
+    Зачем нужна: signal_events хранит такие же удобные временные метки, как bar-таблицы."""
+    dt_utc = datetime.fromtimestamp(int(signal_bar_ts), tz=timezone.utc)
+    return build_bar_time_fields_from_utc_dt(dt_utc)
 
 
 def build_signal_event(
@@ -93,12 +96,19 @@ def build_signal_event(
     if direction_value not in {"LONG", "SHORT"}:
         raise ValueError(f"SignalEvent direction должен быть LONG/SHORT, получено: {direction!r}")
 
+    signal_time_fields = get_signal_time_fields(signal_bar_ts)
+
     return SignalEvent(
         signal_id=None,
         instrument_code=str(instrument_code),
         signal_bar_ts=int(signal_bar_ts),
-        signal_time_utc=format_signal_time_utc(signal_bar_ts),
-        signal_time_ct=None if signal_time_ct is None else str(signal_time_ct),
+        signal_time_utc=str(signal_time_fields["bar_time"]),
+        signal_time_ct=(
+            str(signal_time_fields["bar_time_ct"])
+            if signal_time_ct is None
+            else str(signal_time_ct)
+        ),
+        signal_time_msk=str(signal_time_fields["bar_time_msk"]),
         created_at_ts=int(time.time() if created_at_ts is None else created_at_ts),
         direction=direction_value,
         entry_price=float(entry_price),
