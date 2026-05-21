@@ -9,13 +9,13 @@ from ib_signal.signal_event_store import (
     initialize_signal_events_table,
 )
 
-FILTERED_SIGNAL_EVENTS_TABLE_NAME = "filtered_signal_events"
+FILTERED_SIGNAL_LATEST_TABLE_NAME = "filtered_signal_latest"
 
 
 @dataclass(frozen=True)
-class PendingSignalEvent:
-    """Что делает: хранит signal_event, который ещё не обработан signal_filters.
-    Зачем нужна: фильтры работают с нормализованным событием из state DB, а не с внутренностями ib_signal."""
+class LatestSignalEvent:
+    """Что делает: хранит последний свежий signal_event одного инструмента.
+    Зачем нужна: live-фильтры не разгребают всю историю signal_events, а работают только с актуальным срезом."""
     signal_id: int
     instrument_code: str
     signal_bar_ts: int
@@ -27,11 +27,12 @@ class PendingSignalEvent:
 
 
 @dataclass(frozen=True)
-class FilteredSignalEvent:
-    """Что делает: хранит результат фильтрации одного SignalEvent.
-    Зачем нужна: следующий слой читает уже разрешённый или запрещённый сигнал, не запуская фильтры заново."""
-    signal_id: int
+class FilteredSignalLatest:
+    """Что делает: хранит последний результат фильтрации по одному инструменту.
+    Зачем нужна: следующий слой видит не очередь старых сигналов, а актуальный разрешённый/запрещённый сигнал."""
     instrument_code: str
+    source_signal_id: int
+
     signal_bar_ts: int
     signal_time_utc: str
     signal_time_ct: str | None
@@ -47,16 +48,15 @@ class FilteredSignalEvent:
     filter_details_json: str
 
 
-def create_filtered_signal_events_table_sql() -> str:
-    """Что делает: возвращает SQL создания filtered_signal_events.
-    Зачем нужна: это выходной контракт ib_signal_filters для следующего торгового слоя."""
+def create_filtered_signal_latest_table_sql() -> str:
+    """Что делает: возвращает SQL создания filtered_signal_latest.
+    Зачем нужна: в live-режиме следующему слою нужен только последний результат фильтрации по инструменту."""
     return f"""
-    CREATE TABLE IF NOT EXISTS {FILTERED_SIGNAL_EVENTS_TABLE_NAME} (
-        filtered_signal_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    CREATE TABLE IF NOT EXISTS {FILTERED_SIGNAL_LATEST_TABLE_NAME} (
+        instrument_code TEXT PRIMARY KEY,
 
-        signal_id INTEGER NOT NULL UNIQUE,
+        source_signal_id INTEGER NOT NULL,
 
-        instrument_code TEXT NOT NULL,
         signal_bar_ts INTEGER NOT NULL,
         signal_time_utc TEXT NOT NULL,
         signal_time_ct TEXT,
@@ -75,35 +75,76 @@ def create_filtered_signal_events_table_sql() -> str:
     """
 
 
-def initialize_filtered_signal_events_table(conn) -> None:
-    """Что делает: создаёт filtered_signal_events и индексы.
-    Зачем нужна: runner может запускаться отдельно и сам готовит state DB."""
-    conn.execute(create_filtered_signal_events_table_sql())
+def initialize_filtered_signal_latest_table(conn) -> None:
+    """Что делает: создаёт filtered_signal_latest и индексы.
+    Зачем нужна: runner может запускаться отдельно и сам готовить state DB."""
+    conn.execute(create_filtered_signal_latest_table_sql())
     conn.execute(
         f"""
-        CREATE INDEX IF NOT EXISTS idx_filtered_signal_events_signal_id
-        ON {FILTERED_SIGNAL_EVENTS_TABLE_NAME}(signal_id);
+        CREATE INDEX IF NOT EXISTS idx_filtered_signal_latest_source_signal_id
+        ON {FILTERED_SIGNAL_LATEST_TABLE_NAME}(source_signal_id);
         """
     )
     conn.execute(
         f"""
-        CREATE INDEX IF NOT EXISTS idx_filtered_signal_events_allowed_ts
-        ON {FILTERED_SIGNAL_EVENTS_TABLE_NAME}(allowed, signal_bar_ts);
+        CREATE INDEX IF NOT EXISTS idx_filtered_signal_latest_allowed_ts
+        ON {FILTERED_SIGNAL_LATEST_TABLE_NAME}(allowed, signal_bar_ts);
         """
     )
     conn.execute(
         f"""
-        CREATE INDEX IF NOT EXISTS idx_filtered_signal_events_created_at_ts
-        ON {FILTERED_SIGNAL_EVENTS_TABLE_NAME}(created_at_ts);
+        CREATE INDEX IF NOT EXISTS idx_filtered_signal_latest_created_at_ts
+        ON {FILTERED_SIGNAL_LATEST_TABLE_NAME}(created_at_ts);
         """
     )
 
 
-def read_pending_signal_events(conn, *, limit: int) -> list[PendingSignalEvent]:
-    """Что делает: читает signal_events, для которых ещё нет актуального результата фильтрации.
-    Зачем нужна: signal_filters должен быть idempotent и не обрабатывать один и тот же сигнал бесконечно."""
+def delete_stale_filtered_signal_latest(
+        conn,
+        *,
+        max_signal_age_seconds: int,
+        now_ts: int | None = None,
+) -> int:
+    """Что делает: удаляет из filtered_signal_latest сигналы старше max_signal_age_seconds.
+    Зачем нужна: следующий слой не должен открыть сделку по старому allowed-сигналу."""
+    initialize_filtered_signal_latest_table(conn)
+
+    max_signal_age_seconds = int(max_signal_age_seconds)
+    if max_signal_age_seconds <= 0:
+        return 0
+
+    now_ts = int(time.time() if now_ts is None else now_ts)
+    min_signal_bar_ts = now_ts - max_signal_age_seconds
+
+    changes_before = conn.total_changes
+    conn.execute(
+        f"""
+        DELETE FROM {FILTERED_SIGNAL_LATEST_TABLE_NAME}
+        WHERE signal_bar_ts < ?
+        """,
+        (min_signal_bar_ts,),
+    )
+
+    return int(conn.total_changes - changes_before)
+
+
+def read_latest_fresh_signal_events(
+        conn,
+        *,
+        max_signal_age_seconds: int,
+        now_ts: int | None = None,
+) -> list[LatestSignalEvent]:
+    """Что делает: читает последний свежий signal_event по каждому инструменту.
+    Зачем нужна: фильтры работают с актуальным сигналом, а не с очередью старых событий."""
     initialize_signal_events_table(conn)
-    initialize_filtered_signal_events_table(conn)
+    initialize_filtered_signal_latest_table(conn)
+
+    max_signal_age_seconds = int(max_signal_age_seconds)
+    if max_signal_age_seconds <= 0:
+        return []
+
+    now_ts = int(time.time() if now_ts is None else now_ts)
+    min_signal_bar_ts = now_ts - max_signal_age_seconds
 
     rows = conn.execute(
         f"""
@@ -117,18 +158,29 @@ def read_pending_signal_events(conn, *, limit: int) -> list[PendingSignalEvent]:
             se.direction,
             se.entry_price
         FROM {SIGNAL_EVENTS_TABLE_NAME} AS se
-        LEFT JOIN {FILTERED_SIGNAL_EVENTS_TABLE_NAME} AS fe
-          ON fe.signal_id = se.signal_id
-        WHERE fe.signal_id IS NULL
-           OR fe.source_signal_created_at_ts < se.created_at_ts
-        ORDER BY se.signal_bar_ts ASC, se.signal_id ASC
-        LIMIT ?
+        LEFT JOIN {FILTERED_SIGNAL_LATEST_TABLE_NAME} AS fl
+          ON fl.instrument_code = se.instrument_code
+        WHERE se.signal_bar_ts >= ?
+          AND se.signal_id = (
+              SELECT se2.signal_id
+              FROM {SIGNAL_EVENTS_TABLE_NAME} AS se2
+              WHERE se2.instrument_code = se.instrument_code
+                AND se2.signal_bar_ts >= ?
+              ORDER BY se2.signal_bar_ts DESC, se2.signal_id DESC
+              LIMIT 1
+          )
+          AND (
+              fl.instrument_code IS NULL
+              OR fl.source_signal_id != se.signal_id
+              OR fl.source_signal_created_at_ts < se.created_at_ts
+          )
+        ORDER BY se.instrument_code ASC
         """,
-        (int(limit),),
+        (min_signal_bar_ts, min_signal_bar_ts),
     ).fetchall()
 
     return [
-        PendingSignalEvent(
+        LatestSignalEvent(
             signal_id=int(row[0]),
             instrument_code=str(row[1]),
             signal_bar_ts=int(row[2]),
@@ -142,17 +194,17 @@ def read_pending_signal_events(conn, *, limit: int) -> list[PendingSignalEvent]:
     ]
 
 
-def build_allow_all_filtered_event(signal_event: PendingSignalEvent) -> FilteredSignalEvent:
-    """Что делает: временно разрешает любой входной SignalEvent.
-    Зачем нужна: слой фильтров должен уже работать как сервис, хотя реальные IBP-фильтры добавим позже."""
+def build_allow_all_filtered_latest(signal_event: LatestSignalEvent) -> FilteredSignalLatest:
+    """Что делает: временно разрешает последний свежий сигнал инструмента.
+    Зачем нужна: слой фильтров уже работает как сервис, хотя реальные IBP-фильтры добавим позже."""
     details = {
         "mode": "ALLOW_ALL_STUB",
         "filters": [],
     }
 
-    return FilteredSignalEvent(
-        signal_id=signal_event.signal_id,
+    return FilteredSignalLatest(
         instrument_code=signal_event.instrument_code,
+        source_signal_id=signal_event.signal_id,
         signal_bar_ts=signal_event.signal_bar_ts,
         signal_time_utc=signal_event.signal_time_utc,
         signal_time_ct=signal_event.signal_time_ct,
@@ -172,17 +224,17 @@ def build_allow_all_filtered_event(signal_event: PendingSignalEvent) -> Filtered
     )
 
 
-def write_filtered_signal_event(conn, event: FilteredSignalEvent) -> int:
-    """Что делает: пишет результат фильтрации и возвращает filtered_signal_id.
-    Зачем нужна: следующий слой читает filtered_signal_events, а не сырые signal_events."""
-    initialize_filtered_signal_events_table(conn)
+def write_filtered_signal_latest(conn, event: FilteredSignalLatest) -> None:
+    """Что делает: перезаписывает последний результат фильтрации по инструменту.
+    Зачем нужна: дальше по цепочке нужен только актуальный filtered-сигнал, а не вся история."""
+    initialize_filtered_signal_latest_table(conn)
 
     conn.execute(
         f"""
-        INSERT INTO {FILTERED_SIGNAL_EVENTS_TABLE_NAME} (
-            signal_id,
-
+        INSERT INTO {FILTERED_SIGNAL_LATEST_TABLE_NAME} (
             instrument_code,
+            source_signal_id,
+
             signal_bar_ts,
             signal_time_utc,
             signal_time_ct,
@@ -200,8 +252,9 @@ def write_filtered_signal_event(conn, event: FilteredSignalEvent) -> int:
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
-        ON CONFLICT(signal_id) DO UPDATE SET
-            instrument_code = excluded.instrument_code,
+        ON CONFLICT(instrument_code) DO UPDATE SET
+            source_signal_id = excluded.source_signal_id,
+
             signal_bar_ts = excluded.signal_bar_ts,
             signal_time_utc = excluded.signal_time_utc,
             signal_time_ct = excluded.signal_time_ct,
@@ -219,8 +272,8 @@ def write_filtered_signal_event(conn, event: FilteredSignalEvent) -> int:
         ;
         """,
         (
-            event.signal_id,
             event.instrument_code,
+            event.source_signal_id,
             event.signal_bar_ts,
             event.signal_time_utc,
             event.signal_time_ct,
@@ -235,24 +288,10 @@ def write_filtered_signal_event(conn, event: FilteredSignalEvent) -> int:
         ),
     )
 
-    row = conn.execute(
-        f"""
-        SELECT filtered_signal_id
-        FROM {FILTERED_SIGNAL_EVENTS_TABLE_NAME}
-        WHERE signal_id = ?
-        """,
-        (event.signal_id,),
-    ).fetchone()
 
-    if row is None or row[0] is None:
-        raise RuntimeError("FilteredSignalEvent был записан, но filtered_signal_id не найден")
-
-    return int(row[0])
-
-
-def process_pending_signal_events(*, limit: int) -> int:
-    """Что делает: читает новые signal_events и пишет allow-all filtered_signal_events.
-    Зачем нужна: это минимальная рабочая пустышка слоя фильтров."""
+def process_latest_fresh_signal_events(*, max_signal_age_seconds: int) -> int:
+    """Что делает: обрабатывает только последние свежие signal_events по инструментам.
+    Зачем нужна: live-фильтры не должны передавать дальше старые сигналы из истории."""
     initialize_state_db()
 
     conn = open_sqlite_connection(
@@ -262,22 +301,34 @@ def process_pending_signal_events(*, limit: int) -> int:
     )
 
     try:
-        pending_events = read_pending_signal_events(conn, limit=limit)
+        now_ts = int(time.time())
 
-        for signal_event in pending_events:
-            filtered_event = build_allow_all_filtered_event(signal_event)
-            write_filtered_signal_event(conn, filtered_event)
+        delete_stale_filtered_signal_latest(
+            conn,
+            max_signal_age_seconds=max_signal_age_seconds,
+            now_ts=now_ts,
+        )
+
+        latest_events = read_latest_fresh_signal_events(
+            conn,
+            max_signal_age_seconds=max_signal_age_seconds,
+            now_ts=now_ts,
+        )
+
+        for signal_event in latest_events:
+            filtered_event = build_allow_all_filtered_latest(signal_event)
+            write_filtered_signal_latest(conn, filtered_event)
 
         conn.commit()
-        return len(pending_events)
+        return len(latest_events)
 
     finally:
         conn.close()
 
 
 def cleanup_old_filtered_signal_events(*, retention_days: int) -> int:
-    """Что делает: удаляет старые filtered_signal_events.
-    Зачем нужна: результат фильтрации — такой же короткий live event-log, как и signal_events."""
+    """Что делает: удаляет старые filtered_signal_latest по created_at_ts.
+    Зачем нужна: на практике строк мало, но оставляем cleanup симметрично signal_events."""
     retention_days = int(retention_days)
 
     if retention_days <= 0:
@@ -294,12 +345,12 @@ def cleanup_old_filtered_signal_events(*, retention_days: int) -> int:
     )
 
     try:
-        initialize_filtered_signal_events_table(conn)
+        initialize_filtered_signal_latest_table(conn)
 
         changes_before = conn.total_changes
         conn.execute(
             f"""
-            DELETE FROM {FILTERED_SIGNAL_EVENTS_TABLE_NAME}
+            DELETE FROM {FILTERED_SIGNAL_LATEST_TABLE_NAME}
             WHERE created_at_ts < ?
             """,
             (cutoff_ts,),
