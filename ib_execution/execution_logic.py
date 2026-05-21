@@ -1,4 +1,4 @@
-from ib_execution.execution_models import ExecutionOrderResult, ExecutionStatus, TradeIntent
+from ib_execution.execution_models import ExecutionResult, ExecutionStatus, TradeIntent
 from ib_execution.contract_resolver import build_execution_contract
 from ib_execution.order_service import OrderService
 
@@ -42,7 +42,7 @@ async def execute_trade_intent_market(
         *,
         order_service: OrderService,
         intent: TradeIntent,
-) -> ExecutionOrderResult:
+) -> ExecutionResult:
     """Что делает: исполняет trade_intent рыночным ордером.
     Зачем нужна: текущий trade_intents ещё не хранит order_type/limit/stop, поэтому первый execution = MARKET."""
     order_action, quantity = calculate_order_delta(intent)
@@ -66,12 +66,14 @@ async def execute_trade_intent_market(
             done_timeout=60.0,
         )
 
-    return ExecutionOrderResult(
+    return ExecutionResult(
         trade_intent_id=intent.trade_intent_id,
         order_id=placement.receipt.order_id,
         order_action=order_action,
         order_quantity=quantity,
         status=ExecutionStatus.EXECUTED,
         avg_fill_price=placement.avg_fill_price,
+        total_commission=float(placement.total_commission),
+        realized_pnl=float(placement.realized_pnl),
         error_text=None,
     )

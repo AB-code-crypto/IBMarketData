@@ -12,6 +12,7 @@ class TradeDecisionAction(Enum):
 
 
 class PositionSide(Enum):
+    UNKNOWN = "UNKNOWN"
     FLAT = "FLAT"
     LONG = "LONG"
     SHORT = "SHORT"
@@ -34,8 +35,8 @@ class FilteredSignalLatest:
 
 @dataclass(frozen=True)
 class PositionSnapshot:
-    """Что делает: хранит текущую логическую позицию инструмента в trade.sqlite3.
-    Зачем нужна: минимальный ib_trader должен понимать, есть ли уже позиция и в какую сторону."""
+    """Что делает: хранит текущую позицию инструмента из trade.sqlite3.
+    Зачем нужна: ib_trader должен знать, что позиция подтверждена, а не угадывать её."""
     instrument_code: str
     side: PositionSide
     quantity: float

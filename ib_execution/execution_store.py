@@ -1,52 +1,17 @@
 import time
 
 from ib_trader.trade_store import (
-    TRADE_DB_PATH,
     TRADE_INTENTS_TABLE_NAME,
     get_trade_db_connection,
     initialize_trade_db,
 )
-from ib_execution.execution_models import ExecutionOrderResult, ExecutionStatus, TradeIntent
-
-EXECUTION_ORDERS_TABLE_NAME = "execution_orders"
-
-
-def create_execution_orders_table_sql() -> str:
-    """Что делает: возвращает SQL создания execution_orders.
-    Зачем нужна: фиксируем связь trade_intent -> IB orderId / результат исполнения."""
-    return f"""
-    CREATE TABLE IF NOT EXISTS {EXECUTION_ORDERS_TABLE_NAME} (
-        execution_order_id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-        trade_intent_id INTEGER NOT NULL UNIQUE,
-        decision_id INTEGER NOT NULL,
-        source_signal_id INTEGER NOT NULL,
-        instrument_code TEXT NOT NULL,
-
-        order_id INTEGER,
-        order_action TEXT NOT NULL,
-        order_quantity INTEGER NOT NULL,
-
-        status TEXT NOT NULL,
-        avg_fill_price REAL,
-        error_text TEXT,
-
-        created_at_ts INTEGER NOT NULL,
-        updated_at_ts INTEGER NOT NULL
-    );
-    """
+from ib_execution.execution_models import ExecutionResult, ExecutionStatus, TradeIntent
 
 
 def initialize_execution_db(conn) -> None:
-    """Что делает: создаёт таблицы trade/intents/positions + execution_orders."""
+    """Что делает: создаёт таблицы trade.sqlite3, нужные execution-сервису.
+    Зачем нужна: execution больше не создаёт отдельную execution_orders; результат пишется в trade_intents."""
     initialize_trade_db(conn)
-    conn.execute(create_execution_orders_table_sql())
-    conn.execute(
-        f"""
-        CREATE INDEX IF NOT EXISTS idx_execution_orders_status
-        ON {EXECUTION_ORDERS_TABLE_NAME}(status, updated_at_ts);
-        """
-    )
 
 
 def read_new_trade_intents(*, limit: int = 20) -> list[TradeIntent]:
@@ -103,79 +68,67 @@ def read_new_trade_intents(*, limit: int = 20) -> list[TradeIntent]:
         conn.close()
 
 
-def update_trade_intent_status(
-        conn,
-        *,
-        trade_intent_id: int,
-        status: ExecutionStatus | str,
-) -> None:
-    """Что делает: меняет status у trade_intents."""
-    status_value = status.value if isinstance(status, ExecutionStatus) else str(status)
-
-    conn.execute(
-        f"""
-        UPDATE {TRADE_INTENTS_TABLE_NAME}
-        SET status = ?
-        WHERE trade_intent_id = ?
-        """,
-        (status_value, int(trade_intent_id)),
-    )
-
-
-def write_execution_order_result(
-        conn,
-        *,
-        intent: TradeIntent,
-        result: ExecutionOrderResult,
-) -> None:
-    """Что делает: пишет/обновляет результат исполнения trade_intent."""
+def mark_trade_intent_sending(conn, *, trade_intent_id: int) -> None:
+    """Что делает: переводит trade_intent в SENDING.
+    Зачем нужна: при рестарте видно, что intent уже был взят execution-сервисом."""
     now_ts = int(time.time())
 
     conn.execute(
         f"""
-        INSERT INTO {EXECUTION_ORDERS_TABLE_NAME} (
-            trade_intent_id,
-            decision_id,
-            source_signal_id,
-            instrument_code,
-
-            order_id,
-            order_action,
-            order_quantity,
-
-            status,
-            avg_fill_price,
-            error_text,
-
-            created_at_ts,
-            updated_at_ts
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-
-        ON CONFLICT(trade_intent_id) DO UPDATE SET
-            order_id = excluded.order_id,
-            order_action = excluded.order_action,
-            order_quantity = excluded.order_quantity,
-
-            status = excluded.status,
-            avg_fill_price = excluded.avg_fill_price,
-            error_text = excluded.error_text,
-
-            updated_at_ts = excluded.updated_at_ts
-        ;
+        UPDATE {TRADE_INTENTS_TABLE_NAME}
+        SET
+            status = ?,
+            sent_at_ts = COALESCE(sent_at_ts, ?),
+            updated_at_ts = ?
+        WHERE trade_intent_id = ?
         """,
         (
-            int(intent.trade_intent_id),
-            int(intent.decision_id),
-            int(intent.source_signal_id),
-            intent.instrument_code,
+            ExecutionStatus.SENDING.value,
+            now_ts,
+            now_ts,
+            int(trade_intent_id),
+        ),
+    )
+
+
+def write_trade_intent_execution_result(
+        conn,
+        *,
+        result: ExecutionResult,
+) -> None:
+    """Что делает: пишет результат исполнения прямо в trade_intents.
+    Зачем нужна: для MVP trade_intents одновременно очередь исполнения и история фактических попыток."""
+    now_ts = int(time.time())
+
+    conn.execute(
+        f"""
+        UPDATE {TRADE_INTENTS_TABLE_NAME}
+        SET
+            status = ?,
+
+            order_id = ?,
+            order_action = ?,
+            order_quantity = ?,
+            avg_fill_price = ?,
+            total_commission = ?,
+            realized_pnl = ?,
+            error_text = ?,
+
+            finished_at_ts = ?,
+            updated_at_ts = ?
+        WHERE trade_intent_id = ?
+        """,
+        (
+            result.status.value,
             None if result.order_id is None else int(result.order_id),
             result.order_action,
-            int(result.order_quantity),
-            result.status.value,
+            None if result.order_quantity is None else int(result.order_quantity),
             result.avg_fill_price,
+            result.total_commission,
+            result.realized_pnl,
             result.error_text,
             now_ts,
             now_ts,
+            int(result.trade_intent_id),
         ),
     )

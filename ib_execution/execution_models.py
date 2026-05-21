@@ -5,7 +5,6 @@ from enum import Enum
 class ExecutionStatus(Enum):
     NEW = "NEW"
     SENDING = "SENDING"
-    ACCEPTED = "ACCEPTED"
     EXECUTED = "EXECUTED"
     FAILED = "FAILED"
 
@@ -29,11 +28,13 @@ class TradeIntent:
 
 
 @dataclass(frozen=True)
-class ExecutionOrderResult:
+class ExecutionResult:
     trade_intent_id: int
     order_id: int | None
-    order_action: str
-    order_quantity: int
+    order_action: str | None
+    order_quantity: int | None
     status: ExecutionStatus
     avg_fill_price: float | None
+    total_commission: float | None
+    realized_pnl: float | None
     error_text: str | None

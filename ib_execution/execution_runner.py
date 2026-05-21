@@ -3,13 +3,13 @@ import traceback
 
 from core.logger import get_logger, log_info, log_warning, setup_logging
 from ib_execution.execution_logic import execute_trade_intent_market
-from ib_execution.execution_models import ExecutionOrderResult, ExecutionStatus
+from ib_execution.execution_models import ExecutionResult, ExecutionStatus
 from ib_execution.execution_store import (
     get_trade_db_connection,
     initialize_execution_db,
+    mark_trade_intent_sending,
     read_new_trade_intents,
-    update_trade_intent_status,
-    write_execution_order_result,
+    write_trade_intent_execution_result,
 )
 from ib_execution.order_service import OrderService
 
@@ -35,10 +35,10 @@ async def run_execution_loop(order_service: OrderService) -> None:
             conn = get_trade_db_connection()
             try:
                 initialize_execution_db(conn)
-                update_trade_intent_status(
+
+                mark_trade_intent_sending(
                     conn,
                     trade_intent_id=intent.trade_intent_id,
-                    status=ExecutionStatus.SENDING,
                 )
                 conn.commit()
 
@@ -47,15 +47,9 @@ async def run_execution_loop(order_service: OrderService) -> None:
                     intent=intent,
                 )
 
-                write_execution_order_result(
+                write_trade_intent_execution_result(
                     conn,
-                    intent=intent,
                     result=result,
-                )
-                update_trade_intent_status(
-                    conn,
-                    trade_intent_id=intent.trade_intent_id,
-                    status=result.status,
                 )
                 conn.commit()
 
@@ -65,7 +59,9 @@ async def run_execution_loop(order_service: OrderService) -> None:
                         f"{intent.instrument_code}: executed trade_intent={intent.trade_intent_id}, "
                         f"action={intent.action}, order_id={result.order_id}, "
                         f"order_action={result.order_action}, qty={result.order_quantity}, "
-                        f"avg_fill={result.avg_fill_price}"
+                        f"avg_fill={result.avg_fill_price}, "
+                        f"realized_pnl={result.realized_pnl}, "
+                        f"commission={result.total_commission}"
                     ),
                     to_telegram=False,
                 )
@@ -74,24 +70,20 @@ async def run_execution_loop(order_service: OrderService) -> None:
                 error_text = f"{type(exc).__name__}: {exc}"
 
                 try:
-                    failure_result = ExecutionOrderResult(
+                    failure_result = ExecutionResult(
                         trade_intent_id=intent.trade_intent_id,
                         order_id=None,
-                        order_action="-",
-                        order_quantity=0,
+                        order_action=None,
+                        order_quantity=None,
                         status=ExecutionStatus.FAILED,
                         avg_fill_price=None,
+                        total_commission=None,
+                        realized_pnl=None,
                         error_text=error_text,
                     )
-                    write_execution_order_result(
+                    write_trade_intent_execution_result(
                         conn,
-                        intent=intent,
                         result=failure_result,
-                    )
-                    update_trade_intent_status(
-                        conn,
-                        trade_intent_id=intent.trade_intent_id,
-                        status=ExecutionStatus.FAILED,
                     )
                     conn.commit()
                 finally:

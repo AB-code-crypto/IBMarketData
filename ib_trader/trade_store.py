@@ -24,7 +24,7 @@ TRADE_INTENTS_TABLE_NAME = "trade_intents"
 
 def get_trade_db_connection():
     """Что делает: открывает trade.sqlite3.
-    Зачем нужна: торговые решения и логическая позиция живут отдельно от state DB."""
+    Зачем нужна: торговые решения, intents и позиции живут отдельно от state DB."""
     return open_sqlite_connection(
         str(TRADE_DB_PATH),
         create_parent_dir=True,
@@ -34,7 +34,7 @@ def get_trade_db_connection():
 
 def create_positions_latest_table_sql() -> str:
     """Что делает: возвращает SQL создания positions_latest.
-    Зачем нужна: минимальный ib_trader должен читать текущее наличие позиции из trade.sqlite3."""
+    Зачем нужна: ib_trader читает оттуда только подтверждённую текущую позицию."""
     return f"""
     CREATE TABLE IF NOT EXISTS {POSITIONS_LATEST_TABLE_NAME} (
         instrument_code TEXT PRIMARY KEY,
@@ -88,7 +88,7 @@ def create_trade_decisions_table_sql() -> str:
 
 def create_trade_intents_table_sql() -> str:
     """Что делает: возвращает SQL создания trade_intents.
-    Зачем нужна: execution-слой будет читать только реальные торговые действия, а не NO_ACTION."""
+    Зачем нужна: trade_intents — это очередь исполнения и одновременно минимальная история исполнений."""
     return f"""
     CREATE TABLE IF NOT EXISTS {TRADE_INTENTS_TABLE_NAME} (
         trade_intent_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -105,14 +105,26 @@ def create_trade_intents_table_sql() -> str:
         position_before_qty REAL NOT NULL,
 
         status TEXT NOT NULL,
-        created_at_ts INTEGER NOT NULL
+
+        order_id INTEGER,
+        order_action TEXT,
+        order_quantity INTEGER,
+        avg_fill_price REAL,
+        total_commission REAL,
+        realized_pnl REAL,
+        error_text TEXT,
+
+        created_at_ts INTEGER NOT NULL,
+        updated_at_ts INTEGER NOT NULL,
+        sent_at_ts INTEGER,
+        finished_at_ts INTEGER
     );
     """
 
 
 def initialize_trade_db(conn) -> None:
     """Что делает: создаёт минимальные таблицы trade.sqlite3.
-    Зачем нужна: ib_trader может стартовать с чистой БД без отдельной миграции."""
+    Зачем нужна: trader/execution могут стартовать с чистой trade DB."""
     conn.execute(create_positions_latest_table_sql())
     conn.execute(create_trade_decisions_table_sql())
     conn.execute(create_trade_intents_table_sql())
@@ -127,6 +139,12 @@ def initialize_trade_db(conn) -> None:
         f"""
         CREATE INDEX IF NOT EXISTS idx_trade_intents_status
         ON {TRADE_INTENTS_TABLE_NAME}(status, created_at_ts);
+        """
+    )
+    conn.execute(
+        f"""
+        CREATE INDEX IF NOT EXISTS idx_trade_intents_instrument_time
+        ON {TRADE_INTENTS_TABLE_NAME}(instrument_code, created_at_ts);
         """
     )
 
@@ -216,8 +234,8 @@ def has_decision_for_signal(
 
 
 def read_position_snapshot(conn, *, instrument_code: str) -> PositionSnapshot:
-    """Что делает: читает текущую логическую позицию инструмента.
-    Зачем нужна: решение OPEN/NO_ACTION/REVERSE зависит от текущей стороны позиции."""
+    """Что делает: читает текущую подтверждённую позицию инструмента.
+    Зачем нужна: отсутствие строки означает UNKNOWN, а не FLAT."""
     initialize_trade_db(conn)
 
     row = conn.execute(
@@ -232,12 +250,19 @@ def read_position_snapshot(conn, *, instrument_code: str) -> PositionSnapshot:
     if row is None:
         return PositionSnapshot(
             instrument_code=str(instrument_code),
-            side=PositionSide.FLAT,
+            side=PositionSide.UNKNOWN,
             quantity=0.0,
         )
 
     quantity = float(row[1])
-    side = PositionSide(str(row[0]))
+    side = PositionSide(str(row[0]).upper())
+
+    if side == PositionSide.UNKNOWN:
+        return PositionSnapshot(
+            instrument_code=str(instrument_code),
+            side=PositionSide.UNKNOWN,
+            quantity=0.0,
+        )
 
     if quantity <= 0.0:
         return PositionSnapshot(
@@ -265,7 +290,13 @@ def decide_trade_action(
     if signal_direction not in {"LONG", "SHORT"}:
         raise ValueError(f"Неизвестное направление сигнала: {signal.direction!r}")
 
-    if position.side == PositionSide.FLAT or position.quantity <= 0.0:
+    if position.side == PositionSide.UNKNOWN:
+        action = TradeDecisionAction.NO_ACTION
+        reason = "position_unknown"
+        after_side = PositionSide.UNKNOWN
+        after_qty = 0.0
+
+    elif position.side == PositionSide.FLAT or position.quantity <= 0.0:
         action = TradeDecisionAction.OPEN_POSITION
         reason = "flat_position_open_by_signal"
         after_side = PositionSide(signal_direction)
@@ -380,9 +411,11 @@ def write_trade_decision(conn, decision: TradeDecision) -> int:
 
 def write_trade_intent_if_needed(conn, *, decision_id: int, decision: TradeDecision) -> None:
     """Что делает: пишет trade_intent для action != NO_ACTION.
-    Зачем нужна: execution-слой должен читать только действия, которые требуют исполнения."""
+    Зачем нужна: execution-слой читает только действия, которые требуют исполнения."""
     if decision.action == TradeDecisionAction.NO_ACTION:
         return
+
+    now_ts = int(time.time())
 
     conn.execute(
         f"""
@@ -399,9 +432,11 @@ def write_trade_intent_if_needed(conn, *, decision_id: int, decision: TradeDecis
             position_before_qty,
 
             status,
-            created_at_ts
+
+            created_at_ts,
+            updated_at_ts
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
         ON CONFLICT(decision_id) DO NOTHING
         """,
@@ -415,9 +450,11 @@ def write_trade_intent_if_needed(conn, *, decision_id: int, decision: TradeDecis
             decision.position_before_side.value,
             float(decision.position_before_qty),
             "NEW",
-            int(time.time()),
+            now_ts,
+            now_ts,
         ),
     )
+
 
 def process_filtered_signals_once(*, max_signal_age_seconds: int) -> list[TradeDecision]:
     """Что делает: один раз обрабатывает свежие filtered_signal_latest.
@@ -460,6 +497,7 @@ def process_filtered_signals_once(*, max_signal_age_seconds: int) -> list[TradeD
                 decision_id=decision_id,
                 decision=decision,
             )
+
             decisions.append(decision)
 
         conn.commit()
