@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-import json
 import time
 
 from core.sqlite_utils import open_sqlite_connection
@@ -27,8 +26,8 @@ class LatestSignalEvent:
 
 @dataclass(frozen=True)
 class FilteredSignalLatest:
-    """Что делает: хранит последний результат фильтрации по одному инструменту.
-    Зачем нужна: следующий слой видит актуальный разрешённый/запрещённый сигнал без дубляжа signal_events."""
+    """Что делает: хранит последний разрешённый сигнал по одному инструменту.
+    Зачем нужна: следующий слой видит только актуальный сигнал, который можно рассматривать для открытия сделки."""
     instrument_code: str
     source_signal_id: int
 
@@ -39,15 +38,10 @@ class FilteredSignalLatest:
 
     direction: str
 
-    allowed: bool
-    rejected_by: str | None
-    reject_reason: str | None
-    filter_details_json: str
-
 
 def create_filtered_signal_latest_table_sql() -> str:
     """Что делает: возвращает SQL создания filtered_signal_latest.
-    Зачем нужна: в live-режиме следующему слою нужен только последний результат фильтрации по инструменту."""
+    Зачем нужна: таблица хранит только последний разрешённый свежий сигнал по инструменту."""
     return f"""
     CREATE TABLE IF NOT EXISTS {FILTERED_SIGNAL_LATEST_TABLE_NAME} (
         instrument_code TEXT PRIMARY KEY,
@@ -59,12 +53,7 @@ def create_filtered_signal_latest_table_sql() -> str:
         signal_time_ct TEXT,
         signal_time_msk TEXT NOT NULL,
 
-        direction TEXT NOT NULL,
-
-        allowed INTEGER NOT NULL,
-        rejected_by TEXT,
-        reject_reason TEXT,
-        filter_details_json TEXT NOT NULL
+        direction TEXT NOT NULL
     );
     """
 
@@ -81,8 +70,8 @@ def initialize_filtered_signal_latest_table(conn) -> None:
     )
     conn.execute(
         f"""
-        CREATE INDEX IF NOT EXISTS idx_filtered_signal_latest_allowed_ts
-        ON {FILTERED_SIGNAL_LATEST_TABLE_NAME}(allowed, signal_bar_ts);
+        CREATE INDEX IF NOT EXISTS idx_filtered_signal_latest_signal_bar_ts
+        ON {FILTERED_SIGNAL_LATEST_TABLE_NAME}(signal_bar_ts);
         """
     )
 
@@ -94,7 +83,7 @@ def delete_stale_filtered_signal_latest(
         now_ts: int | None = None,
 ) -> int:
     """Что делает: удаляет из filtered_signal_latest сигналы старше max_signal_age_seconds.
-    Зачем нужна: следующий слой не должен открыть сделку по старому allowed-сигналу."""
+    Зачем нужна: следующий слой не должен открыть сделку по старому сигналу."""
     initialize_filtered_signal_latest_table(conn)
 
     max_signal_age_seconds = int(max_signal_age_seconds)
@@ -111,6 +100,23 @@ def delete_stale_filtered_signal_latest(
         WHERE signal_bar_ts < ?
         """,
         (min_signal_bar_ts,),
+    )
+
+    return int(conn.total_changes - changes_before)
+
+
+def delete_filtered_signal_latest_for_instrument(conn, *, instrument_code: str) -> int:
+    """Что делает: удаляет текущий разрешённый сигнал инструмента.
+    Зачем нужна: когда будущий фильтр запретит свежий signal_event, строка не должна оставаться разрешённой."""
+    initialize_filtered_signal_latest_table(conn)
+
+    changes_before = conn.total_changes
+    conn.execute(
+        f"""
+        DELETE FROM {FILTERED_SIGNAL_LATEST_TABLE_NAME}
+        WHERE instrument_code = ?
+        """,
+        (str(instrument_code),),
     )
 
     return int(conn.total_changes - changes_before)
@@ -179,14 +185,15 @@ def read_latest_fresh_signal_events(
     ]
 
 
-def build_allow_all_filtered_latest(signal_event: LatestSignalEvent) -> FilteredSignalLatest:
-    """Что делает: временно разрешает последний свежий сигнал инструмента.
-    Зачем нужна: слой фильтров уже работает как сервис, хотя реальные IBP-фильтры добавим позже."""
-    details = {
-        "mode": "ALLOW_ALL_STUB",
-        "filters": [],
-    }
+def is_signal_allowed(signal_event: LatestSignalEvent) -> bool:
+    """Что делает: временно разрешает любой свежий сигнал.
+    Зачем нужна: это пустышка слоя фильтров; реальные IBP-фильтры добавим позже."""
+    return True
 
+
+def build_filtered_signal_latest(signal_event: LatestSignalEvent) -> FilteredSignalLatest:
+    """Что делает: собирает запись последнего разрешённого сигнала.
+    Зачем нужна: в filtered_signal_latest пишем только разрешённые фильтрами сигналы."""
     return FilteredSignalLatest(
         instrument_code=signal_event.instrument_code,
         source_signal_id=signal_event.signal_id,
@@ -195,20 +202,11 @@ def build_allow_all_filtered_latest(signal_event: LatestSignalEvent) -> Filtered
         signal_time_ct=signal_event.signal_time_ct,
         signal_time_msk=signal_event.signal_time_msk,
         direction=signal_event.direction,
-        allowed=True,
-        rejected_by=None,
-        reject_reason=None,
-        filter_details_json=json.dumps(
-            details,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ),
     )
 
 
 def write_filtered_signal_latest(conn, event: FilteredSignalLatest) -> None:
-    """Что делает: перезаписывает последний результат фильтрации по инструменту.
+    """Что делает: перезаписывает последний разрешённый сигнал по инструменту.
     Зачем нужна: дальше по цепочке нужен только актуальный filtered-сигнал, а не вся история."""
     initialize_filtered_signal_latest_table(conn)
 
@@ -223,14 +221,9 @@ def write_filtered_signal_latest(conn, event: FilteredSignalLatest) -> None:
             signal_time_ct,
             signal_time_msk,
 
-            direction,
-
-            allowed,
-            rejected_by,
-            reject_reason,
-            filter_details_json
+            direction
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
 
         ON CONFLICT(instrument_code) DO UPDATE SET
             source_signal_id = excluded.source_signal_id,
@@ -240,12 +233,7 @@ def write_filtered_signal_latest(conn, event: FilteredSignalLatest) -> None:
             signal_time_ct = excluded.signal_time_ct,
             signal_time_msk = excluded.signal_time_msk,
 
-            direction = excluded.direction,
-
-            allowed = excluded.allowed,
-            rejected_by = excluded.rejected_by,
-            reject_reason = excluded.reject_reason,
-            filter_details_json = excluded.filter_details_json
+            direction = excluded.direction
         ;
         """,
         (
@@ -256,10 +244,6 @@ def write_filtered_signal_latest(conn, event: FilteredSignalLatest) -> None:
             event.signal_time_ct,
             event.signal_time_msk,
             event.direction,
-            1 if event.allowed else 0,
-            event.rejected_by,
-            event.reject_reason,
-            event.filter_details_json,
         ),
     )
 
@@ -290,12 +274,22 @@ def process_latest_fresh_signal_events(*, max_signal_age_seconds: int) -> int:
             now_ts=now_ts,
         )
 
+        processed_count = 0
+
         for signal_event in latest_events:
-            filtered_event = build_allow_all_filtered_latest(signal_event)
-            write_filtered_signal_latest(conn, filtered_event)
+            if is_signal_allowed(signal_event):
+                filtered_event = build_filtered_signal_latest(signal_event)
+                write_filtered_signal_latest(conn, filtered_event)
+            else:
+                delete_filtered_signal_latest_for_instrument(
+                    conn,
+                    instrument_code=signal_event.instrument_code,
+                )
+
+            processed_count += 1
 
         conn.commit()
-        return len(latest_events)
+        return processed_count
 
     finally:
         conn.close()
