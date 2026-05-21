@@ -12,8 +12,6 @@ from core.logger import (
     wait_telegram_logging,
 )
 from core.telegram_sender import TelegramSender
-from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG
-from ib_signal_filters.filter_event_store import cleanup_old_filtered_signal_events
 from ib_signal_filters.filter_runner import run_signal_filters_loop
 
 setup_logging()
@@ -53,16 +51,6 @@ async def main() -> None:
             "\n===========\nСтарт signal-filters сервиса.\n"
             "mode=ALLOW_ALL_STUB\n"
             "===========\n"
-        )
-
-        deleted_filtered_events = cleanup_old_filtered_signal_events(
-            retention_days=DEFAULT_SIGNAL_CONFIG.signal_event_retention_days,
-        )
-        log_info(
-            logger,
-            f"filtered_signal_events cleanup: deleted={deleted_filtered_events}, "
-            f"retention_days={DEFAULT_SIGNAL_CONFIG.signal_event_retention_days}",
-            to_telegram=False,
         )
 
         await run_signal_filters_loop()
