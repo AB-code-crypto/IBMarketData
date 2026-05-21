@@ -66,7 +66,7 @@ def create_filtered_signal_latest_table_sql() -> str:
         reject_reason TEXT,
         filter_details_json TEXT NOT NULL
     );
-    ""
+    """
 
 
 def initialize_filtered_signal_latest_table(conn) -> None:
