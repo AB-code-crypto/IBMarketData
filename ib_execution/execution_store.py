@@ -3,7 +3,6 @@ import time
 from ib_trader.trade_store import (
     TRADE_DB_PATH,
     TRADE_INTENTS_TABLE_NAME,
-    POSITIONS_LATEST_TABLE_NAME,
     get_trade_db_connection,
     initialize_trade_db,
 )
@@ -178,52 +177,5 @@ def write_execution_order_result(
             result.error_text,
             now_ts,
             now_ts,
-        ),
-    )
-
-
-def update_positions_latest_after_execution(
-        conn,
-        *,
-        intent: TradeIntent,
-) -> None:
-    """Что делает: обновляет positions_latest после успешного исполнения.
-    Зачем нужна: боевая positions_latest должна отражать исполненную позицию, а не только решение."""
-    target_side = str(intent.target_side).upper()
-    target_qty = float(intent.target_qty)
-
-    if target_side == "FLAT" or target_qty <= 0.0:
-        side = "FLAT"
-        quantity = 0.0
-    else:
-        side = target_side
-        quantity = target_qty
-
-    conn.execute(
-        f"""
-        INSERT INTO {POSITIONS_LATEST_TABLE_NAME} (
-            instrument_code,
-            side,
-            quantity,
-            updated_at_ts,
-            last_decision_id,
-            last_source_signal_id
-        )
-        VALUES (?, ?, ?, ?, ?, ?)
-
-        ON CONFLICT(instrument_code) DO UPDATE SET
-            side = excluded.side,
-            quantity = excluded.quantity,
-            updated_at_ts = excluded.updated_at_ts,
-            last_decision_id = excluded.last_decision_id,
-            last_source_signal_id = excluded.last_source_signal_id
-        """,
-        (
-            intent.instrument_code,
-            side,
-            quantity,
-            int(time.time()),
-            int(intent.decision_id),
-            int(intent.source_signal_id),
         ),
     )

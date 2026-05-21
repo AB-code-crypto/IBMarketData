@@ -419,43 +419,6 @@ def write_trade_intent_if_needed(conn, *, decision_id: int, decision: TradeDecis
         ),
     )
 
-
-def update_position_latest_if_needed(conn, *, decision_id: int, decision: TradeDecision) -> None:
-    """Что делает: обновляет простую логическую позицию после решения.
-    Зачем нужна: пока нет execution/position-manager, ib_trader сам хранит текущее наличие позиции."""
-    if decision.action == TradeDecisionAction.NO_ACTION:
-        return
-
-    conn.execute(
-        f"""
-        INSERT INTO {POSITIONS_LATEST_TABLE_NAME} (
-            instrument_code,
-            side,
-            quantity,
-            updated_at_ts,
-            last_decision_id,
-            last_source_signal_id
-        )
-        VALUES (?, ?, ?, ?, ?, ?)
-
-        ON CONFLICT(instrument_code) DO UPDATE SET
-            side = excluded.side,
-            quantity = excluded.quantity,
-            updated_at_ts = excluded.updated_at_ts,
-            last_decision_id = excluded.last_decision_id,
-            last_source_signal_id = excluded.last_source_signal_id
-        """,
-        (
-            decision.instrument_code,
-            decision.position_after_side.value,
-            float(decision.position_after_qty),
-            int(time.time()),
-            int(decision_id),
-            int(decision.source_signal_id),
-        ),
-    )
-
-
 def process_filtered_signals_once(*, max_signal_age_seconds: int) -> list[TradeDecision]:
     """Что делает: один раз обрабатывает свежие filtered_signal_latest.
     Зачем нужна: runner вызывает эту функцию циклом, а сама обработка остаётся синхронной и простой."""
@@ -497,12 +460,6 @@ def process_filtered_signals_once(*, max_signal_age_seconds: int) -> list[TradeD
                 decision_id=decision_id,
                 decision=decision,
             )
-            update_position_latest_if_needed(
-                conn,
-                decision_id=decision_id,
-                decision=decision,
-            )
-
             decisions.append(decision)
 
         conn.commit()

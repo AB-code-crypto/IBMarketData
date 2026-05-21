@@ -8,7 +8,6 @@ from ib_execution.execution_store import (
     get_trade_db_connection,
     initialize_execution_db,
     read_new_trade_intents,
-    update_positions_latest_after_execution,
     update_trade_intent_status,
     write_execution_order_result,
 )
@@ -57,10 +56,6 @@ async def run_execution_loop(order_service: OrderService) -> None:
                     conn,
                     trade_intent_id=intent.trade_intent_id,
                     status=result.status,
-                )
-                update_positions_latest_after_execution(
-                    conn,
-                    intent=intent,
                 )
                 conn.commit()
 
