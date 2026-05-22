@@ -4,7 +4,7 @@ from typing import Any
 
 from ib_trader.rules.base import TraderRuleContext, TraderRuleState
 from ib_trader.rules.registry import RULE_REGISTRY
-from ib_trader.trader_rules_config import ACTIVE_RULES
+from ib_trader.trader_rules_config import ACTIVE_RULES, REQUIRE_MARKET_FEATURES
 
 
 @dataclass(frozen=True)
@@ -29,7 +29,10 @@ def evaluate_trader_rules(context: TraderRuleContext) -> TraderRuleEvaluation:
     Зачем нужна: правила можно добавлять/отключать через trader_rules_config.py без переписывания trade_store."""
     state = TraderRuleState()
 
-    if context.market_features.regime is None or context.market_features.ma_zone is None:
+    if (
+            REQUIRE_MARKET_FEATURES
+            and (context.market_features.regime is None or context.market_features.ma_zone is None)
+    ):
         state.reject(
             rule_id="market_features_available",
             reason="market_features_unknown",
