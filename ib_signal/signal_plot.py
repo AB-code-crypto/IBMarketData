@@ -123,15 +123,6 @@ def format_plot_regression_value(value: float) -> str:
     Зачем нужна: картинка должна быть читаемой, а расчёты остаются без округления."""
     return f"{value:.2f}"
 
-
-def format_plot_optional_value(value: float | None) -> str:
-    """Что делает: форматирует optional profile-значение для PNG.
-    Зачем нужна: если profile ещё не рассчитан, картинка должна выводить n/a, а не падать."""
-    if value is None:
-        return "n/a"
-    return f"{value:.2f}"
-
-
 def format_potential_time_for_plot(value: str) -> str:
     """Что делает: сокращает CT timestamp до времени для PNG.
     Зачем нужна: полный timestamp слишком длинный для правой панели."""
@@ -141,7 +132,6 @@ def format_potential_time_for_plot(value: str) -> str:
         return text[11:19]
 
     return text
-
 
 
 def get_regime_color(regime_value: int | None) -> str:
@@ -196,7 +186,6 @@ def draw_regime_panel(
     ax_regime.spines["right"].set_visible(False)
     ax_regime.spines["left"].set_visible(False)
     ax_regime.tick_params(axis="x", labelsize=9)
-
 
 
 def convert_optional_float_list_to_array(values: list[float | None]) -> np.ndarray:
@@ -363,14 +352,6 @@ def save_signal_candidate_plot(
         instrument_code=instrument_code,
         signal_window=signal_window,
         expected_points=current_values.size,
-    )
-    print(
-        f"[signal_plot] regime debug: "
-        f"total={len(current_regime_values)}, "
-        f"filled={sum(value is not None for value in current_regime_values)}, "
-        f"plus={sum(value == 1 for value in current_regime_values)}, "
-        f"flat={sum(value == 0 for value in current_regime_values)}, "
-        f"minus={sum(value == -1 for value in current_regime_values)}"
     )
     current_regression = build_linear_regression(current_values)
     current_regression_direction = classify_regression_direction(
