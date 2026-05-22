@@ -219,6 +219,55 @@ def draw_regime_strip(
     ax.set_ylim(strip_bottom - strip_gap * 0.35, y_max)
 
 
+
+def get_regime_color(regime_value: int | None) -> str:
+    """Что делает: возвращает цвет режима для нижней полосы на PNG.
+    Зачем нужна: текущий regime должен читаться визуально по цвету."""
+    return REGIME_COLORS.get(regime_value, REGIME_COLORS[None])
+
+
+def draw_regime_panel(
+        ax_regime,
+        *,
+        x_values: np.ndarray,
+        regime_values: list[int | None],
+        bar_size_seconds: int,
+) -> None:
+    """Что делает: рисует снизу отдельную гистограмму режима по всем барам текущего окна.
+    Зачем нужна: пользователь хочет видеть режим визуально под всей шкалой времени."""
+    if x_values.size == 0 or not regime_values:
+        ax_regime.axis("off")
+        return
+
+    regime_values = list(regime_values)
+
+    if len(regime_values) > x_values.size:
+        regime_values = regime_values[-x_values.size:]
+    elif len(regime_values) < x_values.size:
+        regime_values = [None] * (x_values.size - len(regime_values)) + regime_values
+
+    ax_regime.bar(
+        x_values,
+        [1.0] * len(regime_values),
+        width=bar_size_seconds / 60.0 * 0.92,
+        bottom=0.0,
+        align="center",
+        color=[get_regime_color(value) for value in regime_values],
+        edgecolor="none",
+        alpha=0.95,
+        zorder=2,
+    )
+
+    ax_regime.axvline(0.0, linestyle="--", linewidth=1.0, color="black", alpha=0.8)
+    ax_regime.set_ylim(0.0, 1.0)
+    ax_regime.set_yticks([])
+    ax_regime.grid(False)
+    ax_regime.spines["top"].set_visible(False)
+    ax_regime.spines["right"].set_visible(False)
+    ax_regime.spines["left"].set_visible(False)
+    ax_regime.tick_params(axis="x", labelsize=9)
+
+
 def draw_info_section(
         ax_info,
         *,
@@ -327,11 +376,6 @@ def save_signal_candidate_plot(
         signal_window=signal_window,
         expected_points=current_values.size,
     )
-    current_regime_value = next(
-        (value for value in reversed(current_regime_values) if value is not None),
-        None,
-    )
-
     current_regression = build_linear_regression(current_values)
     current_regression_direction = classify_regression_direction(
         current_regression,
@@ -374,14 +418,18 @@ def save_signal_candidate_plot(
 
     fig = plt.figure(figsize=(18, 9))
     grid = fig.add_gridspec(
-        nrows=1,
+        nrows=2,
         ncols=2,
         width_ratios=[3, 1],
+        height_ratios=[16, 1.15],
+        hspace=0.06,
         wspace=0.04,
     )
     ax = fig.add_subplot(grid[0, 0])
-    ax_info = fig.add_subplot(grid[0, 1])
+    ax_regime = fig.add_subplot(grid[1, 0], sharex=ax)
+    ax_info = fig.add_subplot(grid[:, 1])
     ax_info.axis("off")
+    ax.tick_params(axis="x", labelbottom=False)
 
     shown_candidates: list[tuple[int, CandidateWindow, float, str, float | None, object, float, float]] = []
 
@@ -699,13 +747,6 @@ def save_signal_candidate_plot(
         ),
     ]
 
-    regime_rows: list[tuple[str, str | None]] = [
-        (
-            f"current      : {format_regime_for_plot(current_regime_value)}",
-            get_regime_color(current_regime_value),
-        ),
-    ]
-
     candidate_rows: list[tuple[str, str | None]] = []
     if shown_candidates:
         for rank, candidate, pearson_value, candidate_color, candidate_score, candidate_path_features, candidate_label_x, candidate_label_y in shown_candidates:
@@ -767,13 +808,6 @@ def save_signal_candidate_plot(
         ax_info,
         title="VOLATILITY (pt)",
         rows=volatility_rows,
-        y=y,
-        line_height=line_height,
-    )
-    y = draw_info_section(
-        ax_info,
-        title="REGIME",
-        rows=regime_rows,
         y=y,
         line_height=line_height,
     )

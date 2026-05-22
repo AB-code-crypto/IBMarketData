@@ -51,7 +51,6 @@ def read_signal_regime_values(
             ).fetchall()
         except sqlite3.Error:
             return [None] * expected_points
-
     finally:
         conn.close()
 
