@@ -19,11 +19,11 @@ class PositionSide(Enum):
 
 
 @dataclass(frozen=True)
-class FilteredSignalLatest:
-    """Что делает: хранит свежий разрешённый сигнал из filtered_signal_latest.
-    Зачем нужна: ib_trader принимает решения только по уже прошедшим фильтры сигналам."""
-    instrument_code: str
+class TraderSignalEvent:
+    """Что делает: хранит свежий actionable-сигнал из signal_events.
+    Зачем нужна: ib_trader теперь принимает решения напрямую по выходу ib_signal, без ib_signal_filters."""
     source_signal_id: int
+    instrument_code: str
 
     signal_bar_ts: int
     signal_time_utc: str
@@ -31,6 +31,26 @@ class FilteredSignalLatest:
     signal_time_msk: str
 
     direction: str
+    entry_price: float
+
+    best_pearson: float
+    candidate_score_best: float | None
+
+    potential_end_delta_points: float
+    potential_max_profit_points: float
+    potential_max_drawdown_points: float
+    potential_used: int
+
+
+@dataclass(frozen=True)
+class MarketFeatureSnapshot:
+    """Что делает: хранит job-data признаки для бара сигнала.
+    Зачем нужна: ib_trader принимает решение с учётом режима и зоны цены."""
+    instrument_code: str
+    signal_bar_ts: int
+    feature_bar_ts: int | None
+    regime: int | None
+    ma_zone: int | None
 
 
 @dataclass(frozen=True)
@@ -44,7 +64,7 @@ class PositionSnapshot:
 
 @dataclass(frozen=True)
 class TradeDecision:
-    """Что делает: хранит итог решения ib_trader по одному filtered-сигналу.
+    """Что делает: хранит итог решения ib_trader по одному signal_event.
     Зачем нужна: execution-слой должен получать уже не сигнал, а конкретное торговое намерение/отказ."""
     source_signal_id: int
     instrument_code: str
@@ -55,6 +75,18 @@ class TradeDecision:
     signal_time_msk: str
 
     signal_direction: str
+    entry_price: float
+
+    best_pearson: float
+    candidate_score_best: float | None
+
+    potential_end_delta_points: float
+    potential_max_profit_points: float
+    potential_max_drawdown_points: float
+    potential_used: int
+
+    regime: int | None
+    ma_zone: int | None
 
     action: TradeDecisionAction
     reason: str

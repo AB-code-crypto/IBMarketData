@@ -43,13 +43,13 @@ async def shutdown_app(shutdown_message: str) -> None:
 
 async def main() -> None:
     """Что делает: запускает простой ib_trader.
-    Зачем нужна: сервис принимает решения по свежим filtered-сигналам и пишет их в trade.sqlite3."""
+    Зачем нужна: сервис принимает решения по свежим signal_events, job-features и позиции."""
     shutdown_message = "\n===========\nСтоп ib_trader сервиса.\n===========\n"
 
     try:
         await send_service_message(
             "\n===========\nСтарт ib_trader сервиса.\n"
-            "mode=SIMPLE_DECISION_STUB\n"
+            "mode=SIGNAL_EVENTS_DECISION\n"
             "===========\n"
         )
 
