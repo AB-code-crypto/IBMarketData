@@ -10,6 +10,7 @@ from ib_job_data.feature_db_sql import (
     insert_new_mid_price_from_attached_price_db_sql,
     quote_identifier,
 )
+from ib_job_data.ma_zone_features import update_ma_zone_features
 from ib_job_data.profile_features import refresh_profile_features_if_needed
 from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 from ib_job_data.regime_features import update_regime_features
@@ -100,6 +101,10 @@ def append_new_mid_price_rows(instrument_code: str) -> int:
         update_regime_features(
             conn,
             instrument_row=instrument_row,
+        )
+
+        update_ma_zone_features(
+            conn,
         )
 
         refresh_profile_features_if_needed(
