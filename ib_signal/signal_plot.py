@@ -411,12 +411,13 @@ def save_signal_candidate_plot(
     shown_candidates: list[tuple[int, CandidateWindow, float, str, float | None, object, float, float]] = []
 
     for sma_period_bars, sma_values in current_sma_lines.items():
+        line_alpha = 0.95 if sma_period_bars == 600 else 0.45
         ax.plot(
             current_x_minutes,
             sma_values - current_values[0],
             linestyle="--",
             linewidth=2.2,
-            alpha=0.95,
+            alpha=line_alpha,
             zorder=4,
             color=SMA_LINE_COLORS.get(sma_period_bars),
         )
@@ -464,7 +465,7 @@ def save_signal_candidate_plot(
                 candidate_x_minutes,
                 candidate_line,
                 linewidth=1.1,
-                alpha=0.4,
+                alpha=0.28,
             )[0]
 
             shown_candidates.append((
