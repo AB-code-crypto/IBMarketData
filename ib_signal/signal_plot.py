@@ -22,6 +22,7 @@ from ib_signal.signal_regression import (
 )
 from ib_signal.signal_regression_relation import build_regression_relation
 from ib_signal.signal_sma_reader import read_current_sma_lines
+from ib_signal.signal_regime_reader import read_signal_regime_values
 from ib_signal.signal_window import SignalWindow
 
 CURRENT_PATTERN_COLOR = "red"
@@ -29,6 +30,12 @@ SMA_LINE_COLORS: dict[int, str] = {
     120: "tab:orange",
     600: "tab:blue",
     1200: "tab:green",
+}
+REGIME_COLORS: dict[int | None, str] = {
+    -1: "red",
+    0: "gray",
+    1: "green",
+    None: "lightgray",
 }
 
 
@@ -135,6 +142,83 @@ def format_potential_time_for_plot(value: str) -> str:
     return text
 
 
+
+def get_regime_color(regime_value: int | None) -> str:
+    """Что делает: возвращает цвет режима для нижней полосы на PNG.
+    Зачем нужна: текущий regime должен читаться визуально без текста."""
+    return REGIME_COLORS.get(regime_value, REGIME_COLORS[None])
+
+
+def format_regime_for_plot(regime_value: int | None) -> str:
+    """Что делает: переводит код режима в короткий текст.
+    Зачем нужна: правая панель должна показывать текущий режим человекочитаемо."""
+    if regime_value == 1:
+        return "UP"
+    if regime_value == -1:
+        return "DOWN"
+    if regime_value == 0:
+        return "FLAT"
+    return "n/a"
+
+
+def draw_regime_strip(
+        ax,
+        *,
+        x_values: np.ndarray,
+        regime_values: list[int | None],
+        bar_size_seconds: int,
+) -> None:
+    """Что делает: рисует снизу полоску regime из маленьких цветных баров.
+    Зачем нужна: направление рынка видно сразу под горизонтальной шкалой."""
+    if x_values.size == 0 or not regime_values:
+        return
+
+    regime_values = list(regime_values)
+
+    if len(regime_values) > x_values.size:
+        regime_values = regime_values[-x_values.size:]
+
+    if len(regime_values) < x_values.size:
+        x_values = x_values[-len(regime_values):]
+
+    y_min, y_max = ax.get_ylim()
+    y_range = y_max - y_min
+
+    if y_range <= 0:
+        return
+
+    strip_height = max(y_range * 0.045, 0.15)
+    strip_gap = max(y_range * 0.020, 0.08)
+    strip_bottom = y_min - strip_gap - strip_height
+    bar_width = bar_size_seconds / 60.0 * 0.92
+
+    ax.bar(
+        x_values,
+        [strip_height] * len(x_values),
+        width=bar_width,
+        bottom=strip_bottom,
+        align="center",
+        color=[get_regime_color(value) for value in regime_values],
+        edgecolor="none",
+        alpha=0.92,
+        zorder=2,
+    )
+
+    ax.text(
+        float(x_values[0]) - bar_width * 1.2,
+        strip_bottom + strip_height / 2.0,
+        "regime",
+        fontsize=8.0,
+        color="black",
+        va="center",
+        ha="right",
+        clip_on=False,
+        zorder=3,
+    )
+
+    ax.set_ylim(strip_bottom - strip_gap * 0.35, y_max)
+
+
 def draw_info_section(
         ax_info,
         *,
@@ -238,6 +322,15 @@ def save_signal_candidate_plot(
 
     current_line = normalize_series_for_plot(np.asarray(current_values, dtype=float))
     current_path_features = calculate_pattern_path_features(current_values)
+    current_regime_values = read_signal_regime_values(
+        instrument_code=instrument_code,
+        signal_window=signal_window,
+        expected_points=current_values.size,
+    )
+    current_regime_value = next(
+        (value for value in reversed(current_regime_values) if value is not None),
+        None,
+    )
 
     current_regression = build_linear_regression(current_values)
     current_regression_direction = classify_regression_direction(
@@ -606,6 +699,13 @@ def save_signal_candidate_plot(
         ),
     ]
 
+    regime_rows: list[tuple[str, str | None]] = [
+        (
+            f"current      : {format_regime_for_plot(current_regime_value)}",
+            get_regime_color(current_regime_value),
+        ),
+    ]
+
     candidate_rows: list[tuple[str, str | None]] = []
     if shown_candidates:
         for rank, candidate, pearson_value, candidate_color, candidate_score, candidate_path_features, candidate_label_x, candidate_label_y in shown_candidates:
@@ -667,6 +767,13 @@ def save_signal_candidate_plot(
         ax_info,
         title="VOLATILITY (pt)",
         rows=volatility_rows,
+        y=y,
+        line_height=line_height,
+    )
+    y = draw_info_section(
+        ax_info,
+        title="REGIME",
+        rows=regime_rows,
         y=y,
         line_height=line_height,
     )
