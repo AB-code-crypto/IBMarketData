@@ -29,6 +29,9 @@ def evaluate_trader_rules(context: TraderRuleContext) -> TraderRuleEvaluation:
     Зачем нужна: правила можно добавлять/отключать через trader_rules_config.py без переписывания trade_store."""
     state = TraderRuleState()
 
+    # REQUIRE_MARKET_FEATURES=True means regime/ma_zone are mandatory.
+    # If either market feature is missing, trader must reject the signal before
+    # any zone/regime-dependent rule can accidentally allow it.
     if (
             REQUIRE_MARKET_FEATURES
             and (context.market_features.regime is None or context.market_features.ma_zone is None)

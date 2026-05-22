@@ -1,21 +1,39 @@
 # Preset: session_limit_near_market
 #
-# 07:00-08:00 CT -> только LIMIT, offset 10 пунктов
-# 08:00-09:00 CT -> только LIMIT, offset 10 пунктов
-# 09:00-10:00 CT -> только LIMIT, offset 10 пунктов
+# Время по Chicago Time:
+#   07:00-08:00 CT -> LIMIT, offset 10
+#   08:00-09:00 CT -> LIMIT, offset 10
+#   09:00-10:00 CT -> LIMIT, offset 10
 #
-# Остальное время -> MARKET.
+# Остальное время:
+#   MARKET
 #
-# Разрешённые зоны: 0 и ±1.
-# В этих зонах направление берётся из potential / signal.direction.
+# Разрешённые зоны:
+#   ma_zone = -1, 0, +1
 #
-# Если направление совпадает с regime -> STRONG.
-# Если против regime -> WEAK.
+# Режим:
+#   direction совпадает с regime -> STRONG
+#   direction против regime      -> WEAK
+#   regime = 0                  -> NEUTRAL
+#
 # Сейчас WEAK разрешён, но помечается в trade_decisions.signal_strength.
 #
 # Важно:
-# zone_direction_policy сейчас глобальный, не раздельный по MARKET/LIMIT.
-# Поэтому зоны 0/±1 применяются и для session LIMIT-окон, и для остального MARKET-времени.
+#   zone_direction_policy сейчас глобальный.
+#   Поэтому зоны -1/0/+1 применяются и для LIMIT-окон, и для MARKET-времени.
+
+# REQUIRE_MARKET_FEATURES:
+#   False — ib_trader может принимать решение без regime/ma_zone.
+#           Используется для режима potential_only, когда торгуем только по signal.direction / potential.
+#
+#   True  — regime и ma_zone обязательны.
+#           Если хотя бы одно значение не прочитано из job DB, сигнал отклоняется:
+#           decision_action = NO_ACTION
+#           decision_reason = market_features_unknown.
+#
+# Практическое правило:
+#   - если ACTIVE_RULES пустой и торгуем только по potential -> False;
+#   - если хотя бы одно активное правило использует regime или ma_zone -> True.
 
 REQUIRE_MARKET_FEATURES = True
 

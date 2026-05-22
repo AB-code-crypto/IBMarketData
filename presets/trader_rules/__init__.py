@@ -1,1 +1,1 @@
-"""Presets for ib_trader rules."""
+"""Presets for ib_trader rule configurations."""
