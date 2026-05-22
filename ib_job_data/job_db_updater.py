@@ -12,6 +12,7 @@ from ib_job_data.feature_db_sql import (
 )
 from ib_job_data.profile_features import refresh_profile_features_if_needed
 from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
+from ib_job_data.regime_features import update_regime_features
 from ib_job_data.sma_features import append_new_sma_rows
 
 PRICE_DB_SCHEMA_NAME = "price_src"
@@ -94,6 +95,11 @@ def append_new_mid_price_rows(instrument_code: str) -> int:
         append_new_sma_rows(
             conn,
             mid_price_digits=instrument_row["mid_price_digits"],
+        )
+
+        update_regime_features(
+            conn,
+            instrument_row=instrument_row,
         )
 
         refresh_profile_features_if_needed(

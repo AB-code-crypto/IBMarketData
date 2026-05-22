@@ -1,4 +1,5 @@
 from ib_job_data.feature_db_sql import MID_PRICE_TABLE_NAME, quote_identifier
+from ib_job_data.job_features_config import REGIME_COLUMN_NAME
 
 SMA_TABLE_NAME = "sma_5s"
 SMA_PRICE_SOURCE = "mid_close"
@@ -34,7 +35,8 @@ def create_sma_table_sql() -> str:
     CREATE TABLE IF NOT EXISTS {quote_identifier(SMA_TABLE_NAME)} (
         bar_time_ts INTEGER PRIMARY KEY,
         {sma_columns_sql},
-        {distance_column_sql}
+        {distance_column_sql},
+        {quote_identifier(REGIME_COLUMN_NAME)} INTEGER
     );
     """
 

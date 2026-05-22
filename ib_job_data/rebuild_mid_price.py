@@ -24,6 +24,7 @@ from ib_job_data.feature_db_sql import (
     quote_identifier,
 )
 from ib_job_data.profile_features import PROFILE_TABLE_NAME, rebuild_profile_features
+from ib_job_data.regime_features import rebuild_regime_features
 from ib_job_data.sma_features import SMA_TABLE_NAME, rebuild_sma_features
 
 PRICE_DB_SCHEMA_NAME = "price_src"
@@ -114,6 +115,11 @@ def rebuild_instrument_mid_price_features(instrument_code: str) -> None:
         rebuild_sma_features(
             conn,
             mid_price_digits=instrument_row["mid_price_digits"],
+        )
+
+        rebuild_regime_features(
+            conn,
+            instrument_row=instrument_row,
         )
 
         rebuild_profile_features(

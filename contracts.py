@@ -22,6 +22,7 @@ DEFAULTS_DATA: InstrumentRow = {
     "price_digits": 2,
     "mid_price_digits": 3,
     "regression_flat_delta_threshold_bps": 1.0,
+    "regime_flat_delta_threshold_points": 2.0,
 }
 
 FUT_DEFAULTS: InstrumentRow = {
