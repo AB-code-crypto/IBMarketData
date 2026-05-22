@@ -86,7 +86,7 @@ TEST_INSTRUMENT_CODE = "MNQ"
 # current_bar_ts / closed_bar_ts = 2026-05-15 09:23:00 CT
 #
 # Здесь указываем UTC-время, не CT.
-TEST_CURRENT_BAR_UTC = "2026-05-22 06:10:00"
+TEST_CURRENT_BAR_UTC = "2026-05-22 10:15:00"
 
 # Текущие настройки signal-сервиса.
 # Скрипт намеренно берёт DEFAULT_SIGNAL_CONFIG, чтобы тестировать тот же режим,
