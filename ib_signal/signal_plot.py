@@ -32,10 +32,10 @@ SMA_LINE_COLORS: dict[int, str] = {
     1200: "tab:green",
 }
 REGIME_COLORS: dict[int | None, str] = {
-    -1: "red",
-    0: "gray",
-    1: "green",
-    None: "lightgray",
+    -1: "#d62728",
+    0: "#6b6b6b",
+    1: "#2ca02c",
+    None: "#d9d9d9",
 }
 
 
@@ -246,22 +246,27 @@ def draw_regime_panel(
     elif len(regime_values) < x_values.size:
         regime_values = [None] * (x_values.size - len(regime_values)) + regime_values
 
+    bar_width = bar_size_seconds / 60.0 * 0.98
+
+    ax_regime.set_facecolor("#f5f5f5")
     ax_regime.bar(
         x_values,
-        [1.0] * len(regime_values),
-        width=bar_size_seconds / 60.0 * 0.92,
-        bottom=0.0,
+        [0.92] * len(regime_values),
+        width=bar_width,
+        bottom=0.04,
         align="center",
         color=[get_regime_color(value) for value in regime_values],
-        edgecolor="none",
-        alpha=0.95,
-        zorder=2,
+        edgecolor="#202020",
+        linewidth=0.20,
+        alpha=1.0,
+        zorder=3,
     )
 
-    ax_regime.axvline(0.0, linestyle="--", linewidth=1.0, color="black", alpha=0.8)
+    ax_regime.axvline(0.0, linestyle="--", linewidth=1.0, color="black", alpha=0.8, zorder=4)
     ax_regime.set_ylim(0.0, 1.0)
     ax_regime.set_yticks([])
     ax_regime.grid(False)
+    ax_regime.margins(x=0.0)
     ax_regime.spines["top"].set_visible(False)
     ax_regime.spines["right"].set_visible(False)
     ax_regime.spines["left"].set_visible(False)

@@ -35,22 +35,22 @@ def read_signal_regime_values(
     )
 
     try:
-        try:
-            rows = conn.execute(
-                f"""
-                SELECT {quote_identifier(REGIME_COLUMN_NAME)}
-                FROM {quote_identifier(SMA_TABLE_NAME)}
-                WHERE bar_time_ts <= ?
-                ORDER BY bar_time_ts DESC
-                LIMIT ?
-                """,
-                (
-                    int(signal_window.signal_bar_ts),
-                    expected_points,
-                ),
-            ).fetchall()
-        except sqlite3.Error:
-            return [None] * expected_points
+        rows = conn.execute(
+            f"""
+            SELECT {quote_identifier(REGIME_COLUMN_NAME)}
+            FROM {quote_identifier(SMA_TABLE_NAME)}
+            WHERE bar_time_ts <= ?
+            ORDER BY bar_time_ts DESC
+            LIMIT ?
+            """,
+            (
+                int(signal_window.signal_bar_ts),
+                expected_points,
+            ),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        print(f"[signal_plot] regime read warning: {exc}")
+        return [None] * expected_points
     finally:
         conn.close()
 
