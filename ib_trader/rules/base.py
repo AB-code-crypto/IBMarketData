@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
 from ib_trader.trade_models import MarketFeatureSnapshot, PositionSnapshot, TraderSignalEvent
 
@@ -25,14 +25,14 @@ class TraderRuleState:
     order_type: str = "MARKET"
     order_policy_reason: str = "default_market"
     limit_offset_points: float | None = None
-    limit_price: float | None = None
     ttl_seconds: int | None = None
 
     records: list[dict[str, Any]] = field(default_factory=list)
 
     def reject(self, *, rule_id: str, reason: str, details: dict[str, Any] | None = None) -> None:
         self.allowed = False
-        self.reject_reasons.append(reason)
+        if reason not in self.reject_reasons:
+            self.reject_reasons.append(reason)
         self.records.append({
             "rule": rule_id,
             "result": "REJECT",
@@ -46,10 +46,3 @@ class TraderRuleState:
             "result": result,
             "details": details or {},
         })
-
-
-class TraderRule(Protocol):
-    rule_id: str
-
-    def apply(self, *, context: TraderRuleContext, state: TraderRuleState, params: dict[str, Any]) -> None:
-        ...

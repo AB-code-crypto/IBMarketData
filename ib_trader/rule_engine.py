@@ -19,7 +19,6 @@ class TraderRuleEvaluation:
     order_type: str
     order_policy_reason: str
     limit_offset_points: float | None
-    limit_price: float | None
     ttl_seconds: int | None
 
     rules_json: str
@@ -77,7 +76,6 @@ def evaluate_trader_rules(context: TraderRuleContext) -> TraderRuleEvaluation:
         order_type=state.order_type,
         order_policy_reason=state.order_policy_reason,
         limit_offset_points=state.limit_offset_points,
-        limit_price=state.limit_price,
         ttl_seconds=state.ttl_seconds,
         rules_json=rules_json,
     )
