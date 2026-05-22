@@ -145,83 +145,6 @@ def format_potential_time_for_plot(value: str) -> str:
 
 def get_regime_color(regime_value: int | None) -> str:
     """Что делает: возвращает цвет режима для нижней полосы на PNG.
-    Зачем нужна: текущий regime должен читаться визуально без текста."""
-    return REGIME_COLORS.get(regime_value, REGIME_COLORS[None])
-
-
-def format_regime_for_plot(regime_value: int | None) -> str:
-    """Что делает: переводит код режима в короткий текст.
-    Зачем нужна: правая панель должна показывать текущий режим человекочитаемо."""
-    if regime_value == 1:
-        return "UP"
-    if regime_value == -1:
-        return "DOWN"
-    if regime_value == 0:
-        return "FLAT"
-    return "n/a"
-
-
-def draw_regime_strip(
-        ax,
-        *,
-        x_values: np.ndarray,
-        regime_values: list[int | None],
-        bar_size_seconds: int,
-) -> None:
-    """Что делает: рисует снизу полоску regime из маленьких цветных баров.
-    Зачем нужна: направление рынка видно сразу под горизонтальной шкалой."""
-    if x_values.size == 0 or not regime_values:
-        return
-
-    regime_values = list(regime_values)
-
-    if len(regime_values) > x_values.size:
-        regime_values = regime_values[-x_values.size:]
-
-    if len(regime_values) < x_values.size:
-        x_values = x_values[-len(regime_values):]
-
-    y_min, y_max = ax.get_ylim()
-    y_range = y_max - y_min
-
-    if y_range <= 0:
-        return
-
-    strip_height = max(y_range * 0.045, 0.15)
-    strip_gap = max(y_range * 0.020, 0.08)
-    strip_bottom = y_min - strip_gap - strip_height
-    bar_width = bar_size_seconds / 60.0 * 0.92
-
-    ax.bar(
-        x_values,
-        [strip_height] * len(x_values),
-        width=bar_width,
-        bottom=strip_bottom,
-        align="center",
-        color=[get_regime_color(value) for value in regime_values],
-        edgecolor="none",
-        alpha=0.92,
-        zorder=2,
-    )
-
-    ax.text(
-        float(x_values[0]) - bar_width * 1.2,
-        strip_bottom + strip_height / 2.0,
-        "regime",
-        fontsize=8.0,
-        color="black",
-        va="center",
-        ha="right",
-        clip_on=False,
-        zorder=3,
-    )
-
-    ax.set_ylim(strip_bottom - strip_gap * 0.35, y_max)
-
-
-
-def get_regime_color(regime_value: int | None) -> str:
-    """Что делает: возвращает цвет режима для нижней полосы на PNG.
     Зачем нужна: текущий regime должен читаться визуально по цвету."""
     return REGIME_COLORS.get(regime_value, REGIME_COLORS[None])
 
@@ -733,7 +656,6 @@ def save_signal_candidate_plot(
         potential_rows.append(("status       : None", None))
 
     lines_rows: list[tuple[str, str | None]] = [
-        (f"pearson_min    : {pearson_min:.2f}", None),
         ("sma 120       : orange", SMA_LINE_COLORS[120]),
         ("sma 600       : blue", SMA_LINE_COLORS[600]),
         ("sma 1200      : green", SMA_LINE_COLORS[1200]),
