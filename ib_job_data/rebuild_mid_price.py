@@ -24,7 +24,6 @@ from ib_job_data.feature_db_sql import (
     quote_identifier,
 )
 from ib_job_data.ma_zone_features import rebuild_ma_zone_features
-from ib_job_data.profile_features import PROFILE_TABLE_NAME, rebuild_profile_features
 from ib_job_data.regime_features import rebuild_regime_features
 from ib_job_data.sma_features import SMA_TABLE_NAME, rebuild_sma_features
 
@@ -87,7 +86,6 @@ def rebuild_instrument_mid_price_features(instrument_code: str) -> None:
     print(f"Job DB     : {feature_db_path}")
     print(f"Job table  : {MID_PRICE_TABLE_NAME}")
     print(f"Job SMA    : {SMA_TABLE_NAME}")
-    print(f"Job profile: {PROFILE_TABLE_NAME}")
     print("=" * 80)
 
     conn = open_sqlite_connection(
@@ -125,12 +123,6 @@ def rebuild_instrument_mid_price_features(instrument_code: str) -> None:
 
         rebuild_ma_zone_features(
             conn,
-        )
-
-        rebuild_profile_features(
-            conn,
-            lookback_bars=settings.sma_distance_ema_lookback_bars,
-            mid_price_digits=instrument_row["mid_price_digits"],
         )
 
         conn.commit()

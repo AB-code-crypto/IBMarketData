@@ -11,7 +11,6 @@ from ib_job_data.feature_db_sql import (
     quote_identifier,
 )
 from ib_job_data.ma_zone_features import update_ma_zone_features
-from ib_job_data.profile_features import refresh_profile_features_if_needed
 from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 from ib_job_data.regime_features import update_regime_features
 from ib_job_data.sma_features import append_new_sma_rows
@@ -105,13 +104,6 @@ def append_new_mid_price_rows(instrument_code: str) -> int:
 
         update_ma_zone_features(
             conn,
-        )
-
-        refresh_profile_features_if_needed(
-            conn,
-            lookback_bars=settings.sma_distance_ema_lookback_bars,
-            mid_price_digits=instrument_row["mid_price_digits"],
-            update_interval_seconds=settings.profile_update_interval_seconds,
         )
 
         conn.commit()

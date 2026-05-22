@@ -25,7 +25,6 @@ REGIME_FLAT_DELTA_THRESHOLD_POINTS_KEY = "regime_flat_delta_threshold_points"
 # MA-zone строится вокруг рабочей SMA600.
 # Логика адаптирована из IBP_MA_Zones.mq5:
 # rolling percentile отклонений high/low от SMA, затем деление диапазона на 3 зоны.
-MA_ZONE_SMA_PERIOD_BARS = 600
 
 # Аналог InpRangeLookbackBars=200 на M1:
 # 200 минут * 60 секунд / 5 секунд = 2400 5-секундных баров.
@@ -53,3 +52,7 @@ MA_ZONE_RANGE_SOURCE = "HIGH_LOW"
 #  -2  lower_middle
 #  -3  lower_far
 MA_ZONE_COLUMN_NAME = "ma_zone"
+
+# Эти две колонки нужны только для отрисовки границ зон на PNG.
+MA_ZONE_UPPER_RANGE_COLUMN_NAME = "ma_zone_upper_range_points"
+MA_ZONE_LOWER_RANGE_COLUMN_NAME = "ma_zone_lower_range_points"

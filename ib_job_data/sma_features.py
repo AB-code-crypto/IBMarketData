@@ -1,5 +1,10 @@
 from ib_job_data.feature_db_sql import MID_PRICE_TABLE_NAME, quote_identifier
-from ib_job_data.job_features_config import MA_ZONE_COLUMN_NAME, REGIME_COLUMN_NAME
+from ib_job_data.job_features_config import (
+    MA_ZONE_COLUMN_NAME,
+    MA_ZONE_LOWER_RANGE_COLUMN_NAME,
+    MA_ZONE_UPPER_RANGE_COLUMN_NAME,
+    REGIME_COLUMN_NAME,
+)
 
 SMA_TABLE_NAME = "sma_5s"
 SMA_PRICE_SOURCE = "mid_close"
@@ -37,7 +42,9 @@ def create_sma_table_sql() -> str:
         {sma_columns_sql},
         {distance_column_sql},
         {quote_identifier(REGIME_COLUMN_NAME)} INTEGER,
-        {quote_identifier(MA_ZONE_COLUMN_NAME)} INTEGER
+        {quote_identifier(MA_ZONE_COLUMN_NAME)} INTEGER,
+        {quote_identifier(MA_ZONE_UPPER_RANGE_COLUMN_NAME)} REAL,
+        {quote_identifier(MA_ZONE_LOWER_RANGE_COLUMN_NAME)} REAL
     );
     """
 

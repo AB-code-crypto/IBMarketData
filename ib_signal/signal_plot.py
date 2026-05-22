@@ -10,10 +10,10 @@ import numpy as np
 
 from contracts import Instrument
 from core.bar_utils import get_bar_size_seconds
+from ib_job_data.job_features_config import MA_ZONE_LEVEL1_PERCENT, MA_ZONE_LEVEL2_PERCENT
 from ib_signal.signal_candidate_potential import CandidatePotentialResult, read_candidate_full_values
 from ib_signal.signal_candidate_rank_features import calculate_pattern_path_features
 from ib_signal.signal_candidates import CandidateWindow
-from ib_signal.signal_profile_reader import read_profile_values
 from ib_signal.signal_regression import (
     build_linear_regression,
     calculate_regression_delta_bps,
@@ -22,6 +22,7 @@ from ib_signal.signal_regression import (
 )
 from ib_signal.signal_regression_relation import build_regression_relation
 from ib_signal.signal_sma_reader import read_current_sma_lines
+from ib_signal.signal_ma_zone_reader import read_current_ma_zone_ranges
 from ib_signal.signal_regime_reader import read_signal_regime_values
 from ib_signal.signal_window import SignalWindow
 
@@ -197,6 +198,60 @@ def draw_regime_panel(
     ax_regime.tick_params(axis="x", labelsize=9)
 
 
+
+def convert_optional_float_list_to_array(values: list[float | None]) -> np.ndarray:
+    """Что делает: переводит optional float list в numpy array с NaN.
+    Зачем нужна: matplotlib корректно пропускает NaN-сегменты на линиях зон."""
+    return np.asarray([np.nan if value is None else float(value) for value in values], dtype=float)
+
+
+def draw_ma_zone_lines(
+        ax,
+        *,
+        x_values: np.ndarray,
+        sma_600_values: np.ndarray | None,
+        upper_range_values: list[float | None],
+        lower_range_values: list[float | None],
+        base_value: float,
+) -> None:
+    """Что делает: рисует границы near/middle/far вокруг SMA600.
+    Зачем нужна: ma_zone integer показывает текущую зону, а линии показывают сами границы зон."""
+    if sma_600_values is None or x_values.size == 0:
+        return
+
+    sma = np.asarray(sma_600_values, dtype=float)
+
+    if sma.size != x_values.size:
+        return
+
+    upper_range = convert_optional_float_list_to_array(upper_range_values)
+    lower_range = convert_optional_float_list_to_array(lower_range_values)
+
+    if upper_range.size != x_values.size or lower_range.size != x_values.size:
+        return
+
+    level1 = float(MA_ZONE_LEVEL1_PERCENT) / 100.0
+    level2 = float(MA_ZONE_LEVEL2_PERCENT) / 100.0
+
+    zone_lines = [
+        (sma + upper_range * level1 - base_value, ":", 1.15, 0.78),
+        (sma + upper_range * level2 - base_value, "--", 1.15, 0.78),
+        (sma - lower_range * level1 - base_value, ":", 1.15, 0.78),
+        (sma - lower_range * level2 - base_value, "--", 1.15, 0.78),
+    ]
+
+    for line_values, linestyle, linewidth, alpha in zone_lines:
+        ax.plot(
+            x_values,
+            line_values,
+            linestyle=linestyle,
+            linewidth=linewidth,
+            alpha=alpha,
+            color="#555555",
+            zorder=3,
+        )
+
+
 def draw_info_section(
         ax_info,
         *,
@@ -296,7 +351,11 @@ def save_signal_candidate_plot(
         instrument_code=instrument_code,
         signal_window=signal_window,
     )
-    current_profile_values = read_profile_values(instrument_code=instrument_code)
+    current_ma_zone_ranges = read_current_ma_zone_ranges(
+        instrument_code=instrument_code,
+        signal_window=signal_window,
+        expected_points=current_values.size,
+    )
 
     current_line = normalize_series_for_plot(np.asarray(current_values, dtype=float))
     current_path_features = calculate_pattern_path_features(current_values)
@@ -380,6 +439,15 @@ def save_signal_candidate_plot(
             zorder=4,
             color=SMA_LINE_COLORS.get(sma_period_bars),
         )
+
+    draw_ma_zone_lines(
+        ax,
+        x_values=current_x_minutes,
+        sma_600_values=current_sma_lines.get(600),
+        upper_range_values=current_ma_zone_ranges.upper_range_points,
+        lower_range_values=current_ma_zone_ranges.lower_range_points,
+        base_value=float(current_values[0]),
+    )
 
     if top_indices.size > 0:
         for rank, candidate_index in enumerate(top_indices, start=1):
@@ -676,20 +744,6 @@ def save_signal_candidate_plot(
         ("sma 600       : blue", SMA_LINE_COLORS[600]),
         ("sma 1200      : green", SMA_LINE_COLORS[1200]),
     ]
-
-    volatility_rows: list[tuple[str, str | None]] = [
-        (
-            f"plus         : "
-            f"{format_plot_optional_value(current_profile_values.ewm_avg_vol_plus)}",
-            None,
-        ),
-        (
-            f"minus        : "
-            f"{format_plot_optional_value(current_profile_values.ewm_avg_vol_minus)}",
-            None,
-        ),
-    ]
-
     candidate_rows: list[tuple[str, str | None]] = []
     if shown_candidates:
         for rank, candidate, pearson_value, candidate_color, candidate_score, candidate_path_features, candidate_label_x, candidate_label_y in shown_candidates:
@@ -744,13 +798,6 @@ def save_signal_candidate_plot(
         ax_info,
         title="LINES",
         rows=lines_rows,
-        y=y,
-        line_height=line_height,
-    )
-    y = draw_info_section(
-        ax_info,
-        title="VOLATILITY (pt)",
-        rows=volatility_rows,
         y=y,
         line_height=line_height,
     )

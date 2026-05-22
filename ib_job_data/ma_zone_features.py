@@ -1,3 +1,4 @@
+
 from bisect import bisect_left, insort
 from collections import deque
 from dataclasses import dataclass
@@ -8,10 +9,11 @@ from ib_job_data.job_features_config import (
     MA_ZONE_COLUMN_NAME,
     MA_ZONE_LEVEL1_PERCENT,
     MA_ZONE_LEVEL2_PERCENT,
+    MA_ZONE_LOWER_RANGE_COLUMN_NAME,
     MA_ZONE_RANGE_LOOKBACK_BARS,
     MA_ZONE_RANGE_PERCENTILE,
     MA_ZONE_RANGE_SOURCE,
-    MA_ZONE_SMA_PERIOD_BARS,
+    MA_ZONE_UPPER_RANGE_COLUMN_NAME,
 )
 from ib_job_data.sma_features import (
     SMA_TABLE_NAME,
@@ -19,6 +21,9 @@ from ib_job_data.sma_features import (
     get_sma_column_name,
     get_sma_distance_points_column_name,
 )
+
+
+MA_ZONE_BASE_SMA_PERIOD_BARS = 600
 
 
 @dataclass(frozen=True)
@@ -87,15 +92,10 @@ class RollingPositiveValues:
         self._sorted_values.pop(index)
 
     def percentile(self, percentile: float) -> float | None:
-        return calculate_percentile_value(
-            sorted_values=self._sorted_values,
-            percentile=percentile,
-        )
+        return calculate_percentile_value(sorted_values=self._sorted_values, percentile=percentile)
 
 
 def calculate_percentile_value(*, sorted_values: list[float], percentile: float) -> float | None:
-    """Что делает: считает percentile как MQL5 PercentileValue().
-    Зачем нужна: MA-zones должны быть близки по смыслу к исходному MT5-индикатору."""
     count = len(sorted_values)
 
     if count <= 0:
@@ -108,7 +108,6 @@ def calculate_percentile_value(*, sorted_values: list[float], percentile: float)
         return float(sorted_values[count - 1])
 
     position = (float(percentile) / 100.0) * (count - 1)
-
     index_low = int(position)
     index_high = index_low if position == index_low else index_low + 1
 
@@ -117,15 +116,10 @@ def calculate_percentile_value(*, sorted_values: list[float], percentile: float)
 
     weight = position - index_low
 
-    return float(
-        sorted_values[index_low] * (1.0 - weight)
-        + sorted_values[index_high] * weight
-    )
+    return float(sorted_values[index_low] * (1.0 - weight) + sorted_values[index_high] * weight)
 
 
 def get_positive_deviations_for_row(row: MaZoneSourceRow) -> tuple[float | None, float | None]:
-    """Что делает: считает верхнее/нижнее положительное отклонение бара от SMA.
-    Зачем нужна: диапазоны зон строятся по high/low или close, но только по положительным уходам от MA."""
     if row.sma_value is None or row.sma_value <= 0.0:
         return None, None
 
@@ -153,8 +147,6 @@ def classify_ma_zone(
         upper_range_points: float | None,
         lower_range_points: float | None,
 ) -> int:
-    """Что делает: переводит signed delta close->SMA в код зоны -3..+3.
-    Зачем нужна: downstream-фильтрам нужен один компактный integer-код, а не линии индикатора."""
     if delta_close_points is None:
         return 0
 
@@ -199,8 +191,6 @@ def classify_ma_zone(
 
 
 def get_last_ma_zone_bar_ts(conn) -> int:
-    """Что делает: читает последний bar_time_ts, где ma_zone уже рассчитан.
-    Зачем нужна: live job-data досчитывает зоны только для новых строк."""
     conn.execute(create_sma_table_sql())
 
     row = conn.execute(
@@ -218,8 +208,6 @@ def get_last_ma_zone_bar_ts(conn) -> int:
 
 
 def get_first_ma_zone_target_ts(conn, *, after_bar_ts: int) -> int | None:
-    """Что делает: находит первый ещё не рассчитанный sma_5s бар.
-    Зачем нужна: перед расчётом нужны только новые target-строки и контекст перед ними."""
     row = conn.execute(
         f"""
         SELECT MIN(bar_time_ts)
@@ -236,8 +224,6 @@ def get_first_ma_zone_target_ts(conn, *, after_bar_ts: int) -> int | None:
 
 
 def get_ma_zone_context_start_ts(conn, *, first_target_ts: int) -> int:
-    """Что делает: выбирает левую границу контекста перед первой новой строкой.
-    Зачем нужна: зоны считаются по предыдущим MA_ZONE_RANGE_LOOKBACK_BARS барам."""
     rows = conn.execute(
         f"""
         SELECT bar_time_ts
@@ -246,10 +232,7 @@ def get_ma_zone_context_start_ts(conn, *, first_target_ts: int) -> int:
         ORDER BY bar_time_ts DESC
         LIMIT ?
         """,
-        (
-            int(first_target_ts),
-            int(MA_ZONE_RANGE_LOOKBACK_BARS),
-        ),
+        (int(first_target_ts), int(MA_ZONE_RANGE_LOOKBACK_BARS)),
     ).fetchall()
 
     if not rows:
@@ -259,10 +242,8 @@ def get_ma_zone_context_start_ts(conn, *, first_target_ts: int) -> int:
 
 
 def read_ma_zone_source_rows(conn, *, context_start_ts: int) -> list[MaZoneSourceRow]:
-    """Что делает: читает SMA + mid OHLC строки для расчёта MA-zone.
-    Зачем нужна: верхний/нижний диапазон строится по high/low, а текущая зона — по close-minus-SMA."""
-    sma_column_name = get_sma_column_name(MA_ZONE_SMA_PERIOD_BARS)
-    distance_column_name = get_sma_distance_points_column_name(MA_ZONE_SMA_PERIOD_BARS)
+    sma_column_name = get_sma_column_name(MA_ZONE_BASE_SMA_PERIOD_BARS)
+    distance_column_name = get_sma_distance_points_column_name(MA_ZONE_BASE_SMA_PERIOD_BARS)
 
     rows = conn.execute(
         f"""
@@ -299,31 +280,32 @@ def calculate_ma_zone_updates(
         *,
         rows: list[MaZoneSourceRow],
         last_ma_zone_bar_ts: int,
-) -> list[tuple[int, int]]:
-    """Что делает: считает ma_zone для target-строк на базе предыдущих rolling-отклонений.
-    Зачем нужна: текущий бар не должен использовать собственный high/low для своих зон."""
+) -> list[tuple[int, float | None, float | None, int]]:
     upper_window = RollingPositiveValues(max_rows=MA_ZONE_RANGE_LOOKBACK_BARS)
     lower_window = RollingPositiveValues(max_rows=MA_ZONE_RANGE_LOOKBACK_BARS)
 
-    updates: list[tuple[int, int]] = []
+    updates: list[tuple[int, float | None, float | None, int]] = []
 
     for row in rows:
         if row.bar_time_ts > last_ma_zone_bar_ts:
             if upper_window.rows_count >= MA_ZONE_RANGE_LOOKBACK_BARS:
                 upper_range = upper_window.percentile(MA_ZONE_RANGE_PERCENTILE)
                 lower_range = lower_window.percentile(MA_ZONE_RANGE_PERCENTILE)
-
                 zone = classify_ma_zone(
                     delta_close_points=row.delta_close_points,
                     upper_range_points=upper_range,
                     lower_range_points=lower_range,
                 )
             else:
+                upper_range = None
+                lower_range = None
                 zone = 0
 
             updates.append(
                 (
                     int(zone),
+                    None if upper_range is None else float(upper_range),
+                    None if lower_range is None else float(lower_range),
                     int(row.bar_time_ts),
                 )
             )
@@ -336,31 +318,17 @@ def calculate_ma_zone_updates(
 
 
 def update_ma_zone_features(conn) -> int:
-    """Что делает: досчитывает ma_zone для новых строк sma_5s.
-    Зачем нужна: live job-data поддерживает зоны синхронными с SMA без пересчёта всей таблицы."""
     conn.execute(create_sma_table_sql())
 
     last_ma_zone_bar_ts = get_last_ma_zone_bar_ts(conn)
-    first_target_ts = get_first_ma_zone_target_ts(
-        conn,
-        after_bar_ts=last_ma_zone_bar_ts,
-    )
+    first_target_ts = get_first_ma_zone_target_ts(conn, after_bar_ts=last_ma_zone_bar_ts)
 
     if first_target_ts is None:
         return 0
 
-    context_start_ts = get_ma_zone_context_start_ts(
-        conn,
-        first_target_ts=first_target_ts,
-    )
-    rows = read_ma_zone_source_rows(
-        conn,
-        context_start_ts=context_start_ts,
-    )
-    updates = calculate_ma_zone_updates(
-        rows=rows,
-        last_ma_zone_bar_ts=last_ma_zone_bar_ts,
-    )
+    context_start_ts = get_ma_zone_context_start_ts(conn, first_target_ts=first_target_ts)
+    rows = read_ma_zone_source_rows(conn, context_start_ts=context_start_ts)
+    updates = calculate_ma_zone_updates(rows=rows, last_ma_zone_bar_ts=last_ma_zone_bar_ts)
 
     if not updates:
         return 0
@@ -368,7 +336,10 @@ def update_ma_zone_features(conn) -> int:
     conn.executemany(
         f"""
         UPDATE {quote_identifier(SMA_TABLE_NAME)}
-        SET {quote_identifier(MA_ZONE_COLUMN_NAME)} = ?
+        SET
+            {quote_identifier(MA_ZONE_COLUMN_NAME)} = ?,
+            {quote_identifier(MA_ZONE_UPPER_RANGE_COLUMN_NAME)} = ?,
+            {quote_identifier(MA_ZONE_LOWER_RANGE_COLUMN_NAME)} = ?
         WHERE bar_time_ts = ?
         """,
         updates,
@@ -378,14 +349,15 @@ def update_ma_zone_features(conn) -> int:
 
 
 def rebuild_ma_zone_features(conn) -> int:
-    """Что делает: полностью пересчитывает ma_zone внутри sma_5s.
-    Зачем нужна: полный rebuild job DB должен получать зоны с нуля по актуальной SMA/mid OHLC."""
     conn.execute(create_sma_table_sql())
 
     conn.execute(
         f"""
         UPDATE {quote_identifier(SMA_TABLE_NAME)}
-        SET {quote_identifier(MA_ZONE_COLUMN_NAME)} = NULL
+        SET
+            {quote_identifier(MA_ZONE_COLUMN_NAME)} = NULL,
+            {quote_identifier(MA_ZONE_UPPER_RANGE_COLUMN_NAME)} = NULL,
+            {quote_identifier(MA_ZONE_LOWER_RANGE_COLUMN_NAME)} = NULL
         """
     )
 
