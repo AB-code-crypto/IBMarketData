@@ -304,6 +304,14 @@ def save_signal_candidate_plot(
         signal_window=signal_window,
         expected_points=current_values.size,
     )
+    print(
+        f"[signal_plot] regime debug: "
+        f"total={len(current_regime_values)}, "
+        f"filled={sum(value is not None for value in current_regime_values)}, "
+        f"plus={sum(value == 1 for value in current_regime_values)}, "
+        f"flat={sum(value == 0 for value in current_regime_values)}, "
+        f"minus={sum(value == -1 for value in current_regime_values)}"
+    )
     current_regression = build_linear_regression(current_values)
     current_regression_direction = classify_regression_direction(
         current_regression,
@@ -537,6 +545,13 @@ def save_signal_candidate_plot(
         )
 
     ax.grid(True)
+
+    draw_regime_panel(
+        ax_regime,
+        x_values=current_x_minutes,
+        regime_values=current_regime_values,
+        bar_size_seconds=bar_size_seconds,
+    )
 
     current_regression_delta_bps = calculate_regression_delta_bps(current_regression)
     current_regression_threshold_points = calculate_regression_threshold_points(
