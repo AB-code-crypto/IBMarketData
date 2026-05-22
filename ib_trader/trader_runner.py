@@ -12,8 +12,6 @@ TRADER_MAX_SIGNAL_AGE_SECONDS = 10
 
 
 async def run_trader_loop() -> None:
-    """Что делает: читает свежие signal_events и пишет решения в trade.sqlite3.
-    Зачем нужна: ib_trader — слой принятия решения по сигналу, market-features и позиции."""
     log_info(
         logger,
         (
@@ -41,6 +39,9 @@ async def run_trader_loop() -> None:
                         f"potential_end={decision.potential_end_delta_points:+.2f}, "
                         f"regime={decision.regime}, "
                         f"ma_zone={decision.ma_zone}, "
+                        f"strength={decision.signal_strength}, "
+                        f"order_type={decision.order_type}, "
+                        f"limit_price={decision.limit_price}, "
                         f"position_before={decision.position_before_side.value}/{decision.position_before_qty:g}, "
                         f"position_after={decision.position_after_side.value}/{decision.position_after_qty:g}, "
                         f"reason={decision.reason}"
@@ -51,7 +52,7 @@ async def run_trader_loop() -> None:
         except Exception as exc:
             log_warning(
                 logger,
-                f"ib_trader: ошибка обработки signal_events: {exc}\n"
+                f"ib_trader: ошибка обработки signal_events: {exc}\\n"
                 f"{traceback.format_exc()}",
                 to_telegram=True,
             )

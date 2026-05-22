@@ -171,7 +171,10 @@ def classify_ma_zone(
         if delta <= level2:
             return 2
 
-        return 3
+        if delta <= float(upper_range_points):
+            return 3
+
+        return 4
 
     abs_delta = abs(delta)
 
@@ -187,7 +190,10 @@ def classify_ma_zone(
     if abs_delta <= level2:
         return -2
 
-    return -3
+    if abs_delta <= float(lower_range_points):
+        return -3
+
+    return -4
 
 
 def get_last_ma_zone_bar_ts(conn) -> int:

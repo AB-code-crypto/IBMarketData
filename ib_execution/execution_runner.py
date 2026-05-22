@@ -2,7 +2,7 @@ import asyncio
 import traceback
 
 from core.logger import get_logger, log_info, log_warning, setup_logging
-from ib_execution.execution_logic import execute_trade_intent_market
+from ib_execution.execution_logic import execute_trade_intent
 from ib_execution.execution_models import ExecutionResult, ExecutionStatus
 from ib_execution.execution_store import (
     get_trade_db_connection,
@@ -21,10 +21,9 @@ NEW_INTENTS_LIMIT = 20
 
 
 async def run_execution_loop(order_service: OrderService) -> None:
-    """Что делает: читает NEW trade_intents и исполняет их через IB."""
     log_info(
         logger,
-        "ib_execution loop started: order_type=MARKET_FROM_INTENT_DELTA",
+        "ib_execution loop started: order_type=FROM_TRADE_INTENT",
         to_telegram=False,
     )
 
@@ -36,32 +35,25 @@ async def run_execution_loop(order_service: OrderService) -> None:
             try:
                 initialize_execution_db(conn)
 
-                mark_trade_intent_sending(
-                    conn,
-                    trade_intent_id=intent.trade_intent_id,
-                )
+                mark_trade_intent_sending(conn, trade_intent_id=intent.trade_intent_id)
                 conn.commit()
 
-                result = await execute_trade_intent_market(
+                result = await execute_trade_intent(
                     order_service=order_service,
                     intent=intent,
                 )
 
-                write_trade_intent_execution_result(
-                    conn,
-                    result=result,
-                )
+                write_trade_intent_execution_result(conn, result=result)
                 conn.commit()
 
                 log_info(
                     logger,
                     (
                         f"{intent.instrument_code}: executed trade_intent={intent.trade_intent_id}, "
-                        f"action={intent.action}, order_id={result.order_id}, "
-                        f"order_action={result.order_action}, qty={result.order_quantity}, "
-                        f"avg_fill={result.avg_fill_price}, "
-                        f"realized_pnl={result.realized_pnl}, "
-                        f"commission={result.total_commission}"
+                        f"action={intent.action}, order_type={intent.order_type}, "
+                        f"order_id={result.order_id}, order_action={result.order_action}, "
+                        f"qty={result.order_quantity}, avg_fill={result.avg_fill_price}, "
+                        f"realized_pnl={result.realized_pnl}, commission={result.total_commission}"
                     ),
                     to_telegram=False,
                 )
@@ -81,15 +73,12 @@ async def run_execution_loop(order_service: OrderService) -> None:
                         realized_pnl=None,
                         error_text=error_text,
                     )
-                    write_trade_intent_execution_result(
-                        conn,
-                        result=failure_result,
-                    )
+                    write_trade_intent_execution_result(conn, result=failure_result)
                     conn.commit()
                 finally:
                     log_warning(
                         logger,
-                        f"ib_execution failed trade_intent={intent.trade_intent_id}: {error_text}\n"
+                        f"ib_execution failed trade_intent={intent.trade_intent_id}: {error_text}\\n"
                         f"{traceback.format_exc()}",
                         to_telegram=True,
                     )

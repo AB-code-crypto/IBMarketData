@@ -225,8 +225,10 @@ def draw_ma_zone_lines(
     zone_lines = [
         (sma + upper_range * level1 - base_value, ":", 1.15, 0.78),
         (sma + upper_range * level2 - base_value, "--", 1.15, 0.78),
+        (sma + upper_range - base_value, "-", 1.05, 0.72),
         (sma - lower_range * level1 - base_value, ":", 1.15, 0.78),
         (sma - lower_range * level2 - base_value, "--", 1.15, 0.78),
+        (sma - lower_range - base_value, "-", 1.05, 0.72),
     ]
 
     for line_values, linestyle, linewidth, alpha in zone_lines:

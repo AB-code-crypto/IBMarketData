@@ -10,6 +10,8 @@ from ib_job_data.job_features_config import MA_ZONE_COLUMN_NAME, REGIME_COLUMN_N
 from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 from ib_job_data.sma_features import SMA_TABLE_NAME
 from ib_signal.signal_event_store import SIGNAL_EVENTS_TABLE_NAME, initialize_signal_events_table
+from ib_trader.rule_engine import TraderRuleEvaluation, evaluate_trader_rules
+from ib_trader.rules.base import TraderRuleContext
 from ib_trader.trade_models import (
     MarketFeatureSnapshot,
     PositionSide,
@@ -27,8 +29,6 @@ TRADE_INTENTS_TABLE_NAME = "trade_intents"
 
 
 def get_trade_db_connection():
-    """Что делает: открывает trade.sqlite3.
-    Зачем нужна: торговые решения, intents и позиции живут отдельно от state DB."""
     return open_sqlite_connection(
         str(TRADE_DB_PATH),
         create_parent_dir=True,
@@ -37,8 +37,6 @@ def get_trade_db_connection():
 
 
 def create_positions_latest_table_sql() -> str:
-    """Что делает: возвращает SQL создания positions_latest.
-    Зачем нужна: ib_trader читает оттуда только подтверждённую текущую позицию."""
     return f"""
     CREATE TABLE IF NOT EXISTS {POSITIONS_LATEST_TABLE_NAME} (
         instrument_code TEXT PRIMARY KEY,
@@ -54,8 +52,6 @@ def create_positions_latest_table_sql() -> str:
 
 
 def create_trade_decisions_table_sql() -> str:
-    """Что делает: возвращает SQL создания trade_decisions.
-    Зачем нужна: каждый свежий signal_event должен быть обработан один раз и получить решение."""
     return f"""
     CREATE TABLE IF NOT EXISTS {TRADE_DECISIONS_TABLE_NAME} (
         decision_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,6 +77,14 @@ def create_trade_decisions_table_sql() -> str:
 
         regime INTEGER,
         ma_zone INTEGER,
+        signal_strength TEXT NOT NULL,
+
+        order_type TEXT NOT NULL,
+        order_policy_reason TEXT NOT NULL,
+        limit_offset_points REAL,
+        limit_price REAL,
+        ttl_seconds INTEGER,
+        rules_json TEXT NOT NULL,
 
         decision_action TEXT NOT NULL,
         decision_reason TEXT NOT NULL,
@@ -103,8 +107,6 @@ def create_trade_decisions_table_sql() -> str:
 
 
 def create_trade_intents_table_sql() -> str:
-    """Что делает: возвращает SQL создания trade_intents.
-    Зачем нужна: trade_intents — это очередь исполнения и одновременно минимальная история исполнений."""
     return f"""
     CREATE TABLE IF NOT EXISTS {TRADE_INTENTS_TABLE_NAME} (
         trade_intent_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,6 +121,11 @@ def create_trade_intents_table_sql() -> str:
 
         position_before_side TEXT NOT NULL,
         position_before_qty REAL NOT NULL,
+
+        order_type TEXT NOT NULL,
+        limit_price REAL,
+        limit_offset_points REAL,
+        ttl_seconds INTEGER,
 
         status TEXT NOT NULL,
 
@@ -139,8 +146,6 @@ def create_trade_intents_table_sql() -> str:
 
 
 def initialize_trade_db(conn) -> None:
-    """Что делает: создаёт минимальные таблицы trade.sqlite3.
-    Зачем нужна: trader/execution могут стартовать с чистой trade DB."""
     conn.execute(create_positions_latest_table_sql())
     conn.execute(create_trade_decisions_table_sql())
     conn.execute(create_trade_intents_table_sql())
@@ -172,8 +177,6 @@ def initialize_trade_db(conn) -> None:
 
 
 def read_latest_signal_events(*, max_signal_age_seconds: int) -> list[TraderSignalEvent]:
-    """Что делает: читает последние свежие signal_events по инструментам из state DB.
-    Зачем нужна: ib_trader теперь работает напрямую с выходом ib_signal без filtered_signal_latest."""
     initialize_state_db()
 
     conn = open_sqlite_connection(
@@ -256,16 +259,8 @@ def read_latest_signal_events(*, max_signal_age_seconds: int) -> list[TraderSign
 
 
 def read_market_features_for_signal(signal: TraderSignalEvent) -> MarketFeatureSnapshot:
-    """Что делает: читает regime/ma_zone из job DB на момент сигнала.
-    Зачем нужна: ib_trader принимает торговое решение с учётом рыночных признаков."""
     if signal.instrument_code not in Instrument:
-        return MarketFeatureSnapshot(
-            instrument_code=signal.instrument_code,
-            signal_bar_ts=signal.signal_bar_ts,
-            feature_bar_ts=None,
-            regime=None,
-            ma_zone=None,
-        )
+        return MarketFeatureSnapshot(signal.instrument_code, signal.signal_bar_ts, None, None, None)
 
     instrument_row = Instrument[signal.instrument_code]
     feature_db_path = get_instrument_feature_db_path(
@@ -274,13 +269,7 @@ def read_market_features_for_signal(signal: TraderSignalEvent) -> MarketFeatureS
     )
 
     if not feature_db_path.is_file():
-        return MarketFeatureSnapshot(
-            instrument_code=signal.instrument_code,
-            signal_bar_ts=signal.signal_bar_ts,
-            feature_bar_ts=None,
-            regime=None,
-            ma_zone=None,
-        )
+        return MarketFeatureSnapshot(signal.instrument_code, signal.signal_bar_ts, None, None, None)
 
     conn = open_sqlite_connection(
         str(feature_db_path),
@@ -304,25 +293,13 @@ def read_market_features_for_signal(signal: TraderSignalEvent) -> MarketFeatureS
         ).fetchone()
 
     except sqlite3.Error:
-        return MarketFeatureSnapshot(
-            instrument_code=signal.instrument_code,
-            signal_bar_ts=signal.signal_bar_ts,
-            feature_bar_ts=None,
-            regime=None,
-            ma_zone=None,
-        )
+        return MarketFeatureSnapshot(signal.instrument_code, signal.signal_bar_ts, None, None, None)
 
     finally:
         conn.close()
 
     if row is None:
-        return MarketFeatureSnapshot(
-            instrument_code=signal.instrument_code,
-            signal_bar_ts=signal.signal_bar_ts,
-            feature_bar_ts=None,
-            regime=None,
-            ma_zone=None,
-        )
+        return MarketFeatureSnapshot(signal.instrument_code, signal.signal_bar_ts, None, None, None)
 
     return MarketFeatureSnapshot(
         instrument_code=signal.instrument_code,
@@ -340,8 +317,6 @@ def has_decision_for_signal(
         source_signal_id: int,
         signal_bar_ts: int,
 ) -> bool:
-    """Что делает: проверяет, был ли signal_event уже обработан ib_trader.
-    Зачем нужна: один source-сигнал нельзя превращать в несколько торговых решений."""
     initialize_trade_db(conn)
 
     row = conn.execute(
@@ -364,8 +339,6 @@ def has_decision_for_signal(
 
 
 def read_position_snapshot(conn, *, instrument_code: str) -> PositionSnapshot:
-    """Что делает: читает текущую подтверждённую позицию инструмента.
-    Зачем нужна: отсутствие строки означает UNKNOWN, а не FLAT."""
     initialize_trade_db(conn)
 
     row = conn.execute(
@@ -388,30 +361,34 @@ def read_position_snapshot(conn, *, instrument_code: str) -> PositionSnapshot:
     side = PositionSide(str(row[0]).upper())
 
     if side == PositionSide.UNKNOWN:
-        return PositionSnapshot(
-            instrument_code=str(instrument_code),
-            side=PositionSide.UNKNOWN,
-            quantity=0.0,
-        )
+        return PositionSnapshot(str(instrument_code), PositionSide.UNKNOWN, 0.0)
 
     if quantity <= 0.0:
-        return PositionSnapshot(
-            instrument_code=str(instrument_code),
-            side=PositionSide.FLAT,
-            quantity=0.0,
-        )
+        return PositionSnapshot(str(instrument_code), PositionSide.FLAT, 0.0)
 
-    return PositionSnapshot(
-        instrument_code=str(instrument_code),
-        side=side,
-        quantity=quantity,
-    )
+    return PositionSnapshot(str(instrument_code), side, quantity)
 
 
-def is_market_features_available(features: MarketFeatureSnapshot) -> bool:
-    """Что делает: проверяет, что regime/ma_zone реально прочитаны.
-    Зачем нужна: trader не должен открывать сделку, если рыночное состояние неизвестно."""
-    return features.regime is not None and features.ma_zone is not None
+def calculate_limit_price(
+        *,
+        signal_direction: str,
+        entry_price: float,
+        limit_offset_points: float | None,
+) -> float | None:
+    offset = float(limit_offset_points or 0.0)
+
+    if offset <= 0.0:
+        return float(entry_price)
+
+    direction = str(signal_direction).upper()
+
+    if direction == "LONG":
+        return float(entry_price) - offset
+
+    if direction == "SHORT":
+        return float(entry_price) + offset
+
+    return float(entry_price)
 
 
 def decide_trade_action(
@@ -419,17 +396,27 @@ def decide_trade_action(
         signal: TraderSignalEvent,
         position: PositionSnapshot,
         market_features: MarketFeatureSnapshot,
+        rule_result: TraderRuleEvaluation,
 ) -> TradeDecision:
-    """Что делает: принимает минимальное торговое решение по сигналу, позиции и market-features.
-    Зачем нужна: ib_trader теперь является полноценным слоем принятия решения."""
     signal_direction = str(signal.direction).upper()
 
     if signal_direction not in {"LONG", "SHORT"}:
         raise ValueError(f"Неизвестное направление сигнала: {signal.direction!r}")
 
-    if not is_market_features_available(market_features):
+    order_type = str(rule_result.order_type).upper()
+    limit_price = (
+        calculate_limit_price(
+            signal_direction=signal_direction,
+            entry_price=float(signal.entry_price),
+            limit_offset_points=rule_result.limit_offset_points,
+        )
+        if order_type == "LIMIT"
+        else None
+    )
+
+    if not rule_result.allowed:
         action = TradeDecisionAction.NO_ACTION
-        reason = "market_features_unknown"
+        reason = ";".join(rule_result.reject_reasons) or "rules_rejected"
         after_side = position.side
         after_qty = float(position.quantity)
 
@@ -474,6 +461,13 @@ def decide_trade_action(
         potential_used=int(signal.potential_used),
         regime=market_features.regime,
         ma_zone=market_features.ma_zone,
+        signal_strength=rule_result.signal_strength,
+        order_type=order_type,
+        order_policy_reason=rule_result.order_policy_reason,
+        limit_offset_points=rule_result.limit_offset_points,
+        limit_price=limit_price,
+        ttl_seconds=rule_result.ttl_seconds,
+        rules_json=rule_result.rules_json,
         action=action,
         reason=reason,
         position_before_side=position.side,
@@ -484,8 +478,6 @@ def decide_trade_action(
 
 
 def write_trade_decision(conn, decision: TradeDecision) -> int:
-    """Что делает: пишет торговое решение и возвращает decision_id.
-    Зачем нужна: downstream-слои должны видеть, почему и что решил ib_trader."""
     initialize_trade_db(conn)
 
     created_at_ts = int(time.time())
@@ -514,6 +506,14 @@ def write_trade_decision(conn, decision: TradeDecision) -> int:
 
             regime,
             ma_zone,
+            signal_strength,
+
+            order_type,
+            order_policy_reason,
+            limit_offset_points,
+            limit_price,
+            ttl_seconds,
+            rules_json,
 
             decision_action,
             decision_reason,
@@ -526,7 +526,7 @@ def write_trade_decision(conn, decision: TradeDecision) -> int:
 
             created_at_ts
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
         ON CONFLICT (
             instrument_code,
@@ -551,6 +551,13 @@ def write_trade_decision(conn, decision: TradeDecision) -> int:
             int(decision.potential_used),
             decision.regime,
             decision.ma_zone,
+            decision.signal_strength,
+            decision.order_type,
+            decision.order_policy_reason,
+            decision.limit_offset_points,
+            decision.limit_price,
+            decision.ttl_seconds,
+            decision.rules_json,
             decision.action.value,
             decision.reason,
             decision.position_before_side.value,
@@ -583,8 +590,6 @@ def write_trade_decision(conn, decision: TradeDecision) -> int:
 
 
 def write_trade_intent_if_needed(conn, *, decision_id: int, decision: TradeDecision) -> None:
-    """Что делает: пишет trade_intent для action != NO_ACTION.
-    Зачем нужна: execution-слой читает только действия, которые требуют исполнения."""
     if decision.action == TradeDecisionAction.NO_ACTION:
         return
 
@@ -604,12 +609,17 @@ def write_trade_intent_if_needed(conn, *, decision_id: int, decision: TradeDecis
             position_before_side,
             position_before_qty,
 
+            order_type,
+            limit_price,
+            limit_offset_points,
+            ttl_seconds,
+
             status,
 
             created_at_ts,
             updated_at_ts
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
         ON CONFLICT(decision_id) DO NOTHING
         """,
@@ -622,6 +632,10 @@ def write_trade_intent_if_needed(conn, *, decision_id: int, decision: TradeDecis
             float(decision.position_after_qty),
             decision.position_before_side.value,
             float(decision.position_before_qty),
+            decision.order_type,
+            decision.limit_price,
+            decision.limit_offset_points,
+            decision.ttl_seconds,
             "NEW",
             now_ts,
             now_ts,
@@ -630,11 +644,7 @@ def write_trade_intent_if_needed(conn, *, decision_id: int, decision: TradeDecis
 
 
 def process_signal_events_once(*, max_signal_age_seconds: int) -> list[TradeDecision]:
-    """Что делает: один раз обрабатывает свежие signal_events.
-    Зачем нужна: trader принимает решение напрямую по сигналу, job-features и текущей позиции."""
-    signals = read_latest_signal_events(
-        max_signal_age_seconds=max_signal_age_seconds,
-    )
+    signals = read_latest_signal_events(max_signal_age_seconds=max_signal_age_seconds)
 
     if not signals:
         return []
@@ -656,23 +666,22 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> list[TradeDeci
                 continue
 
             market_features = read_market_features_for_signal(signal)
-            position = read_position_snapshot(
-                conn,
-                instrument_code=signal.instrument_code,
+            position = read_position_snapshot(conn, instrument_code=signal.instrument_code)
+            rule_context = TraderRuleContext(
+                signal=signal,
+                market_features=market_features,
+                position=position,
             )
+            rule_result = evaluate_trader_rules(rule_context)
             decision = decide_trade_action(
                 signal=signal,
                 position=position,
                 market_features=market_features,
+                rule_result=rule_result,
             )
 
             decision_id = write_trade_decision(conn, decision)
-            write_trade_intent_if_needed(
-                conn,
-                decision_id=decision_id,
-                decision=decision,
-            )
-
+            write_trade_intent_if_needed(conn, decision_id=decision_id, decision=decision)
             decisions.append(decision)
 
         conn.commit()

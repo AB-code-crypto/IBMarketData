@@ -9,14 +9,10 @@ from ib_execution.execution_models import ExecutionResult, ExecutionStatus, Trad
 
 
 def initialize_execution_db(conn) -> None:
-    """Что делает: создаёт таблицы trade.sqlite3, нужные execution-сервису.
-    Зачем нужна: execution больше не создаёт отдельную execution_orders; результат пишется в trade_intents."""
     initialize_trade_db(conn)
 
 
 def read_new_trade_intents(*, limit: int = 20) -> list[TradeIntent]:
-    """Что делает: читает trade_intents со статусом NEW.
-    Зачем нужна: execution-сервис исполняет только новые торговые намерения."""
     conn = get_trade_db_connection()
 
     try:
@@ -36,6 +32,11 @@ def read_new_trade_intents(*, limit: int = 20) -> list[TradeIntent]:
 
                 position_before_side,
                 position_before_qty,
+
+                order_type,
+                limit_price,
+                limit_offset_points,
+                ttl_seconds,
 
                 status,
                 created_at_ts
@@ -58,8 +59,12 @@ def read_new_trade_intents(*, limit: int = 20) -> list[TradeIntent]:
                 target_qty=float(row[6]),
                 position_before_side=str(row[7]),
                 position_before_qty=float(row[8]),
-                status=str(row[9]),
-                created_at_ts=int(row[10]),
+                order_type=str(row[9]).upper(),
+                limit_price=None if row[10] is None else float(row[10]),
+                limit_offset_points=None if row[11] is None else float(row[11]),
+                ttl_seconds=None if row[12] is None else int(row[12]),
+                status=str(row[13]),
+                created_at_ts=int(row[14]),
             )
             for row in rows
         ]
@@ -69,8 +74,6 @@ def read_new_trade_intents(*, limit: int = 20) -> list[TradeIntent]:
 
 
 def mark_trade_intent_sending(conn, *, trade_intent_id: int) -> None:
-    """Что делает: переводит trade_intent в SENDING.
-    Зачем нужна: при рестарте видно, что intent уже был взят execution-сервисом."""
     now_ts = int(time.time())
 
     conn.execute(
@@ -96,8 +99,6 @@ def write_trade_intent_execution_result(
         *,
         result: ExecutionResult,
 ) -> None:
-    """Что делает: пишет результат исполнения прямо в trade_intents.
-    Зачем нужна: для MVP trade_intents одновременно очередь исполнения и история фактических попыток."""
     now_ts = int(time.time())
 
     conn.execute(

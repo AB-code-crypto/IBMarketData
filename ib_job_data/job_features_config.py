@@ -44,6 +44,7 @@ MA_ZONE_LEVEL2_PERCENT = 66.666667
 MA_ZONE_RANGE_SOURCE = "HIGH_LOW"
 
 # Значения:
+#   4  above upper_far boundary / повышенный вынос
 #   3  upper_far
 #   2  upper_middle
 #   1  upper_near
@@ -51,6 +52,7 @@ MA_ZONE_RANGE_SOURCE = "HIGH_LOW"
 #  -1  lower_near
 #  -2  lower_middle
 #  -3  lower_far
+#  -4  below lower_far boundary / повышенный вынос
 MA_ZONE_COLUMN_NAME = "ma_zone"
 
 # Эти две колонки нужны только для отрисовки границ зон на PNG.

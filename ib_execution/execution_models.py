@@ -5,6 +5,7 @@ from enum import Enum
 class ExecutionStatus(Enum):
     NEW = "NEW"
     SENDING = "SENDING"
+    ACCEPTED = "ACCEPTED"
     EXECUTED = "EXECUTED"
     FAILED = "FAILED"
 
@@ -22,6 +23,11 @@ class TradeIntent:
 
     position_before_side: str
     position_before_qty: float
+
+    order_type: str
+    limit_price: float | None
+    limit_offset_points: float | None
+    ttl_seconds: int | None
 
     status: str
     created_at_ts: int
