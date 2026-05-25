@@ -18,17 +18,25 @@ logger = get_logger(__name__)
 
 EXECUTION_LOOP_SLEEP_SECONDS = 1
 NEW_INTENTS_LIMIT = 20
+MAX_NEW_INTENT_AGE_SECONDS = 10
 
 
 async def run_execution_loop(order_service: OrderService) -> None:
     log_info(
         logger,
-        "ib_execution loop started: order_type=FROM_TRADE_INTENT",
+        (
+            "ib_execution loop started: "
+            "order_type=FROM_TRADE_INTENT, "
+            f"max_new_intent_age_seconds={MAX_NEW_INTENT_AGE_SECONDS}"
+        ),
         to_telegram=False,
     )
 
     while True:
-        intents = read_new_trade_intents(limit=NEW_INTENTS_LIMIT)
+        intents = read_new_trade_intents(
+            limit=NEW_INTENTS_LIMIT,
+            max_age_seconds=MAX_NEW_INTENT_AGE_SECONDS,
+        )
 
         for intent in intents:
             conn = get_trade_db_connection()

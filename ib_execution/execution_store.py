@@ -8,15 +8,72 @@ from ib_trader.trade_store import (
 from ib_execution.execution_models import ExecutionResult, ExecutionStatus, TradeIntent
 
 
+STALE_NEW_INTENT_ERROR_TEXT = "stale trade_intent: older than execution max age"
+
+
 def initialize_execution_db(conn) -> None:
     initialize_trade_db(conn)
 
 
-def read_new_trade_intents(*, limit: int = 20) -> list[TradeIntent]:
+
+def expire_stale_new_trade_intents(
+        conn,
+        *,
+        max_age_seconds: int,
+        now_ts: int | None = None,
+) -> int:
+    """Что делает: переводит старые NEW trade_intents в FAILED.
+    Зачем нужна: execution не должен отправлять брокеру ордер по устаревшему сигналу."""
+    max_age_seconds = int(max_age_seconds)
+
+    if max_age_seconds <= 0:
+        return 0
+
+    now_ts = int(time.time() if now_ts is None else now_ts)
+    min_created_at_ts = now_ts - max_age_seconds
+
+    changes_before = conn.total_changes
+
+    conn.execute(
+        f"""
+        UPDATE {TRADE_INTENTS_TABLE_NAME}
+        SET
+            status = ?,
+            error_text = ?,
+            updated_at_ts = ?,
+            finished_at_ts = ?
+        WHERE status = 'NEW'
+          AND created_at_ts < ?
+        """,
+        (
+            ExecutionStatus.FAILED.value,
+            f"{STALE_NEW_INTENT_ERROR_TEXT}; max_age_seconds={max_age_seconds}",
+            now_ts,
+            now_ts,
+            min_created_at_ts,
+        ),
+    )
+
+    return int(conn.total_changes - changes_before)
+
+
+def read_new_trade_intents(*, limit: int = 20, max_age_seconds: int = 10) -> list[TradeIntent]:
     conn = get_trade_db_connection()
 
     try:
         initialize_execution_db(conn)
+
+        now_ts = int(time.time())
+        max_age_seconds = int(max_age_seconds)
+
+        expire_stale_new_trade_intents(
+            conn,
+            max_age_seconds=max_age_seconds,
+            now_ts=now_ts,
+        )
+        conn.commit()
+
+        min_created_at_ts = now_ts - max_age_seconds if max_age_seconds > 0 else now_ts
 
         rows = conn.execute(
             f"""
@@ -42,10 +99,11 @@ def read_new_trade_intents(*, limit: int = 20) -> list[TradeIntent]:
                 created_at_ts
             FROM {TRADE_INTENTS_TABLE_NAME}
             WHERE status = 'NEW'
+              AND created_at_ts >= ?
             ORDER BY created_at_ts ASC, trade_intent_id ASC
             LIMIT ?
             """,
-            (int(limit),),
+            (min_created_at_ts, int(limit)),
         ).fetchall()
 
         return [

@@ -3,7 +3,7 @@ from datetime import time
 import json
 from typing import Any
 
-from ib_trader.rules_config import TRADER_RULES, TRADER_RULE_SETTINGS
+from ib_trader.trader_rules_config import TRADER_RULES, TRADER_RULE_SETTINGS
 from ib_trader.trade_models import MarketFeatureSnapshot, TraderSignalEvent
 
 
