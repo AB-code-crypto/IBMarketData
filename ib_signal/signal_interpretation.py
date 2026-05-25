@@ -1,5 +1,8 @@
 from dataclasses import dataclass
+from datetime import time
+import json
 import sqlite3
+from typing import Any
 
 from contracts import Instrument
 from core.sqlite_utils import open_sqlite_connection
@@ -7,8 +10,7 @@ from ib_job_data.feature_db_sql import quote_identifier
 from ib_job_data.job_features_config import MA_ZONE_COLUMN_NAME, REGIME_COLUMN_NAME
 from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 from ib_job_data.sma_features import SMA_TABLE_NAME
-from ib_signal.signal_rule_engine import evaluate_signal_rules
-from ib_signal.signal_rule_models import SignalMarketFeatureSnapshot, SignalRuleEvent
+from ib_signal.signal_rules_config import SIGNAL_RULES, SIGNAL_RULE_SETTINGS
 
 
 @dataclass(frozen=True)
@@ -31,13 +33,21 @@ class SignalInterpretation:
     signal_rules_json: str
 
 
-def read_market_features_for_signal_event(
+@dataclass(frozen=True)
+class MarketSnapshot:
+    feature_bar_ts: int | None
+    regime: int | None
+    ma_zone: int | None
+
+
+def read_market_snapshot(
         *,
         instrument_code: str,
         signal_bar_ts: int,
-) -> SignalMarketFeatureSnapshot:
+) -> MarketSnapshot:
+    """Читает regime/ma_zone из job DB на момент сигнала."""
     if instrument_code not in Instrument:
-        return SignalMarketFeatureSnapshot(str(instrument_code), int(signal_bar_ts), None, None, None)
+        return MarketSnapshot(None, None, None)
 
     instrument_row = Instrument[instrument_code]
     feature_db_path = get_instrument_feature_db_path(
@@ -46,7 +56,7 @@ def read_market_features_for_signal_event(
     )
 
     if not feature_db_path.is_file():
-        return SignalMarketFeatureSnapshot(str(instrument_code), int(signal_bar_ts), None, None, None)
+        return MarketSnapshot(None, None, None)
 
     conn = open_sqlite_connection(
         str(feature_db_path),
@@ -70,24 +80,135 @@ def read_market_features_for_signal_event(
         ).fetchone()
 
     except sqlite3.Error:
-        return SignalMarketFeatureSnapshot(str(instrument_code), int(signal_bar_ts), None, None, None)
+        return MarketSnapshot(None, None, None)
 
     finally:
         conn.close()
 
     if row is None:
-        return SignalMarketFeatureSnapshot(str(instrument_code), int(signal_bar_ts), None, None, None)
+        return MarketSnapshot(None, None, None)
 
-    return SignalMarketFeatureSnapshot(
-        instrument_code=str(instrument_code),
-        signal_bar_ts=int(signal_bar_ts),
+    return MarketSnapshot(
         feature_bar_ts=int(row[0]),
         regime=None if row[1] is None else int(row[1]),
         ma_zone=None if row[2] is None else int(row[2]),
     )
 
 
-def calculate_signal_limit_price(
+def parse_hhmm(value: str) -> time:
+    hour_text, minute_text = str(value).split(":", 1)
+    return time(hour=int(hour_text), minute=int(minute_text))
+
+
+def extract_hhmm_ct(signal_time_ct: str | None) -> time | None:
+    if signal_time_ct is None:
+        return None
+
+    text = str(signal_time_ct)
+    hhmm = text[11:16] if len(text) >= 16 and text[10] == " " else text[:5]
+
+    try:
+        return parse_hhmm(hhmm)
+    except Exception:
+        return None
+
+
+def is_time_inside_window(value: time, start: str, end: str) -> bool:
+    start_time = parse_hhmm(start)
+    end_time = parse_hhmm(end)
+
+    if start_time <= end_time:
+        return start_time <= value < end_time
+
+    return value >= start_time or value < end_time
+
+
+def is_signal_time_inside_any_window(signal_time_ct: str | None, windows: list[tuple[str, str]]) -> bool:
+    signal_time = extract_hhmm_ct(signal_time_ct)
+
+    if signal_time is None:
+        return False
+
+    return any(
+        is_time_inside_window(signal_time, str(start), str(end))
+        for start, end in windows
+    )
+
+
+def dump_rules(records: list[dict[str, Any]]) -> str:
+    return json.dumps(
+        records,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def allowed_zones_for_direction(direction: str) -> list[int]:
+    direction = str(direction).upper()
+
+    if direction == "LONG":
+        return [int(value) for value in SIGNAL_RULES["long_allowed_ma_zones"]]
+
+    if direction == "SHORT":
+        return [int(value) for value in SIGNAL_RULES["short_allowed_ma_zones"]]
+
+    return []
+
+
+def classify_signal_strength(*, direction: str, regime: int | None) -> str:
+    if regime is None:
+        return "UNKNOWN"
+
+    direction = str(direction).upper()
+    regime = int(regime)
+
+    if direction == "LONG" and regime in {int(value) for value in SIGNAL_RULES["strong_long_regimes"]}:
+        return "STRONG"
+
+    if direction == "SHORT" and regime in {int(value) for value in SIGNAL_RULES["strong_short_regimes"]}:
+        return "STRONG"
+
+    if regime in {int(value) for value in SIGNAL_RULES["neutral_regimes"]}:
+        return "NEUTRAL"
+
+    return "WEAK"
+
+
+def choose_order_policy(
+        *,
+        signal_time_ct: str | None,
+        ma_zone: int | None,
+) -> tuple[str, str, float | None, int | None]:
+    settings = SIGNAL_RULE_SETTINGS
+    order_type = str(settings["default_order_type"]).upper()
+    reasons: list[str] = []
+
+    limit_zones = {int(value) for value in SIGNAL_RULES["limit_order_ma_zones"]}
+
+    if ma_zone is not None and int(ma_zone) in limit_zones:
+        order_type = str(settings["limit_order_type"]).upper()
+        reasons.append("ma_zone_limit")
+
+    if is_signal_time_inside_any_window(
+            signal_time_ct,
+            list(SIGNAL_RULES["limit_order_time_windows_ct"]),
+    ):
+        order_type = str(settings["limit_order_type"]).upper()
+        reasons.append("time_window_limit")
+
+    if order_type == str(settings["limit_order_type"]).upper():
+        return (
+            order_type,
+            ",".join(reasons) if reasons else "limit_rule",
+            float(settings["limit_offset_points"]),
+            int(settings["limit_ttl_seconds"]),
+        )
+
+    return order_type, "default_market", None, None
+
+
+def calculate_limit_price(
         *,
         direction: str,
         entry_price: float,
@@ -113,35 +234,32 @@ def calculate_signal_limit_price(
     return float(entry_price)
 
 
-def build_trader_signal_event_for_interpretation(
+def build_interpretation_result(
         *,
-        instrument_code: str,
-        signal_bar_ts: int,
-        signal_time_ct: str | None,
-        direction: str,
-        entry_price: float,
-        best_pearson: float,
-        candidate_score_best: float | None,
-        potential_end_delta_points: float,
-        potential_max_profit_points: float,
-        potential_max_drawdown_points: float,
-        potential_used: int,
-) -> SignalRuleEvent:
-    return SignalRuleEvent(
-        source_signal_id=0,
-        instrument_code=str(instrument_code),
-        signal_bar_ts=int(signal_bar_ts),
-        signal_time_utc="",
-        signal_time_ct=signal_time_ct,
-        signal_time_msk="",
-        direction=str(direction).upper(),
-        entry_price=float(entry_price),
-        best_pearson=float(best_pearson),
-        candidate_score_best=candidate_score_best,
-        potential_end_delta_points=float(potential_end_delta_points),
-        potential_max_profit_points=float(potential_max_profit_points),
-        potential_max_drawdown_points=float(potential_max_drawdown_points),
-        potential_used=int(potential_used),
+        market: MarketSnapshot,
+        allowed: bool,
+        reject_reason: str | None,
+        signal_strength: str,
+        order_type: str,
+        order_policy_reason: str,
+        limit_offset_points: float | None,
+        limit_price: float | None,
+        ttl_seconds: int | None,
+        records: list[dict[str, Any]],
+) -> SignalInterpretation:
+    return SignalInterpretation(
+        feature_bar_ts=market.feature_bar_ts,
+        regime=market.regime,
+        ma_zone=market.ma_zone,
+        signal_allowed=allowed,
+        signal_reject_reason=reject_reason,
+        signal_strength=signal_strength,
+        order_type=order_type,
+        order_policy_reason=order_policy_reason,
+        limit_offset_points=limit_offset_points,
+        limit_price=limit_price,
+        ttl_seconds=ttl_seconds,
+        signal_rules_json=dump_rules(records),
     )
 
 
@@ -159,49 +277,164 @@ def interpret_signal_event(
         potential_max_drawdown_points: float,
         potential_used: int,
 ) -> SignalInterpretation:
-    market_features = read_market_features_for_signal_event(
+    """Интерпретирует raw-сигнал через ma_zone/regime/time и SIGNAL_RULES."""
+    market = read_market_snapshot(
         instrument_code=instrument_code,
         signal_bar_ts=signal_bar_ts,
     )
-    signal_rule_event = build_trader_signal_event_for_interpretation(
-        instrument_code=instrument_code,
-        signal_bar_ts=signal_bar_ts,
+    settings = SIGNAL_RULE_SETTINGS
+    records: list[dict[str, Any]] = []
+
+    direction = str(direction).upper()
+    ma_zone = market.ma_zone
+    regime = market.regime
+
+    if bool(settings["require_market_features"]) and (ma_zone is None or regime is None):
+        records.append({
+            "rule": "market_features",
+            "result": "REJECT",
+            "reason": "market_features_unknown",
+            "details": {
+                "feature_bar_ts": market.feature_bar_ts,
+                "regime": regime,
+                "ma_zone": ma_zone,
+            },
+        })
+        return build_interpretation_result(
+            market=market,
+            allowed=False,
+            reject_reason="market_features_unknown",
+            signal_strength="NEUTRAL",
+            order_type=str(settings["default_order_type"]).upper(),
+            order_policy_reason="rejected",
+            limit_offset_points=None,
+            limit_price=None,
+            ttl_seconds=None,
+            records=records,
+        )
+
+    if not bool(settings["require_market_features"]):
+        order_type = str(settings["default_order_type"]).upper()
+        records.append({
+            "rule": "market_features",
+            "result": "SKIP",
+            "details": {"require_market_features": False},
+        })
+        return build_interpretation_result(
+            market=market,
+            allowed=True,
+            reject_reason=None,
+            signal_strength="NEUTRAL",
+            order_type=order_type,
+            order_policy_reason="potential_only",
+            limit_offset_points=None,
+            limit_price=None,
+            ttl_seconds=None,
+            records=records,
+        )
+
+    allowed_zones = allowed_zones_for_direction(direction)
+
+    if int(ma_zone) not in allowed_zones:
+        records.append({
+            "rule": "zone_direction",
+            "result": "REJECT",
+            "reason": "ma_zone_direction_forbidden",
+            "details": {
+                "direction": direction,
+                "ma_zone": int(ma_zone),
+                "allowed_zones": allowed_zones,
+            },
+        })
+        return build_interpretation_result(
+            market=market,
+            allowed=False,
+            reject_reason="ma_zone_direction_forbidden",
+            signal_strength="NEUTRAL",
+            order_type=str(settings["default_order_type"]).upper(),
+            order_policy_reason="rejected",
+            limit_offset_points=None,
+            limit_price=None,
+            ttl_seconds=None,
+            records=records,
+        )
+
+    records.append({
+        "rule": "zone_direction",
+        "result": "ALLOW",
+        "details": {
+            "direction": direction,
+            "ma_zone": int(ma_zone),
+            "allowed_zones": allowed_zones,
+        },
+    })
+
+    order_type, order_policy_reason, limit_offset_points, ttl_seconds = choose_order_policy(
         signal_time_ct=signal_time_ct,
+        ma_zone=int(ma_zone),
+    )
+    limit_price = calculate_limit_price(
         direction=direction,
-        entry_price=entry_price,
-        best_pearson=best_pearson,
-        candidate_score_best=candidate_score_best,
-        potential_end_delta_points=potential_end_delta_points,
-        potential_max_profit_points=potential_max_profit_points,
-        potential_max_drawdown_points=potential_max_drawdown_points,
-        potential_used=potential_used,
+        entry_price=float(entry_price),
+        order_type=order_type,
+        limit_offset_points=limit_offset_points,
     )
 
-    rule_result = evaluate_signal_rules(
-        signal=signal_rule_event,
-        market_features=market_features,
-    )
+    records.append({
+        "rule": "order_policy",
+        "result": order_type,
+        "details": {
+            "ma_zone": int(ma_zone),
+            "signal_time_ct": signal_time_ct,
+            "order_policy_reason": order_policy_reason,
+            "limit_offset_points": limit_offset_points,
+            "limit_price": limit_price,
+            "ttl_seconds": ttl_seconds,
+        },
+    })
 
-    limit_price = calculate_signal_limit_price(
+    signal_strength = classify_signal_strength(
         direction=direction,
-        entry_price=entry_price,
-        order_type=rule_result.order_type,
-        limit_offset_points=rule_result.limit_offset_points,
+        regime=int(regime),
     )
+    records.append({
+        "rule": "regime_signal_strength",
+        "result": signal_strength,
+        "details": {
+            "direction": direction,
+            "regime": int(regime),
+        },
+    })
 
-    reject_reason = ";".join(rule_result.reject_reasons) if rule_result.reject_reasons else None
+    if signal_strength == "WEAK" and str(settings["weak_signal_policy"]).upper() == "REJECT":
+        records.append({
+            "rule": "weak_signal_policy",
+            "result": "REJECT",
+            "reason": "weak_signal_rejected",
+            "details": {"signal_strength": signal_strength},
+        })
+        return build_interpretation_result(
+            market=market,
+            allowed=False,
+            reject_reason="weak_signal_rejected",
+            signal_strength=signal_strength,
+            order_type=order_type,
+            order_policy_reason=order_policy_reason,
+            limit_offset_points=limit_offset_points,
+            limit_price=limit_price,
+            ttl_seconds=ttl_seconds,
+            records=records,
+        )
 
-    return SignalInterpretation(
-        feature_bar_ts=market_features.feature_bar_ts,
-        regime=market_features.regime,
-        ma_zone=market_features.ma_zone,
-        signal_allowed=bool(rule_result.allowed),
-        signal_reject_reason=reject_reason,
-        signal_strength=rule_result.signal_strength,
-        order_type=str(rule_result.order_type).upper(),
-        order_policy_reason=str(rule_result.order_policy_reason),
-        limit_offset_points=rule_result.limit_offset_points,
+    return build_interpretation_result(
+        market=market,
+        allowed=True,
+        reject_reason=None,
+        signal_strength=signal_strength,
+        order_type=order_type,
+        order_policy_reason=order_policy_reason,
+        limit_offset_points=limit_offset_points,
         limit_price=limit_price,
-        ttl_seconds=rule_result.ttl_seconds,
-        signal_rules_json=rule_result.rules_json,
+        ttl_seconds=ttl_seconds,
+        records=records,
     )

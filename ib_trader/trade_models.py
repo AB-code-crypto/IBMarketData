@@ -114,3 +114,21 @@ class TradeDecision:
 
     position_after_side: PositionSide
     position_after_qty: float
+
+
+
+@dataclass(frozen=True)
+class TraderRuleEvaluation:
+    """Локальный объект ib_trader для уже готовой интерпретации signal_events.
+    Это не rule-engine: ib_trader не интерпретирует сигнал, а только принимает stateful decision."""
+    allowed: bool
+    reject_reasons: list[str]
+
+    signal_strength: str
+
+    order_type: str
+    order_policy_reason: str
+    limit_offset_points: float | None
+    ttl_seconds: int | None
+
+    rules_json: str

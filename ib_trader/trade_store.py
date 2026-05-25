@@ -1,5 +1,4 @@
 import json
-import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -8,14 +7,9 @@ from contracts import Instrument
 from core.sqlite_utils import open_sqlite_connection
 from core.time_utils import CT_TIMEZONE, MSK_TIMEZONE, SQLITE_DATETIME_FORMAT
 from core.state_db import STATE_DB_PATH, initialize_state_db
-from ib_job_data.feature_db_sql import quote_identifier
-from ib_job_data.job_features_config import MA_ZONE_COLUMN_NAME, REGIME_COLUMN_NAME
-from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
-from ib_job_data.sma_features import SMA_TABLE_NAME
 from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG, SignalWindowMode
 from ib_signal.signal_event_store import SIGNAL_EVENTS_TABLE_NAME, initialize_signal_events_table
 from ib_signal.signal_schedule import get_grid_slot_start_ts
-from ib_signal.signal_rule_models import SignalRuleEvaluation as TraderRuleEvaluation
 from ib_trader.trade_models import (
     MarketFeatureSnapshot,
     PositionSide,
@@ -289,59 +283,6 @@ def read_latest_signal_events(*, max_signal_age_seconds: int) -> list[TraderSign
 
     finally:
         conn.close()
-
-
-def read_market_features_for_signal(signal: TraderSignalEvent) -> MarketFeatureSnapshot:
-    if signal.instrument_code not in Instrument:
-        return MarketFeatureSnapshot(signal.instrument_code, signal.signal_bar_ts, None, None, None)
-
-    instrument_row = Instrument[signal.instrument_code]
-    feature_db_path = get_instrument_feature_db_path(
-        instrument_code=signal.instrument_code,
-        instrument_row=instrument_row,
-    )
-
-    if not feature_db_path.is_file():
-        return MarketFeatureSnapshot(signal.instrument_code, signal.signal_bar_ts, None, None, None)
-
-    conn = open_sqlite_connection(
-        str(feature_db_path),
-        require_existing_file=True,
-        use_wal=False,
-    )
-
-    try:
-        row = conn.execute(
-            f"""
-            SELECT
-                bar_time_ts,
-                {quote_identifier(REGIME_COLUMN_NAME)},
-                {quote_identifier(MA_ZONE_COLUMN_NAME)}
-            FROM {quote_identifier(SMA_TABLE_NAME)}
-            WHERE bar_time_ts <= ?
-            ORDER BY bar_time_ts DESC
-            LIMIT 1
-            """,
-            (int(signal.signal_bar_ts),),
-        ).fetchone()
-
-    except sqlite3.Error:
-        return MarketFeatureSnapshot(signal.instrument_code, signal.signal_bar_ts, None, None, None)
-
-    finally:
-        conn.close()
-
-    if row is None:
-        return MarketFeatureSnapshot(signal.instrument_code, signal.signal_bar_ts, None, None, None)
-
-    return MarketFeatureSnapshot(
-        instrument_code=signal.instrument_code,
-        signal_bar_ts=signal.signal_bar_ts,
-        feature_bar_ts=int(row[0]),
-        regime=None if row[1] is None else int(row[1]),
-        ma_zone=None if row[2] is None else int(row[2]),
-    )
-
 
 
 def build_market_features_from_signal_event(signal: TraderSignalEvent) -> MarketFeatureSnapshot:
