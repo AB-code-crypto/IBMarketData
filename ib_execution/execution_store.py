@@ -9,11 +9,11 @@ from ib_execution.execution_models import ExecutionResult, ExecutionStatus, Trad
 
 
 STALE_NEW_INTENT_ERROR_TEXT = "stale trade_intent: older than execution max age"
+STALE_ACTIVE_INTENT_ERROR_TEXT = "stale active trade_intent: execution service is no longer tracking it"
 
 
 def initialize_execution_db(conn) -> None:
     initialize_trade_db(conn)
-
 
 
 def expire_stale_new_trade_intents(
@@ -22,8 +22,6 @@ def expire_stale_new_trade_intents(
         max_age_seconds: int,
         now_ts: int | None = None,
 ) -> int:
-    """Что делает: переводит старые NEW trade_intents в FAILED.
-    Зачем нужна: execution не должен отправлять брокеру ордер по устаревшему сигналу."""
     max_age_seconds = int(max_age_seconds)
 
     if max_age_seconds <= 0:
@@ -57,10 +55,6 @@ def expire_stale_new_trade_intents(
     return int(conn.total_changes - changes_before)
 
 
-
-STALE_ACTIVE_INTENT_ERROR_TEXT = "stale active trade_intent: execution service is no longer tracking it"
-
-
 def expire_stale_active_trade_intents(
         conn,
         *,
@@ -69,8 +63,6 @@ def expire_stale_active_trade_intents(
         limit_grace_seconds: int = 10,
         market_max_age_seconds: int = 90,
 ) -> int:
-    """Что делает: переводит зависшие SENDING/ACCEPTED trade_intents в terminal status.
-    Зачем нужна: после рестарта execution старый active intent не должен вечно блокировать ib_trader."""
     now_ts = int(time.time() if now_ts is None else now_ts)
     default_limit_ttl_seconds = int(default_limit_ttl_seconds)
     limit_grace_seconds = int(limit_grace_seconds)
@@ -152,7 +144,6 @@ def read_new_trade_intents(*, limit: int = 20, max_age_seconds: int = 10) -> lis
             f"""
             SELECT
                 trade_intent_id,
-                decision_id,
                 source_signal_id,
                 instrument_code,
 
@@ -182,20 +173,19 @@ def read_new_trade_intents(*, limit: int = 20, max_age_seconds: int = 10) -> lis
         return [
             TradeIntent(
                 trade_intent_id=int(row[0]),
-                decision_id=int(row[1]),
-                source_signal_id=int(row[2]),
-                instrument_code=str(row[3]),
-                action=str(row[4]),
-                target_side=str(row[5]),
-                target_qty=float(row[6]),
-                position_before_side=str(row[7]),
-                position_before_qty=float(row[8]),
-                order_type=str(row[9]).upper(),
-                limit_price=None if row[10] is None else float(row[10]),
-                limit_offset_points=None if row[11] is None else float(row[11]),
-                ttl_seconds=None if row[12] is None else int(row[12]),
-                status=str(row[13]),
-                created_at_ts=int(row[14]),
+                source_signal_id=int(row[1]),
+                instrument_code=str(row[2]),
+                action=str(row[3]),
+                target_side=str(row[4]),
+                target_qty=float(row[5]),
+                position_before_side=str(row[6]),
+                position_before_qty=float(row[7]),
+                order_type=str(row[8]).upper(),
+                limit_price=None if row[9] is None else float(row[9]),
+                limit_offset_points=None if row[10] is None else float(row[10]),
+                ttl_seconds=None if row[11] is None else int(row[11]),
+                status=str(row[12]),
+                created_at_ts=int(row[13]),
             )
             for row in rows
         ]
@@ -225,7 +215,6 @@ def mark_trade_intent_sending(conn, *, trade_intent_id: int) -> None:
     )
 
 
-
 def mark_trade_intent_order_submitted(
         conn,
         *,
@@ -234,8 +223,6 @@ def mark_trade_intent_order_submitted(
         order_action: str,
         order_quantity: int,
 ) -> None:
-    """Что делает: сразу записывает IB order_id после placeOrder.
-    Зачем нужна: если execution упадёт во время ожидания fill/expiry, связь TWS order -> trade_intent не потеряется."""
     now_ts = int(time.time())
 
     conn.execute(
@@ -282,9 +269,9 @@ def write_trade_intent_execution_result(
         SET
             status = ?,
 
-            order_id = ?,
-            order_action = ?,
-            order_quantity = ?,
+            order_id = COALESCE(?, order_id),
+            order_action = COALESCE(?, order_action),
+            order_quantity = COALESCE(?, order_quantity),
             avg_fill_price = ?,
             total_commission = ?,
             realized_pnl = ?,

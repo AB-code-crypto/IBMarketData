@@ -1,30 +1,72 @@
 import json
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from contracts import Instrument
 from core.sqlite_utils import open_sqlite_connection
-from core.time_utils import CT_TIMEZONE, MSK_TIMEZONE, SQLITE_DATETIME_FORMAT
 from core.state_db import STATE_DB_PATH, initialize_state_db
+from core.time_utils import CT_TIMEZONE, MSK_TIMEZONE, SQLITE_DATETIME_FORMAT
 from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG, SignalWindowMode
 from ib_signal.signal_event_store import SIGNAL_EVENTS_TABLE_NAME, initialize_signal_events_table
 from ib_signal.signal_schedule import get_grid_slot_start_ts
 from ib_trader.trade_models import (
-    MarketFeatureSnapshot,
     PositionSide,
     PositionSnapshot,
-    TradeDecision,
     TradeDecisionAction,
+    TradeIntentCreated,
     TraderSignalEvent,
-    TraderRuleEvaluation,
 )
 
 TRADE_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "trade.sqlite3"
 
 POSITIONS_LATEST_TABLE_NAME = "positions_latest"
-TRADE_DECISIONS_TABLE_NAME = "trade_decisions"
 TRADE_INTENTS_TABLE_NAME = "trade_intents"
+
+GRID_CLOSE_SOURCE_SIGNAL_ID = -1
+GRID_CLOSE_INTENT_SOURCE = "GRID_CLOSE"
+GRID_CLOSE_REASON = "grid_close_before_slot_end"
+
+FUTURES_DAILY_FLAT_SOURCE_SIGNAL_ID = -2
+FUTURES_DAILY_FLAT_INTENT_SOURCE = "FUTURES_DAILY_FLAT"
+FUTURES_DAILY_FLAT_REASON = "futures_daily_flat_before_no_trade_hour"
+FUTURES_NO_NEW_TRADES_HOUR_CT = 15
+FUTURES_CLEARING_HOUR_CT = 16
+
+TRADER_MAX_NEW_INTENT_AGE_SECONDS = 10
+STALE_NEW_INTENT_ERROR_TEXT = "stale trade_intent before trader decision"
+
+
+@dataclass(frozen=True)
+class TradeIntentDraft:
+    source_signal_id: int
+    instrument_code: str
+    signal_bar_ts: int
+    signal_time_ct: str | None
+
+    intent_source: str
+    action: TradeDecisionAction
+    reason: str
+
+    signal_direction: str
+    entry_price: float
+    potential_end_delta_points: float
+
+    regime: int | None
+    ma_zone: int | None
+    signal_strength: str
+
+    order_type: str
+    limit_price: float | None
+    limit_offset_points: float | None
+    ttl_seconds: int | None
+
+    position_before_side: PositionSide
+    position_before_qty: float
+
+    position_after_side: PositionSide
+    position_after_qty: float
 
 
 def get_trade_db_connection():
@@ -39,68 +81,9 @@ def create_positions_latest_table_sql() -> str:
     return f"""
     CREATE TABLE IF NOT EXISTS {POSITIONS_LATEST_TABLE_NAME} (
         instrument_code TEXT PRIMARY KEY,
-
         side TEXT NOT NULL,
         quantity REAL NOT NULL,
-
-        updated_at_ts INTEGER NOT NULL,
-        last_decision_id INTEGER,
-        last_source_signal_id INTEGER
-    );
-    """
-
-
-def create_trade_decisions_table_sql() -> str:
-    return f"""
-    CREATE TABLE IF NOT EXISTS {TRADE_DECISIONS_TABLE_NAME} (
-        decision_id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-        source_signal_id INTEGER NOT NULL,
-        instrument_code TEXT NOT NULL,
-
-        signal_bar_ts INTEGER NOT NULL,
-        signal_time_utc TEXT NOT NULL,
-        signal_time_ct TEXT,
-        signal_time_msk TEXT NOT NULL,
-
-        signal_direction TEXT NOT NULL,
-        entry_price REAL NOT NULL,
-
-        best_pearson REAL NOT NULL,
-        candidate_score_best REAL,
-
-        potential_end_delta_points REAL NOT NULL,
-        potential_max_profit_points REAL NOT NULL,
-        potential_max_drawdown_points REAL NOT NULL,
-        potential_used INTEGER NOT NULL,
-
-        regime INTEGER,
-        ma_zone INTEGER,
-        signal_strength TEXT NOT NULL,
-
-        order_type TEXT NOT NULL,
-        order_policy_reason TEXT NOT NULL,
-        limit_offset_points REAL,
-        limit_price REAL,
-        ttl_seconds INTEGER,
-        rules_json TEXT NOT NULL,
-
-        decision_action TEXT NOT NULL,
-        decision_reason TEXT NOT NULL,
-
-        position_before_side TEXT NOT NULL,
-        position_before_qty REAL NOT NULL,
-
-        position_after_side TEXT NOT NULL,
-        position_after_qty REAL NOT NULL,
-
-        created_at_ts INTEGER NOT NULL,
-
-        UNIQUE (
-            instrument_code,
-            source_signal_id,
-            signal_bar_ts
-        )
+        updated_at_ts INTEGER NOT NULL
     );
     """
 
@@ -110,11 +93,14 @@ def create_trade_intents_table_sql() -> str:
     CREATE TABLE IF NOT EXISTS {TRADE_INTENTS_TABLE_NAME} (
         trade_intent_id INTEGER PRIMARY KEY AUTOINCREMENT,
 
-        decision_id INTEGER NOT NULL UNIQUE,
         source_signal_id INTEGER NOT NULL,
         instrument_code TEXT NOT NULL,
+        signal_bar_ts INTEGER NOT NULL,
+        intent_source TEXT NOT NULL,
 
         action TEXT NOT NULL,
+        action_reason TEXT NOT NULL,
+
         target_side TEXT NOT NULL,
         target_qty REAL NOT NULL,
 
@@ -139,28 +125,22 @@ def create_trade_intents_table_sql() -> str:
         created_at_ts INTEGER NOT NULL,
         updated_at_ts INTEGER NOT NULL,
         sent_at_ts INTEGER,
-        finished_at_ts INTEGER
+        finished_at_ts INTEGER,
+
+        UNIQUE (
+            instrument_code,
+            source_signal_id,
+            signal_bar_ts,
+            action
+        )
     );
     """
 
 
 def initialize_trade_db(conn) -> None:
     conn.execute(create_positions_latest_table_sql())
-    conn.execute(create_trade_decisions_table_sql())
     conn.execute(create_trade_intents_table_sql())
 
-    conn.execute(
-        f"""
-        CREATE INDEX IF NOT EXISTS idx_trade_decisions_signal
-        ON {TRADE_DECISIONS_TABLE_NAME}(instrument_code, source_signal_id, signal_bar_ts);
-        """
-    )
-    conn.execute(
-        f"""
-        CREATE INDEX IF NOT EXISTS idx_trade_decisions_action_time
-        ON {TRADE_DECISIONS_TABLE_NAME}(decision_action, created_at_ts);
-        """
-    )
     conn.execute(
         f"""
         CREATE INDEX IF NOT EXISTS idx_trade_intents_status
@@ -172,6 +152,24 @@ def initialize_trade_db(conn) -> None:
         CREATE INDEX IF NOT EXISTS idx_trade_intents_instrument_time
         ON {TRADE_INTENTS_TABLE_NAME}(instrument_code, created_at_ts);
         """
+    )
+    conn.execute(
+        f"""
+        CREATE INDEX IF NOT EXISTS idx_trade_intents_source_signal
+        ON {TRADE_INTENTS_TABLE_NAME}(instrument_code, source_signal_id, signal_bar_ts);
+        """
+    )
+
+
+def build_time_text_fields_from_ts(ts: int) -> tuple[str, str, str]:
+    dt_utc = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+    dt_ct = dt_utc.astimezone(CT_TIMEZONE)
+    dt_msk = dt_utc.astimezone(MSK_TIMEZONE)
+
+    return (
+        dt_utc.strftime(SQLITE_DATETIME_FORMAT),
+        dt_ct.strftime(SQLITE_DATETIME_FORMAT),
+        dt_msk.strftime(SQLITE_DATETIME_FORMAT),
     )
 
 
@@ -286,65 +284,6 @@ def read_latest_signal_events(*, max_signal_age_seconds: int) -> list[TraderSign
         conn.close()
 
 
-def build_market_features_from_signal_event(signal: TraderSignalEvent) -> MarketFeatureSnapshot:
-    """Что делает: строит market-features из уже интерпретированного signal_events.
-    Зачем нужна: ib_trader больше не должен читать job DB и знать правила интерпретации сигнала."""
-    return MarketFeatureSnapshot(
-        instrument_code=signal.instrument_code,
-        signal_bar_ts=signal.signal_bar_ts,
-        feature_bar_ts=signal.feature_bar_ts,
-        regime=signal.regime,
-        ma_zone=signal.ma_zone,
-    )
-
-
-def build_rule_result_from_signal_event(signal: TraderSignalEvent) -> TraderRuleEvaluation:
-    """Что делает: превращает поля signal_events в rule-result для старой decision-логики.
-    Зачем нужна: ib_trader принимает stateful-решение, но не интерпретирует сигнал заново."""
-    reject_reasons = []
-    if not signal.signal_allowed:
-        reject_reasons.append(signal.signal_reject_reason or "signal_interpretation_rejected")
-
-    return TraderRuleEvaluation(
-        allowed=bool(signal.signal_allowed),
-        reject_reasons=reject_reasons,
-        signal_strength=signal.signal_strength,
-        order_type=signal.order_type,
-        order_policy_reason=signal.order_policy_reason,
-        limit_offset_points=signal.limit_offset_points,
-        ttl_seconds=signal.ttl_seconds,
-        rules_json=signal.signal_rules_json,
-    )
-
-
-def has_decision_for_signal(
-        conn,
-        *,
-        instrument_code: str,
-        source_signal_id: int,
-        signal_bar_ts: int,
-) -> bool:
-    initialize_trade_db(conn)
-
-    row = conn.execute(
-        f"""
-        SELECT 1
-        FROM {TRADE_DECISIONS_TABLE_NAME}
-        WHERE instrument_code = ?
-          AND source_signal_id = ?
-          AND signal_bar_ts = ?
-        LIMIT 1
-        """,
-        (
-            str(instrument_code),
-            int(source_signal_id),
-            int(signal_bar_ts),
-        ),
-    ).fetchone()
-
-    return row is not None
-
-
 def read_position_snapshot(conn, *, instrument_code: str) -> PositionSnapshot:
     initialize_trade_db(conn)
 
@@ -376,9 +315,43 @@ def read_position_snapshot(conn, *, instrument_code: str) -> PositionSnapshot:
     return PositionSnapshot(str(instrument_code), side, quantity)
 
 
+def read_open_position_snapshots(conn) -> list[PositionSnapshot]:
+    initialize_trade_db(conn)
 
-TRADER_MAX_NEW_INTENT_AGE_SECONDS = 10
-STALE_NEW_INTENT_ERROR_TEXT = "stale trade_intent before trader decision"
+    rows = conn.execute(
+        f"""
+        SELECT instrument_code, side, quantity
+        FROM {POSITIONS_LATEST_TABLE_NAME}
+        WHERE side IN ('LONG', 'SHORT')
+          AND quantity > 0
+        ORDER BY instrument_code
+        """
+    ).fetchall()
+
+    return [
+        PositionSnapshot(
+            instrument_code=str(row[0]),
+            side=PositionSide(str(row[1]).upper()),
+            quantity=float(row[2]),
+        )
+        for row in rows
+    ]
+
+
+def read_position_updated_at_ts(conn, *, instrument_code: str) -> int | None:
+    row = conn.execute(
+        f"""
+        SELECT updated_at_ts
+        FROM {POSITIONS_LATEST_TABLE_NAME}
+        WHERE instrument_code = ?
+        """,
+        (str(instrument_code),),
+    ).fetchone()
+
+    if row is None or row[0] is None:
+        return None
+
+    return int(row[0])
 
 
 def expire_stale_new_trade_intents(
@@ -387,8 +360,7 @@ def expire_stale_new_trade_intents(
         max_age_seconds: int = TRADER_MAX_NEW_INTENT_AGE_SECONDS,
         now_ts: int | None = None,
 ) -> int:
-    """Что делает: переводит старые NEW trade_intents в FAILED.
-    Зачем нужна: если execution не был запущен, trader не должен копить старые NEW intents."""
+    """Переводит старые NEW trade_intents в FAILED."""
     max_age_seconds = int(max_age_seconds)
 
     if max_age_seconds <= 0:
@@ -421,25 +393,7 @@ def expire_stale_new_trade_intents(
     return int(conn.total_changes - changes_before)
 
 
-def read_position_updated_at_ts(conn, *, instrument_code: str) -> int | None:
-    row = conn.execute(
-        f"""
-        SELECT updated_at_ts
-        FROM {POSITIONS_LATEST_TABLE_NAME}
-        WHERE instrument_code = ?
-        """,
-        (str(instrument_code),),
-    ).fetchone()
-
-    if row is None or row[0] is None:
-        return None
-
-    return int(row[0])
-
-
 def read_latest_non_failed_trade_intent(conn, *, instrument_code: str) -> dict | None:
-    """Что делает: читает последний не-FAILED intent по инструменту.
-    Зачем нужна: trader не должен создавать новый приказ, пока предыдущий активен или позиция не синхронизирована."""
     row = conn.execute(
         f"""
         SELECT
@@ -480,326 +434,71 @@ def read_latest_non_failed_trade_intent(conn, *, instrument_code: str) -> dict |
     }
 
 
-def build_trader_guard_reject_result(
-        *,
-        reason: str,
-        details: dict,
-) -> TraderRuleEvaluation:
-    return TraderRuleEvaluation(
-        allowed=False,
-        reject_reasons=[reason],
-        signal_strength="NEUTRAL",
-        order_type="MARKET",
-        order_policy_reason="trader_intent_guard",
-        limit_offset_points=None,
-        ttl_seconds=None,
-        rules_json=json.dumps(
-            [
-                {
-                    "rule": "trader_intent_guard",
-                    "result": "REJECT",
-                    "reason": reason,
-                    "details": details,
-                }
-            ],
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ),
-    )
-
-
-def build_trader_intent_guard_result_if_needed(
-        conn,
-        *,
-        signal: TraderSignalEvent,
-        position: PositionSnapshot,
-) -> TraderRuleEvaluation | None:
-    """Что делает: запрещает новый intent, если предыдущий ещё активен или позиция после execution не синхронизирована.
-    Зачем нужна: нельзя открывать второй ордер по новому сигналу, пока старый приказ не обработан корректно."""
+def has_unresolved_trade_intent_for_instrument(conn, *, instrument_code: str) -> bool:
+    """Не даём создать новый приказ, пока предыдущий активен или позиция после EXECUTED ещё не синхронизирована."""
     latest_intent = read_latest_non_failed_trade_intent(
         conn,
-        instrument_code=signal.instrument_code,
+        instrument_code=instrument_code,
     )
 
     if latest_intent is None:
-        return None
+        return False
 
-    active_statuses = {"NEW", "SENDING", "ACCEPTED"}
-
-    if latest_intent["status"] in active_statuses:
-        return build_trader_guard_reject_result(
-            reason="active_trade_intent_exists",
-            details={
-                "source_signal_id": signal.source_signal_id,
-                "latest_trade_intent_id": latest_intent["trade_intent_id"],
-                "latest_status": latest_intent["status"],
-                "latest_action": latest_intent["action"],
-                "latest_target_side": latest_intent["target_side"],
-                "position_side": position.side.value,
-                "position_qty": position.quantity,
-            },
-        )
+    if latest_intent["status"] in {"NEW", "SENDING", "ACCEPTED"}:
+        return True
 
     if latest_intent["status"] == "EXECUTED":
         position_updated_at_ts = read_position_updated_at_ts(
             conn,
-            instrument_code=signal.instrument_code,
+            instrument_code=instrument_code,
         )
+        return position_updated_at_ts is None or position_updated_at_ts <= latest_intent["event_ts"]
 
-        if position_updated_at_ts is None or position_updated_at_ts <= latest_intent["event_ts"]:
-            return build_trader_guard_reject_result(
-                reason="position_sync_stale_after_trade_intent",
-                details={
-                    "source_signal_id": signal.source_signal_id,
-                    "latest_trade_intent_id": latest_intent["trade_intent_id"],
-                    "latest_status": latest_intent["status"],
-                    "latest_action": latest_intent["action"],
-                    "latest_target_side": latest_intent["target_side"],
-                    "latest_event_ts": latest_intent["event_ts"],
-                    "position_side": position.side.value,
-                    "position_qty": position.quantity,
-                    "position_updated_at_ts": position_updated_at_ts,
-                },
-            )
-
-    return None
+    return False
 
 
-def calculate_limit_price(
+def has_trade_intent_for_signal(
+        conn,
         *,
-        signal_direction: str,
-        entry_price: float,
-        limit_offset_points: float | None,
-) -> float | None:
-    offset = float(limit_offset_points or 0.0)
-
-    if offset <= 0.0:
-        return float(entry_price)
-
-    direction = str(signal_direction).upper()
-
-    if direction == "LONG":
-        return float(entry_price) - offset
-
-    if direction == "SHORT":
-        return float(entry_price) + offset
-
-    return float(entry_price)
-
-
-def decide_trade_action(
-        *,
-        signal: TraderSignalEvent,
-        position: PositionSnapshot,
-        market_features: MarketFeatureSnapshot,
-        rule_result: TraderRuleEvaluation,
-) -> TradeDecision:
-    signal_direction = str(signal.direction).upper()
-
-    if signal_direction not in {"LONG", "SHORT"}:
-        raise ValueError(f"Неизвестное направление сигнала: {signal.direction!r}")
-
-    order_type = str(rule_result.order_type).upper()
-    limit_price = (
-        calculate_limit_price(
-            signal_direction=signal_direction,
-            entry_price=float(signal.entry_price),
-            limit_offset_points=rule_result.limit_offset_points,
-        )
-        if order_type == "LIMIT"
-        else None
-    )
-
-    if not rule_result.allowed:
-        action = TradeDecisionAction.NO_ACTION
-        reason = ";".join(rule_result.reject_reasons) or "rules_rejected"
-        after_side = position.side
-        after_qty = float(position.quantity)
-
-    elif position.side == PositionSide.UNKNOWN:
-        action = TradeDecisionAction.NO_ACTION
-        reason = "position_unknown"
-        after_side = PositionSide.UNKNOWN
-        after_qty = 0.0
-
-    elif position.side == PositionSide.FLAT or position.quantity <= 0.0:
-        action = TradeDecisionAction.OPEN_POSITION
-        reason = "flat_position_open_by_signal"
-        after_side = PositionSide(signal_direction)
-        after_qty = 1.0
-
-    elif position.side.value == signal_direction:
-        action = TradeDecisionAction.NO_ACTION
-        reason = "same_direction_position_exists"
-        after_side = position.side
-        after_qty = float(position.quantity)
-
-    else:
-        action = TradeDecisionAction.REVERSE_POSITION
-        reason = "opposite_signal_reverse_position"
-        after_side = PositionSide(signal_direction)
-        after_qty = max(1.0, float(position.quantity))
-
-    return TradeDecision(
-        source_signal_id=signal.source_signal_id,
-        instrument_code=signal.instrument_code,
-        signal_bar_ts=signal.signal_bar_ts,
-        signal_time_utc=signal.signal_time_utc,
-        signal_time_ct=signal.signal_time_ct,
-        signal_time_msk=signal.signal_time_msk,
-        signal_direction=signal_direction,
-        entry_price=float(signal.entry_price),
-        best_pearson=float(signal.best_pearson),
-        candidate_score_best=signal.candidate_score_best,
-        potential_end_delta_points=float(signal.potential_end_delta_points),
-        potential_max_profit_points=float(signal.potential_max_profit_points),
-        potential_max_drawdown_points=float(signal.potential_max_drawdown_points),
-        potential_used=int(signal.potential_used),
-        regime=market_features.regime,
-        ma_zone=market_features.ma_zone,
-        signal_strength=rule_result.signal_strength,
-        order_type=order_type,
-        order_policy_reason=rule_result.order_policy_reason,
-        limit_offset_points=rule_result.limit_offset_points,
-        limit_price=limit_price,
-        ttl_seconds=rule_result.ttl_seconds,
-        rules_json=rule_result.rules_json,
-        action=action,
-        reason=reason,
-        position_before_side=position.side,
-        position_before_qty=float(position.quantity),
-        position_after_side=after_side,
-        position_after_qty=float(after_qty),
-    )
-
-
-def write_trade_decision(conn, decision: TradeDecision) -> int:
-    initialize_trade_db(conn)
-
-    created_at_ts = int(time.time())
-
-    conn.execute(
-        f"""
-        INSERT INTO {TRADE_DECISIONS_TABLE_NAME} (
-            source_signal_id,
-            instrument_code,
-
-            signal_bar_ts,
-            signal_time_utc,
-            signal_time_ct,
-            signal_time_msk,
-
-            signal_direction,
-            entry_price,
-
-            best_pearson,
-            candidate_score_best,
-
-            potential_end_delta_points,
-            potential_max_profit_points,
-            potential_max_drawdown_points,
-            potential_used,
-
-            regime,
-            ma_zone,
-            signal_strength,
-
-            order_type,
-            order_policy_reason,
-            limit_offset_points,
-            limit_price,
-            ttl_seconds,
-            rules_json,
-
-            decision_action,
-            decision_reason,
-
-            position_before_side,
-            position_before_qty,
-
-            position_after_side,
-            position_after_qty,
-
-            created_at_ts
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-
-        ON CONFLICT (
-            instrument_code,
-            source_signal_id,
-            signal_bar_ts
-        ) DO NOTHING
-        """,
-        (
-            int(decision.source_signal_id),
-            decision.instrument_code,
-            int(decision.signal_bar_ts),
-            decision.signal_time_utc,
-            decision.signal_time_ct,
-            decision.signal_time_msk,
-            decision.signal_direction,
-            float(decision.entry_price),
-            float(decision.best_pearson),
-            decision.candidate_score_best,
-            float(decision.potential_end_delta_points),
-            float(decision.potential_max_profit_points),
-            float(decision.potential_max_drawdown_points),
-            int(decision.potential_used),
-            decision.regime,
-            decision.ma_zone,
-            decision.signal_strength,
-            decision.order_type,
-            decision.order_policy_reason,
-            decision.limit_offset_points,
-            decision.limit_price,
-            decision.ttl_seconds,
-            decision.rules_json,
-            decision.action.value,
-            decision.reason,
-            decision.position_before_side.value,
-            float(decision.position_before_qty),
-            decision.position_after_side.value,
-            float(decision.position_after_qty),
-            created_at_ts,
-        ),
-    )
-
+        instrument_code: str,
+        source_signal_id: int,
+        signal_bar_ts: int,
+) -> bool:
     row = conn.execute(
         f"""
-        SELECT decision_id
-        FROM {TRADE_DECISIONS_TABLE_NAME}
+        SELECT 1
+        FROM {TRADE_INTENTS_TABLE_NAME}
         WHERE instrument_code = ?
           AND source_signal_id = ?
           AND signal_bar_ts = ?
+        LIMIT 1
         """,
         (
-            decision.instrument_code,
-            int(decision.source_signal_id),
-            int(decision.signal_bar_ts),
+            str(instrument_code),
+            int(source_signal_id),
+            int(signal_bar_ts),
         ),
     ).fetchone()
 
-    if row is None or row[0] is None:
-        raise RuntimeError("TradeDecision был записан, но decision_id не найден")
-
-    return int(row[0])
+    return row is not None
 
 
-def write_trade_intent_if_needed(conn, *, decision_id: int, decision: TradeDecision) -> None:
-    if decision.action == TradeDecisionAction.NO_ACTION:
-        return
+def write_trade_intent(conn, draft: TradeIntentDraft) -> int:
+    initialize_trade_db(conn)
 
     now_ts = int(time.time())
 
     conn.execute(
         f"""
         INSERT INTO {TRADE_INTENTS_TABLE_NAME} (
-            decision_id,
             source_signal_id,
             instrument_code,
+            signal_bar_ts,
+            intent_source,
 
             action,
+            action_reason,
+
             target_side,
             target_qty,
 
@@ -816,50 +515,150 @@ def write_trade_intent_if_needed(conn, *, decision_id: int, decision: TradeDecis
             created_at_ts,
             updated_at_ts
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
-        ON CONFLICT(decision_id) DO NOTHING
+        ON CONFLICT (
+            instrument_code,
+            source_signal_id,
+            signal_bar_ts,
+            action
+        ) DO NOTHING
         """,
         (
-            int(decision_id),
-            int(decision.source_signal_id),
-            decision.instrument_code,
-            decision.action.value,
-            decision.position_after_side.value,
-            float(decision.position_after_qty),
-            decision.position_before_side.value,
-            float(decision.position_before_qty),
-            decision.order_type,
-            decision.limit_price,
-            decision.limit_offset_points,
-            decision.ttl_seconds,
+            int(draft.source_signal_id),
+            draft.instrument_code,
+            int(draft.signal_bar_ts),
+            draft.intent_source,
+            draft.action.value,
+            draft.reason,
+            draft.position_after_side.value,
+            float(draft.position_after_qty),
+            draft.position_before_side.value,
+            float(draft.position_before_qty),
+            draft.order_type,
+            draft.limit_price,
+            draft.limit_offset_points,
+            draft.ttl_seconds,
             "NEW",
             now_ts,
             now_ts,
         ),
     )
 
+    row = conn.execute(
+        f"""
+        SELECT trade_intent_id
+        FROM {TRADE_INTENTS_TABLE_NAME}
+        WHERE instrument_code = ?
+          AND source_signal_id = ?
+          AND signal_bar_ts = ?
+          AND action = ?
+        """,
+        (
+            draft.instrument_code,
+            int(draft.source_signal_id),
+            int(draft.signal_bar_ts),
+            draft.action.value,
+        ),
+    ).fetchone()
+
+    if row is None or row[0] is None:
+        raise RuntimeError("TradeIntent был записан, но trade_intent_id не найден")
+
+    return int(row[0])
 
 
-GRID_CLOSE_SOURCE_SIGNAL_ID = -1
-GRID_CLOSE_DECISION_REASON = "grid_close_before_slot_end"
+def build_created_event(*, trade_intent_id: int, draft: TradeIntentDraft) -> TradeIntentCreated:
+    return TradeIntentCreated(
+        trade_intent_id=int(trade_intent_id),
+        source_signal_id=int(draft.source_signal_id),
+        instrument_code=draft.instrument_code,
+        signal_bar_ts=int(draft.signal_bar_ts),
+        signal_time_ct=draft.signal_time_ct,
+        intent_source=draft.intent_source,
+        action=draft.action,
+        reason=draft.reason,
+        signal_direction=draft.signal_direction,
+        entry_price=float(draft.entry_price),
+        potential_end_delta_points=float(draft.potential_end_delta_points),
+        regime=draft.regime,
+        ma_zone=draft.ma_zone,
+        signal_strength=draft.signal_strength,
+        order_type=draft.order_type,
+        limit_price=draft.limit_price,
+        limit_offset_points=draft.limit_offset_points,
+        ttl_seconds=draft.ttl_seconds,
+        position_before_side=draft.position_before_side,
+        position_before_qty=float(draft.position_before_qty),
+        position_after_side=draft.position_after_side,
+        position_after_qty=float(draft.position_after_qty),
+    )
 
 
-def build_time_text_fields_from_ts(ts: int) -> tuple[str, str, str]:
-    dt_utc = datetime.fromtimestamp(int(ts), tz=timezone.utc)
-    dt_ct = dt_utc.astimezone(CT_TIMEZONE)
-    dt_msk = dt_utc.astimezone(MSK_TIMEZONE)
+def write_trade_intent_and_event(conn, draft: TradeIntentDraft) -> TradeIntentCreated:
+    trade_intent_id = write_trade_intent(conn, draft)
+    return build_created_event(
+        trade_intent_id=trade_intent_id,
+        draft=draft,
+    )
 
-    return (
-        dt_utc.strftime(SQLITE_DATETIME_FORMAT),
-        dt_ct.strftime(SQLITE_DATETIME_FORMAT),
-        dt_msk.strftime(SQLITE_DATETIME_FORMAT),
+
+def build_signal_trade_intent_draft(
+        *,
+        signal: TraderSignalEvent,
+        position: PositionSnapshot,
+) -> TradeIntentDraft | None:
+    if not signal.signal_allowed:
+        return None
+
+    if position.side == PositionSide.UNKNOWN:
+        return None
+
+    signal_direction = str(signal.direction).upper()
+    if signal_direction not in {"LONG", "SHORT"}:
+        return None
+
+    if position.side == PositionSide.FLAT or position.quantity <= 0.0:
+        action = TradeDecisionAction.OPEN_POSITION
+        reason = "flat_position_open_by_signal"
+        after_side = PositionSide(signal_direction)
+        after_qty = 1.0
+
+    elif position.side.value == signal_direction:
+        return None
+
+    else:
+        action = TradeDecisionAction.REVERSE_POSITION
+        reason = "opposite_signal_reverse_position"
+        after_side = PositionSide(signal_direction)
+        after_qty = max(1.0, float(position.quantity))
+
+    return TradeIntentDraft(
+        source_signal_id=signal.source_signal_id,
+        instrument_code=signal.instrument_code,
+        signal_bar_ts=signal.signal_bar_ts,
+        signal_time_ct=signal.signal_time_ct,
+        intent_source="SIGNAL",
+        action=action,
+        reason=reason,
+        signal_direction=signal_direction,
+        entry_price=float(signal.entry_price),
+        potential_end_delta_points=float(signal.potential_end_delta_points),
+        regime=signal.regime,
+        ma_zone=signal.ma_zone,
+        signal_strength=signal.signal_strength,
+        order_type=str(signal.order_type).upper(),
+        limit_price=signal.limit_price if str(signal.order_type).upper() == "LIMIT" else None,
+        limit_offset_points=signal.limit_offset_points,
+        ttl_seconds=signal.ttl_seconds,
+        position_before_side=position.side,
+        position_before_qty=float(position.quantity),
+        position_after_side=after_side,
+        position_after_qty=float(after_qty),
     )
 
 
 def get_grid_close_context(*, now_ts: int) -> dict | None:
-    """Что делает: определяет, настало ли окно закрытия GRID-слота.
-    Зачем нужна: в GRID позиция должна закрываться за slot_close_before_end_seconds до конца слота."""
     settings = DEFAULT_SIGNAL_CONFIG
 
     if settings.signal_window_mode != SignalWindowMode.GRID:
@@ -887,146 +686,43 @@ def get_grid_close_context(*, now_ts: int) -> dict | None:
             "slot_start_ts": int(slot_start_ts),
             "slot_end_ts": int(slot_end_ts),
             "close_at_ts": int(close_at_ts),
-            "slot_step_seconds": int(slot_step_seconds),
             "close_before_seconds": int(close_before_seconds),
         }
 
     return None
 
 
-def read_open_position_snapshots(conn) -> list[PositionSnapshot]:
-    """Что делает: читает все открытые позиции из positions_latest.
-    Зачем нужна: GRID-close работает даже без нового signal_event."""
-    initialize_trade_db(conn)
-
-    rows = conn.execute(
-        f"""
-        SELECT instrument_code, side, quantity
-        FROM {POSITIONS_LATEST_TABLE_NAME}
-        WHERE side IN ('LONG', 'SHORT')
-          AND quantity > 0
-        ORDER BY instrument_code
-        """
-    ).fetchall()
-
-    return [
-        PositionSnapshot(
-            instrument_code=str(row[0]),
-            side=PositionSide(str(row[1]).upper()),
-            quantity=float(row[2]),
-        )
-        for row in rows
-    ]
-
-
-def has_grid_close_decision(
-        conn,
-        *,
-        instrument_code: str,
-        close_at_ts: int,
-) -> bool:
-    row = conn.execute(
-        f"""
-        SELECT 1
-        FROM {TRADE_DECISIONS_TABLE_NAME}
-        WHERE instrument_code = ?
-          AND source_signal_id = ?
-          AND signal_bar_ts = ?
-        LIMIT 1
-        """,
-        (
-            str(instrument_code),
-            GRID_CLOSE_SOURCE_SIGNAL_ID,
-            int(close_at_ts),
-        ),
-    ).fetchone()
-
-    return row is not None
-
-
-def has_active_trade_intent_for_instrument(conn, *, instrument_code: str) -> bool:
-    row = conn.execute(
-        f"""
-        SELECT 1
-        FROM {TRADE_INTENTS_TABLE_NAME}
-        WHERE instrument_code = ?
-          AND status IN ('NEW', 'SENDING', 'ACCEPTED')
-        LIMIT 1
-        """,
-        (str(instrument_code),),
-    ).fetchone()
-
-    return row is not None
-
-
-def build_grid_close_trade_decision(
+def build_grid_close_trade_intent_draft(
         *,
         position: PositionSnapshot,
         close_context: dict,
-) -> TradeDecision:
-    decision_ts = int(close_context.get("decision_ts", close_context["close_at_ts"]))
-    signal_time_utc, signal_time_ct, signal_time_msk = build_time_text_fields_from_ts(decision_ts)
+        now_ts: int,
+) -> TradeIntentDraft:
+    _, signal_time_ct, _ = build_time_text_fields_from_ts(now_ts)
 
-    rules_json = json.dumps(
-        [
-            {
-                "rule": "grid_time_exit",
-                "result": "CLOSE_POSITION",
-                "reason": GRID_CLOSE_DECISION_REASON,
-                "details": {
-                    "slot_start_ts": int(close_context["slot_start_ts"]),
-                    "slot_end_ts": int(close_context["slot_end_ts"]),
-                    "close_at_ts": int(close_context["close_at_ts"]),
-                    "slot_step_seconds": int(close_context["slot_step_seconds"]),
-                    "close_before_seconds": int(close_context["close_before_seconds"]),
-                    "position_side": position.side.value,
-                    "position_qty": float(position.quantity),
-                },
-            }
-        ],
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-
-    return TradeDecision(
+    return TradeIntentDraft(
         source_signal_id=GRID_CLOSE_SOURCE_SIGNAL_ID,
         instrument_code=position.instrument_code,
-        signal_bar_ts=decision_ts,
-        signal_time_utc=signal_time_utc,
+        signal_bar_ts=int(now_ts),
         signal_time_ct=signal_time_ct,
-        signal_time_msk=signal_time_msk,
+        intent_source=GRID_CLOSE_INTENT_SOURCE,
+        action=TradeDecisionAction.CLOSE_POSITION,
+        reason=GRID_CLOSE_REASON,
         signal_direction="CLOSE",
         entry_price=0.0,
-        best_pearson=0.0,
-        candidate_score_best=None,
         potential_end_delta_points=0.0,
-        potential_max_profit_points=0.0,
-        potential_max_drawdown_points=0.0,
-        potential_used=0,
         regime=None,
         ma_zone=None,
         signal_strength="GRID_CLOSE",
         order_type="MARKET",
-        order_policy_reason="grid_time_exit",
-        limit_offset_points=None,
         limit_price=None,
+        limit_offset_points=None,
         ttl_seconds=None,
-        rules_json=rules_json,
-        action=TradeDecisionAction.CLOSE_POSITION,
-        reason=GRID_CLOSE_DECISION_REASON,
         position_before_side=position.side,
         position_before_qty=float(position.quantity),
         position_after_side=PositionSide.FLAT,
         position_after_qty=0.0,
     )
-
-
-
-FUTURES_DAILY_FLAT_SOURCE_SIGNAL_ID = -2
-FUTURES_DAILY_FLAT_DECISION_REASON = "futures_daily_flat_before_no_trade_hour"
-FUTURES_NO_NEW_TRADES_HOUR_CT = 15
-FUTURES_CLEARING_HOUR_CT = 16
 
 
 def get_ct_day_ts(*, now_ts: int, hour: int, minute: int = 0, second: int = 0) -> int:
@@ -1041,8 +737,6 @@ def get_ct_day_ts(*, now_ts: int, hour: int, minute: int = 0, second: int = 0) -
 
 
 def get_futures_daily_flat_context(*, now_ts: int) -> dict | None:
-    """Что делает: определяет окно принудительного закрытия futures перед no-trade hour.
-    Зачем нужна: робот никогда не должен переносить futures-позицию через клиринг."""
     settings = DEFAULT_SIGNAL_CONFIG
     close_before_seconds = int(settings.slot_close_before_end_seconds)
 
@@ -1056,7 +750,6 @@ def get_futures_daily_flat_context(*, now_ts: int) -> dict | None:
     )
     close_at_ts = no_new_trades_ts - close_before_seconds
 
-    # Если сервис пропустил точку 14:59:50, всё равно пытаемся закрыть до клиринга.
     if close_at_ts <= int(now_ts) < clearing_ts:
         return {
             "no_new_trades_ts": int(no_new_trades_ts),
@@ -1077,85 +770,32 @@ def is_futures_instrument(instrument_code: str) -> bool:
     return str(instrument_row.get("secType", "")).upper() == "FUT"
 
 
-def has_unresolved_trade_intent_for_instrument(conn, *, instrument_code: str) -> bool:
-    """Что делает: проверяет, есть ли активный/ещё не подтверждённый intent по инструменту.
-    Зачем нужна: close-manager не должен плодить повторные CLOSE до обновления positions_latest."""
-    latest_intent = read_latest_non_failed_trade_intent(
-        conn,
-        instrument_code=instrument_code,
-    )
-
-    if latest_intent is None:
-        return False
-
-    if latest_intent["status"] in {"NEW", "SENDING", "ACCEPTED"}:
-        return True
-
-    if latest_intent["status"] == "EXECUTED":
-        position_updated_at_ts = read_position_updated_at_ts(
-            conn,
-            instrument_code=instrument_code,
-        )
-        return position_updated_at_ts is None or position_updated_at_ts <= latest_intent["event_ts"]
-
-    return False
-
-
-def build_futures_daily_flat_trade_decision(
+def build_futures_daily_flat_trade_intent_draft(
         *,
         position: PositionSnapshot,
         close_context: dict,
-        decision_ts: int,
-) -> TradeDecision:
-    signal_time_utc, signal_time_ct, signal_time_msk = build_time_text_fields_from_ts(decision_ts)
+        now_ts: int,
+) -> TradeIntentDraft:
+    _, signal_time_ct, _ = build_time_text_fields_from_ts(now_ts)
 
-    rules_json = json.dumps(
-        [
-            {
-                "rule": "futures_daily_flat",
-                "result": "CLOSE_POSITION",
-                "reason": FUTURES_DAILY_FLAT_DECISION_REASON,
-                "details": {
-                    "no_new_trades_ts": int(close_context["no_new_trades_ts"]),
-                    "clearing_ts": int(close_context["clearing_ts"]),
-                    "close_at_ts": int(close_context["close_at_ts"]),
-                    "close_before_seconds": int(close_context["close_before_seconds"]),
-                    "position_side": position.side.value,
-                    "position_qty": float(position.quantity),
-                },
-            }
-        ],
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-
-    return TradeDecision(
+    return TradeIntentDraft(
         source_signal_id=FUTURES_DAILY_FLAT_SOURCE_SIGNAL_ID,
         instrument_code=position.instrument_code,
-        signal_bar_ts=int(decision_ts),
-        signal_time_utc=signal_time_utc,
+        signal_bar_ts=int(now_ts),
         signal_time_ct=signal_time_ct,
-        signal_time_msk=signal_time_msk,
+        intent_source=FUTURES_DAILY_FLAT_INTENT_SOURCE,
+        action=TradeDecisionAction.CLOSE_POSITION,
+        reason=FUTURES_DAILY_FLAT_REASON,
         signal_direction="CLOSE",
         entry_price=0.0,
-        best_pearson=0.0,
-        candidate_score_best=None,
         potential_end_delta_points=0.0,
-        potential_max_profit_points=0.0,
-        potential_max_drawdown_points=0.0,
-        potential_used=0,
         regime=None,
         ma_zone=None,
         signal_strength="FUTURES_DAILY_FLAT",
         order_type="MARKET",
-        order_policy_reason="futures_daily_flat",
-        limit_offset_points=None,
         limit_price=None,
+        limit_offset_points=None,
         ttl_seconds=None,
-        rules_json=rules_json,
-        action=TradeDecisionAction.CLOSE_POSITION,
-        reason=FUTURES_DAILY_FLAT_DECISION_REASON,
         position_before_side=position.side,
         position_before_qty=float(position.quantity),
         position_after_side=PositionSide.FLAT,
@@ -1163,16 +803,40 @@ def build_futures_daily_flat_trade_decision(
     )
 
 
-def process_futures_daily_flat_once(conn, *, now_ts: int | None = None) -> list[TradeDecision]:
-    """Что делает: создаёт CLOSE_POSITION для открытых futures перед no-trade hour/клирингом.
-    Зачем нужна: единое правило для GRID и ROLLING — не переносить futures через ночь."""
+def process_grid_close_once(conn, *, now_ts: int | None = None) -> list[TradeIntentCreated]:
+    now_ts = int(time.time() if now_ts is None else now_ts)
+    close_context = get_grid_close_context(now_ts=now_ts)
+
+    if close_context is None:
+        return []
+
+    created: list[TradeIntentCreated] = []
+
+    for position in read_open_position_snapshots(conn):
+        if has_unresolved_trade_intent_for_instrument(
+                conn,
+                instrument_code=position.instrument_code,
+        ):
+            continue
+
+        draft = build_grid_close_trade_intent_draft(
+            position=position,
+            close_context=close_context,
+            now_ts=now_ts,
+        )
+        created.append(write_trade_intent_and_event(conn, draft))
+
+    return created
+
+
+def process_futures_daily_flat_once(conn, *, now_ts: int | None = None) -> list[TradeIntentCreated]:
     now_ts = int(time.time() if now_ts is None else now_ts)
     close_context = get_futures_daily_flat_context(now_ts=now_ts)
 
     if close_context is None:
         return []
 
-    decisions: list[TradeDecision] = []
+    created: list[TradeIntentCreated] = []
 
     for position in read_open_position_snapshots(conn):
         if not is_futures_instrument(position.instrument_code):
@@ -1184,57 +848,17 @@ def process_futures_daily_flat_once(conn, *, now_ts: int | None = None) -> list[
         ):
             continue
 
-        decision = build_futures_daily_flat_trade_decision(
+        draft = build_futures_daily_flat_trade_intent_draft(
             position=position,
             close_context=close_context,
-            decision_ts=now_ts,
+            now_ts=now_ts,
         )
-        decision_id = write_trade_decision(conn, decision)
-        write_trade_intent_if_needed(
-            conn,
-            decision_id=decision_id,
-            decision=decision,
-        )
-        decisions.append(decision)
+        created.append(write_trade_intent_and_event(conn, draft))
 
-    return decisions
+    return created
 
 
-def process_grid_close_once(conn, *, now_ts: int | None = None) -> list[TradeDecision]:
-    """Что делает: создаёт CLOSE_POSITION intent для GRID-режима в окне закрытия слота.
-    Зачем нужна: GRID должен закрывать позицию по времени, даже если нет нового сигнала."""
-    now_ts = int(time.time() if now_ts is None else now_ts)
-    close_context = get_grid_close_context(now_ts=now_ts)
-
-    if close_context is None:
-        return []
-
-    decisions: list[TradeDecision] = []
-
-    for position in read_open_position_snapshots(conn):
-        if has_unresolved_trade_intent_for_instrument(
-                conn,
-                instrument_code=position.instrument_code,
-        ):
-            continue
-
-        close_context["decision_ts"] = now_ts
-        decision = build_grid_close_trade_decision(
-            position=position,
-            close_context=close_context,
-        )
-        decision_id = write_trade_decision(conn, decision)
-        write_trade_intent_if_needed(
-            conn,
-            decision_id=decision_id,
-            decision=decision,
-        )
-        decisions.append(decision)
-
-    return decisions
-
-
-def process_signal_events_once(*, max_signal_age_seconds: int) -> list[TradeDecision]:
+def process_signal_events_once(*, max_signal_age_seconds: int) -> list[TradeIntentCreated]:
     signals = read_latest_signal_events(max_signal_age_seconds=max_signal_age_seconds)
 
     conn = get_trade_db_connection()
@@ -1247,13 +871,12 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> list[TradeDeci
             max_age_seconds=TRADER_MAX_NEW_INTENT_AGE_SECONDS,
         )
 
-        decisions: list[TradeDecision] = []
-
-        decisions.extend(process_futures_daily_flat_once(conn))
-        decisions.extend(process_grid_close_once(conn))
+        created: list[TradeIntentCreated] = []
+        created.extend(process_futures_daily_flat_once(conn))
+        created.extend(process_grid_close_once(conn))
 
         for signal in signals:
-            if has_decision_for_signal(
+            if has_trade_intent_for_signal(
                     conn,
                     instrument_code=signal.instrument_code,
                     source_signal_id=signal.source_signal_id,
@@ -1261,31 +884,26 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> list[TradeDeci
             ):
                 continue
 
-            market_features = build_market_features_from_signal_event(signal)
             position = read_position_snapshot(conn, instrument_code=signal.instrument_code)
 
-            rule_result = build_trader_intent_guard_result_if_needed(
-                conn,
+            if has_unresolved_trade_intent_for_instrument(
+                    conn,
+                    instrument_code=signal.instrument_code,
+            ):
+                continue
+
+            draft = build_signal_trade_intent_draft(
                 signal=signal,
                 position=position,
             )
 
-            if rule_result is None:
-                rule_result = build_rule_result_from_signal_event(signal)
+            if draft is None:
+                continue
 
-            decision = decide_trade_action(
-                signal=signal,
-                position=position,
-                market_features=market_features,
-                rule_result=rule_result,
-            )
-
-            decision_id = write_trade_decision(conn, decision)
-            write_trade_intent_if_needed(conn, decision_id=decision_id, decision=decision)
-            decisions.append(decision)
+            created.append(write_trade_intent_and_event(conn, draft))
 
         conn.commit()
-        return decisions
+        return created
 
     finally:
         conn.close()

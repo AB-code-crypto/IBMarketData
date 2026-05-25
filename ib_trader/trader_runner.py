@@ -3,7 +3,6 @@ import time
 import traceback
 
 from core.logger import get_logger, log_info, log_warning, setup_logging
-from ib_signal.signal_plot import build_plot_path
 from ib_trader.trade_store import process_signal_events_once
 
 setup_logging()
@@ -14,71 +13,7 @@ TRADER_MAX_SIGNAL_AGE_SECONDS = 10
 TRADER_HEARTBEAT_INTERVAL_SECONDS = 60
 
 
-
-async def send_deal_decision_notification(
-        *,
-        telegram_sender,
-        message_thread_id,
-        decision,
-) -> None:
-    """Что делает: отправляет Telegram-уведомление только по реальному торговому решению.
-    Зачем нужна: signal-сервис может создавать повторяющиеся signal_events, а deal-thread должен получать только action != NO_ACTION."""
-    if telegram_sender is None:
-        return
-
-    if decision.action.value == "NO_ACTION":
-        return
-
-    plot_path = build_plot_path(
-        instrument_code=decision.instrument_code,
-        signal_bar_time_ct=decision.signal_time_ct,
-    )
-
-    caption = (
-        "🚨 Торговое решение\n"
-        f"instrument: {decision.instrument_code}\n"
-        f"action: {decision.action.value}\n"
-        f"signal_id: {decision.source_signal_id}\n"
-        f"time CT: {decision.signal_time_ct}\n"
-        f"direction: {decision.signal_direction}\n"
-        f"entry: {decision.entry_price:.2f}\n"
-        f"order_type: {decision.order_type}\n"
-        f"limit_price: {decision.limit_price}\n"
-        f"regime: {decision.regime}\n"
-        f"ma_zone: {decision.ma_zone}\n"
-        f"strength: {decision.signal_strength}\n"
-        f"potential_end: {decision.potential_end_delta_points:+.2f} pt\n"
-        f"position_before: {decision.position_before_side.value}/{decision.position_before_qty:g}\n"
-        f"position_after: {decision.position_after_side.value}/{decision.position_after_qty:g}\n"
-        f"reason: {decision.reason}"
-    )
-
-    ok = False
-
-    if plot_path.is_file():
-        ok = await telegram_sender.send_photo(
-            plot_path,
-            caption=caption,
-            message_thread_id=message_thread_id,
-        )
-
-    if ok:
-        return
-
-    if not plot_path.is_file():
-        caption += f"\nPNG not found: {plot_path}"
-
-    await telegram_sender.send_text(
-        caption,
-        message_thread_id=message_thread_id,
-    )
-
-
-async def run_trader_loop(
-        *,
-        deal_telegram_sender=None,
-        deal_message_thread_id=None,
-) -> None:
+async def run_trader_loop() -> None:
     log_info(
         logger,
         (
@@ -93,36 +28,37 @@ async def run_trader_loop(
 
     while True:
         try:
-            decisions = process_signal_events_once(
+            created_intents = process_signal_events_once(
                 max_signal_age_seconds=TRADER_MAX_SIGNAL_AGE_SECONDS,
             )
 
-            for decision in decisions:
+            for intent in created_intents:
                 log_info(
                     logger,
                     (
-                        f"{decision.instrument_code}: trader decision: "
-                        f"source_signal_id={decision.source_signal_id}, "
-                        f"action={decision.action.value}, "
-                        f"signal_direction={decision.signal_direction}, "
-                        f"potential_end={decision.potential_end_delta_points:+.2f}, "
-                        f"regime={decision.regime}, "
-                        f"ma_zone={decision.ma_zone}, "
-                        f"strength={decision.signal_strength}, "
-                        f"order_type={decision.order_type}, "
-                        f"limit_price={decision.limit_price}, "
-                        f"position_before={decision.position_before_side.value}/{decision.position_before_qty:g}, "
-                        f"position_after={decision.position_after_side.value}/{decision.position_after_qty:g}, "
-                        f"reason={decision.reason}"
+                        f"{intent.instrument_code}: trade_intent created: "
+                        f"trade_intent_id={intent.trade_intent_id}, "
+                        f"source={intent.intent_source}, "
+                        f"source_signal_id={intent.source_signal_id}, "
+                        f"action={intent.action.value}, "
+                        f"reason={intent.reason}, "
+                        f"signal_direction={intent.signal_direction}, "
+                        f"potential_end={intent.potential_end_delta_points:+.2f}, "
+                        f"regime={intent.regime}, "
+                        f"ma_zone={intent.ma_zone}, "
+                        f"strength={intent.signal_strength}, "
+                        f"order_type={intent.order_type}, "
+                        f"limit_price={intent.limit_price}, "
+                        f"position_before={intent.position_before_side.value}/{intent.position_before_qty:g}, "
+                        f"position_after={intent.position_after_side.value}/{intent.position_after_qty:g}"
                     ),
                     to_telegram=False,
                 )
 
-
         except Exception as exc:
             log_warning(
                 logger,
-                f"ib_trader: ошибка обработки signal_events: {exc}\\n"
+                f"ib_trader: ошибка обработки signal_events: {exc}\n"
                 f"{traceback.format_exc()}",
                 to_telegram=True,
             )

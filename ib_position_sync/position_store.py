@@ -170,11 +170,9 @@ def write_position_snapshot(
             instrument_code,
             side,
             quantity,
-            updated_at_ts,
-            last_decision_id,
-            last_source_signal_id
+            updated_at_ts
         )
-        VALUES (?, ?, ?, ?, NULL, NULL)
+        VALUES (?, ?, ?, ?)
 
         ON CONFLICT(instrument_code) DO UPDATE SET
             side = excluded.side,

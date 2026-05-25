@@ -39,7 +39,6 @@ class TraderSignalEvent:
     potential_max_drawdown_points: float
     potential_used: int
 
-    # Уже готовая market-интерпретация из signal_events.
     feature_bar_ts: int | None = None
     regime: int | None = None
     ma_zone: int | None = None
@@ -59,15 +58,6 @@ class TraderSignalEvent:
 
 
 @dataclass(frozen=True)
-class MarketFeatureSnapshot:
-    instrument_code: str
-    signal_bar_ts: int
-    feature_bar_ts: int | None
-    regime: int | None
-    ma_zone: int | None
-
-
-@dataclass(frozen=True)
 class PositionSnapshot:
     instrument_code: str
     side: PositionSide
@@ -75,60 +65,33 @@ class PositionSnapshot:
 
 
 @dataclass(frozen=True)
-class TradeDecision:
+class TradeIntentCreated:
+    trade_intent_id: int
+
     source_signal_id: int
     instrument_code: str
-
     signal_bar_ts: int
-    signal_time_utc: str
     signal_time_ct: str | None
-    signal_time_msk: str
+
+    intent_source: str
+    action: TradeDecisionAction
+    reason: str
 
     signal_direction: str
     entry_price: float
-
-    best_pearson: float
-    candidate_score_best: float | None
-
     potential_end_delta_points: float
-    potential_max_profit_points: float
-    potential_max_drawdown_points: float
-    potential_used: int
 
     regime: int | None
     ma_zone: int | None
     signal_strength: str
 
     order_type: str
-    order_policy_reason: str
-    limit_offset_points: float | None
     limit_price: float | None
+    limit_offset_points: float | None
     ttl_seconds: int | None
-    rules_json: str
-
-    action: TradeDecisionAction
-    reason: str
 
     position_before_side: PositionSide
     position_before_qty: float
 
     position_after_side: PositionSide
     position_after_qty: float
-
-
-
-@dataclass(frozen=True)
-class TraderRuleEvaluation:
-    """Локальный объект ib_trader для уже готовой интерпретации signal_events.
-    Это не rule-engine: ib_trader не интерпретирует сигнал, а только принимает stateful decision."""
-    allowed: bool
-    reject_reasons: list[str]
-
-    signal_strength: str
-
-    order_type: str
-    order_policy_reason: str
-    limit_offset_points: float | None
-    ttl_seconds: int | None
-
-    rules_json: str

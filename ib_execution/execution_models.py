@@ -15,7 +15,6 @@ class ExecutionStatus(Enum):
 @dataclass(frozen=True)
 class TradeIntent:
     trade_intent_id: int
-    decision_id: int
     source_signal_id: int
     instrument_code: str
 
