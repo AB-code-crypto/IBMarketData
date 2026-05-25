@@ -57,6 +57,75 @@ def expire_stale_new_trade_intents(
     return int(conn.total_changes - changes_before)
 
 
+
+STALE_ACTIVE_INTENT_ERROR_TEXT = "stale active trade_intent: execution service is no longer tracking it"
+
+
+def expire_stale_active_trade_intents(
+        conn,
+        *,
+        now_ts: int | None = None,
+        default_limit_ttl_seconds: int = 600,
+        limit_grace_seconds: int = 10,
+        market_max_age_seconds: int = 90,
+) -> int:
+    """Что делает: переводит зависшие SENDING/ACCEPTED trade_intents в terminal status.
+    Зачем нужна: после рестарта execution старый active intent не должен вечно блокировать ib_trader."""
+    now_ts = int(time.time() if now_ts is None else now_ts)
+    default_limit_ttl_seconds = int(default_limit_ttl_seconds)
+    limit_grace_seconds = int(limit_grace_seconds)
+    market_max_age_seconds = int(market_max_age_seconds)
+
+    changes_before = conn.total_changes
+
+    conn.execute(
+        f"""
+        UPDATE {TRADE_INTENTS_TABLE_NAME}
+        SET
+            status = CASE
+                WHEN order_type = 'LIMIT' THEN ?
+                ELSE ?
+            END,
+            error_text = ?,
+            updated_at_ts = ?,
+            finished_at_ts = ?
+        WHERE status IN ('SENDING', 'ACCEPTED')
+          AND (
+              (
+                  order_type = 'LIMIT'
+                  AND ? - COALESCE(sent_at_ts, updated_at_ts, created_at_ts)
+                      > COALESCE(ttl_seconds, ?) + ?
+              )
+              OR
+              (
+                  order_type != 'LIMIT'
+                  AND ? - COALESCE(sent_at_ts, updated_at_ts, created_at_ts)
+                      > ?
+              )
+          )
+        """,
+        (
+            ExecutionStatus.EXPIRED.value,
+            ExecutionStatus.FAILED.value,
+            (
+                f"{STALE_ACTIVE_INTENT_ERROR_TEXT}; "
+                f"default_limit_ttl_seconds={default_limit_ttl_seconds}; "
+                f"limit_grace_seconds={limit_grace_seconds}; "
+                f"market_max_age_seconds={market_max_age_seconds}"
+            ),
+            now_ts,
+            now_ts,
+            now_ts,
+            default_limit_ttl_seconds,
+            limit_grace_seconds,
+            now_ts,
+            market_max_age_seconds,
+        ),
+    )
+
+    return int(conn.total_changes - changes_before)
+
+
 def read_new_trade_intents(*, limit: int = 20, max_age_seconds: int = 10) -> list[TradeIntent]:
     conn = get_trade_db_connection()
 
@@ -69,6 +138,10 @@ def read_new_trade_intents(*, limit: int = 20, max_age_seconds: int = 10) -> lis
         expire_stale_new_trade_intents(
             conn,
             max_age_seconds=max_age_seconds,
+            now_ts=now_ts,
+        )
+        expire_stale_active_trade_intents(
+            conn,
             now_ts=now_ts,
         )
         conn.commit()
