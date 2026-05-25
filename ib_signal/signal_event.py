@@ -12,7 +12,7 @@ from ib_signal.signal_config import SignalConfig
 @dataclass(frozen=True)
 class SignalEvent:
     """Что делает: хранит нормализованный actionable-сигнал, найденный ib_signal.
-    Зачем нужна: downstream-фильтры читают единый контракт из state DB, а не внутренности signal-pipeline."""
+    Зачем нужна: downstream-сервисы читают единый контракт из state DB, а не внутренности signal-pipeline."""
     signal_id: int | None
 
     instrument_code: str
@@ -39,10 +39,25 @@ class SignalEvent:
 
     settings_json: str
 
+    feature_bar_ts: int | None = None
+    regime: int | None = None
+    ma_zone: int | None = None
+
+    signal_allowed: bool = True
+    signal_reject_reason: str | None = None
+
+    signal_strength: str = "NEUTRAL"
+
+    order_type: str = "MARKET"
+    order_policy_reason: str = "default_market"
+    limit_offset_points: float | None = None
+    limit_price: float | None = None
+    ttl_seconds: int | None = None
+
+    signal_rules_json: str = "[]"
+
 
 def signal_config_to_dict(settings: SignalConfig) -> dict[str, Any]:
-    """Что делает: превращает SignalConfig в JSON-safe dict.
-    Зачем нужна: signal_events хранит snapshot настроек, но Enum нельзя напрямую писать в JSON."""
     result: dict[str, Any] = {}
 
     for field in fields(settings):
@@ -57,8 +72,6 @@ def signal_config_to_dict(settings: SignalConfig) -> dict[str, Any]:
 
 
 def signal_config_to_json(settings: SignalConfig) -> str:
-    """Что делает: сериализует SignalConfig в стабильный JSON.
-    Зачем нужна: из settings_json можно восстановить режим и параметры, с которыми был найден сигнал."""
     return json.dumps(
         signal_config_to_dict(settings),
         ensure_ascii=False,
@@ -68,8 +81,6 @@ def signal_config_to_json(settings: SignalConfig) -> str:
 
 
 def get_signal_time_fields(signal_bar_ts: int) -> dict[str, str | int]:
-    """Что делает: строит UTC/CT/MSK метки времени сигнального бара.
-    Зачем нужна: signal_events хранит такие же удобные временные метки, как bar-таблицы."""
     dt_utc = datetime.fromtimestamp(int(signal_bar_ts), tz=timezone.utc)
     return build_bar_time_fields_from_utc_dt(dt_utc)
 
@@ -88,10 +99,20 @@ def build_signal_event(
         potential_max_profit_points: float,
         potential_max_drawdown_points: float,
         potential_used: int,
+        feature_bar_ts: int | None = None,
+        regime: int | None = None,
+        ma_zone: int | None = None,
+        signal_allowed: bool = True,
+        signal_reject_reason: str | None = None,
+        signal_strength: str = "NEUTRAL",
+        order_type: str = "MARKET",
+        order_policy_reason: str = "default_market",
+        limit_offset_points: float | None = None,
+        limit_price: float | None = None,
+        ttl_seconds: int | None = None,
+        signal_rules_json: str = "[]",
         created_at_ts: int | None = None,
 ) -> SignalEvent:
-    """Что делает: собирает SignalEvent из итогов signal-pipeline.
-    Зачем нужна: signal_runner пишет в state DB только actionable LONG/SHORT события."""
     direction_value = str(direction).upper()
     if direction_value not in {"LONG", "SHORT"}:
         raise ValueError(f"SignalEvent direction должен быть LONG/SHORT, получено: {direction!r}")
@@ -125,4 +146,24 @@ def build_signal_event(
         potential_max_drawdown_points=float(potential_max_drawdown_points),
         potential_used=int(potential_used),
         settings_json=signal_config_to_json(settings),
+        feature_bar_ts=None if feature_bar_ts is None else int(feature_bar_ts),
+        regime=None if regime is None else int(regime),
+        ma_zone=None if ma_zone is None else int(ma_zone),
+        signal_allowed=bool(signal_allowed),
+        signal_reject_reason=(
+            None
+            if signal_reject_reason is None or str(signal_reject_reason).strip() == ""
+            else str(signal_reject_reason)
+        ),
+        signal_strength=str(signal_strength).upper(),
+        order_type=str(order_type).upper(),
+        order_policy_reason=str(order_policy_reason),
+        limit_offset_points=(
+            None
+            if limit_offset_points is None
+            else float(limit_offset_points)
+        ),
+        limit_price=None if limit_price is None else float(limit_price),
+        ttl_seconds=None if ttl_seconds is None else int(ttl_seconds),
+        signal_rules_json=str(signal_rules_json or "[]"),
     )

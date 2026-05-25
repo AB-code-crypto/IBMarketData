@@ -11,6 +11,7 @@ from ib_signal.signal_config import MarketRegimeFilterMode, SignalConfig
 from ib_signal.signal_errors import SignalDataNotReadyError
 from ib_signal.signal_event import build_signal_event
 from ib_signal.signal_event_store import write_signal_event
+from ib_signal.signal_interpretation import interpret_signal_event
 from ib_signal.pearson import calculate_centered_pearson_batch
 from ib_signal.signal_candidate_regime_filter import (
     filter_candidates_by_market_regime,
@@ -495,6 +496,31 @@ async def run_signal_loop(
                         and candidate_potential_result.direction in ("LONG", "SHORT")
                         and abs(candidate_potential_result.end_delta_points) > potential_min_abs_end_delta_points
                 ):
+                    signal_interpretation = interpret_signal_event(
+                        instrument_code=instrument_code,
+                        signal_bar_ts=due_signal_bar_ts,
+                        signal_time_ct=candidate_search_result.current_signal_bar_time_ct,
+                        direction=candidate_potential_result.direction,
+                        entry_price=float(pattern_matrix_result.current_values[-1]),
+                        best_pearson=signal_event_best_pearson,
+                        candidate_score_best=signal_event_candidate_score_best,
+                        potential_end_delta_points=candidate_potential_result.end_delta_points,
+                        potential_max_profit_points=candidate_potential_result.max_profit_points,
+                        potential_max_drawdown_points=candidate_potential_result.max_drawdown_points,
+                        potential_used=candidate_potential_result.used_candidates_count,
+                        feature_bar_ts=signal_interpretation.feature_bar_ts,
+                        regime=signal_interpretation.regime,
+                        ma_zone=signal_interpretation.ma_zone,
+                        signal_allowed=signal_interpretation.signal_allowed,
+                        signal_reject_reason=signal_interpretation.signal_reject_reason,
+                        signal_strength=signal_interpretation.signal_strength,
+                        order_type=signal_interpretation.order_type,
+                        order_policy_reason=signal_interpretation.order_policy_reason,
+                        limit_offset_points=signal_interpretation.limit_offset_points,
+                        limit_price=signal_interpretation.limit_price,
+                        ttl_seconds=signal_interpretation.ttl_seconds,
+                        signal_rules_json=signal_interpretation.signal_rules_json,
+                    )
                     signal_event = build_signal_event(
                         instrument_code=instrument_code,
                         signal_bar_ts=due_signal_bar_ts,

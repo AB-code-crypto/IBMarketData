@@ -8,8 +8,6 @@ SIGNAL_EVENTS_TABLE_NAME = "signal_events"
 
 
 def create_signal_events_table_sql() -> str:
-    """Что делает: возвращает SQL создания таблицы signal_events.
-    Зачем нужна: ib_signal пишет actionable LONG/SHORT сигналы в state DB для downstream-фильтров."""
     return f"""
     CREATE TABLE IF NOT EXISTS {SIGNAL_EVENTS_TABLE_NAME} (
         signal_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,6 +36,23 @@ def create_signal_events_table_sql() -> str:
 
         settings_json TEXT NOT NULL,
 
+        feature_bar_ts INTEGER,
+        regime INTEGER,
+        ma_zone INTEGER,
+
+        signal_allowed INTEGER NOT NULL,
+        signal_reject_reason TEXT,
+
+        signal_strength TEXT NOT NULL,
+
+        order_type TEXT NOT NULL,
+        order_policy_reason TEXT NOT NULL,
+        limit_offset_points REAL,
+        limit_price REAL,
+        ttl_seconds INTEGER,
+
+        signal_rules_json TEXT NOT NULL,
+
         UNIQUE (
             instrument_code,
             signal_bar_ts,
@@ -49,8 +64,6 @@ def create_signal_events_table_sql() -> str:
 
 
 def initialize_signal_events_table(conn) -> None:
-    """Что делает: создаёт signal_events и индексы.
-    Зачем нужна: writer/cleanup могут безопасно вызываться при старте чистой state DB."""
     conn.execute(create_signal_events_table_sql())
     conn.execute(
         f"""
@@ -67,8 +80,6 @@ def initialize_signal_events_table(conn) -> None:
 
 
 def write_signal_event(event: SignalEvent) -> int:
-    """Что делает: пишет или обновляет SignalEvent в state DB и возвращает signal_id.
-    Зачем нужна: повторный расчёт той же due-точки не должен плодить дубли."""
     initialize_state_db()
 
     conn = open_sqlite_connection(
@@ -105,9 +116,26 @@ def write_signal_event(event: SignalEvent) -> int:
                 potential_max_drawdown_points,
                 potential_used,
 
-                settings_json
+                settings_json,
+
+                feature_bar_ts,
+                regime,
+                ma_zone,
+
+                signal_allowed,
+                signal_reject_reason,
+
+                signal_strength,
+
+                order_type,
+                order_policy_reason,
+                limit_offset_points,
+                limit_price,
+                ttl_seconds,
+
+                signal_rules_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
             ON CONFLICT (
                 instrument_code,
@@ -131,7 +159,24 @@ def write_signal_event(event: SignalEvent) -> int:
                 potential_max_drawdown_points = excluded.potential_max_drawdown_points,
                 potential_used = excluded.potential_used,
 
-                settings_json = excluded.settings_json
+                settings_json = excluded.settings_json,
+
+                feature_bar_ts = excluded.feature_bar_ts,
+                regime = excluded.regime,
+                ma_zone = excluded.ma_zone,
+
+                signal_allowed = excluded.signal_allowed,
+                signal_reject_reason = excluded.signal_reject_reason,
+
+                signal_strength = excluded.signal_strength,
+
+                order_type = excluded.order_type,
+                order_policy_reason = excluded.order_policy_reason,
+                limit_offset_points = excluded.limit_offset_points,
+                limit_price = excluded.limit_price,
+                ttl_seconds = excluded.ttl_seconds,
+
+                signal_rules_json = excluded.signal_rules_json
             ;
             """,
             (
@@ -152,6 +197,18 @@ def write_signal_event(event: SignalEvent) -> int:
                 event.potential_max_drawdown_points,
                 event.potential_used,
                 event.settings_json,
+                event.feature_bar_ts,
+                event.regime,
+                event.ma_zone,
+                1 if event.signal_allowed else 0,
+                event.signal_reject_reason,
+                event.signal_strength,
+                event.order_type,
+                event.order_policy_reason,
+                event.limit_offset_points,
+                event.limit_price,
+                event.ttl_seconds,
+                event.signal_rules_json,
             ),
         )
 
@@ -183,8 +240,6 @@ def write_signal_event(event: SignalEvent) -> int:
 
 
 def cleanup_old_signal_events(*, retention_days: int) -> int:
-    """Что делает: удаляет старые signal_events из state DB.
-    Зачем нужна: live-сигналы нужны как короткий event-log, а не вечная свалка."""
     retention_days = int(retention_days)
 
     if retention_days <= 0:
