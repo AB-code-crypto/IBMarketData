@@ -1,16 +1,20 @@
 import json
 import sqlite3
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from contracts import Instrument
 from core.sqlite_utils import open_sqlite_connection
+from core.time_utils import CT_TIMEZONE, MSK_TIMEZONE, SQLITE_DATETIME_FORMAT
 from core.state_db import STATE_DB_PATH, initialize_state_db
 from ib_job_data.feature_db_sql import quote_identifier
 from ib_job_data.job_features_config import MA_ZONE_COLUMN_NAME, REGIME_COLUMN_NAME
 from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 from ib_job_data.sma_features import SMA_TABLE_NAME
+from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG, SignalWindowMode
 from ib_signal.signal_event_store import SIGNAL_EVENTS_TABLE_NAME, initialize_signal_events_table
+from ib_signal.signal_schedule import get_grid_slot_start_ts
 from ib_trader.rule_engine import TraderRuleEvaluation, evaluate_trader_rules
 from ib_trader.trade_models import (
     MarketFeatureSnapshot,
@@ -833,11 +837,230 @@ def write_trade_intent_if_needed(conn, *, decision_id: int, decision: TradeDecis
     )
 
 
+
+GRID_CLOSE_SOURCE_SIGNAL_ID = -1
+GRID_CLOSE_DECISION_REASON = "grid_close_before_slot_end"
+
+
+def build_time_text_fields_from_ts(ts: int) -> tuple[str, str, str]:
+    dt_utc = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+    dt_ct = dt_utc.astimezone(CT_TIMEZONE)
+    dt_msk = dt_utc.astimezone(MSK_TIMEZONE)
+
+    return (
+        dt_utc.strftime(SQLITE_DATETIME_FORMAT),
+        dt_ct.strftime(SQLITE_DATETIME_FORMAT),
+        dt_msk.strftime(SQLITE_DATETIME_FORMAT),
+    )
+
+
+def get_grid_close_context(*, now_ts: int) -> dict | None:
+    """Что делает: определяет, настало ли окно закрытия GRID-слота.
+    Зачем нужна: в GRID позиция должна закрываться за slot_close_before_end_seconds до конца слота."""
+    settings = DEFAULT_SIGNAL_CONFIG
+
+    if settings.signal_window_mode != SignalWindowMode.GRID:
+        return None
+
+    slot_step_seconds = int(settings.slot_step_minutes) * 60
+    close_before_seconds = int(settings.slot_close_before_end_seconds)
+
+    if slot_step_seconds <= 0:
+        return None
+
+    if close_before_seconds < 0 or close_before_seconds >= slot_step_seconds:
+        return None
+
+    slot_start_ts = get_grid_slot_start_ts(
+        current_bar_ts=int(now_ts),
+        slot_step_minutes=int(settings.slot_step_minutes),
+        slot_start_minute_of_day=int(settings.slot_start_minute_of_day),
+    )
+    slot_end_ts = int(slot_start_ts) + slot_step_seconds
+    close_at_ts = int(slot_end_ts) - close_before_seconds
+
+    if close_at_ts <= int(now_ts) < slot_end_ts:
+        return {
+            "slot_start_ts": int(slot_start_ts),
+            "slot_end_ts": int(slot_end_ts),
+            "close_at_ts": int(close_at_ts),
+            "slot_step_seconds": int(slot_step_seconds),
+            "close_before_seconds": int(close_before_seconds),
+        }
+
+    return None
+
+
+def read_open_position_snapshots(conn) -> list[PositionSnapshot]:
+    """Что делает: читает все открытые позиции из positions_latest.
+    Зачем нужна: GRID-close работает даже без нового signal_event."""
+    initialize_trade_db(conn)
+
+    rows = conn.execute(
+        f"""
+        SELECT instrument_code, side, quantity
+        FROM {POSITIONS_LATEST_TABLE_NAME}
+        WHERE side IN ('LONG', 'SHORT')
+          AND quantity > 0
+        ORDER BY instrument_code
+        """
+    ).fetchall()
+
+    return [
+        PositionSnapshot(
+            instrument_code=str(row[0]),
+            side=PositionSide(str(row[1]).upper()),
+            quantity=float(row[2]),
+        )
+        for row in rows
+    ]
+
+
+def has_grid_close_decision(
+        conn,
+        *,
+        instrument_code: str,
+        close_at_ts: int,
+) -> bool:
+    row = conn.execute(
+        f"""
+        SELECT 1
+        FROM {TRADE_DECISIONS_TABLE_NAME}
+        WHERE instrument_code = ?
+          AND source_signal_id = ?
+          AND signal_bar_ts = ?
+        LIMIT 1
+        """,
+        (
+            str(instrument_code),
+            GRID_CLOSE_SOURCE_SIGNAL_ID,
+            int(close_at_ts),
+        ),
+    ).fetchone()
+
+    return row is not None
+
+
+def has_active_trade_intent_for_instrument(conn, *, instrument_code: str) -> bool:
+    row = conn.execute(
+        f"""
+        SELECT 1
+        FROM {TRADE_INTENTS_TABLE_NAME}
+        WHERE instrument_code = ?
+          AND status IN ('NEW', 'SENDING', 'ACCEPTED')
+        LIMIT 1
+        """,
+        (str(instrument_code),),
+    ).fetchone()
+
+    return row is not None
+
+
+def build_grid_close_trade_decision(
+        *,
+        position: PositionSnapshot,
+        close_context: dict,
+) -> TradeDecision:
+    close_at_ts = int(close_context["close_at_ts"])
+    signal_time_utc, signal_time_ct, signal_time_msk = build_time_text_fields_from_ts(close_at_ts)
+
+    rules_json = json.dumps(
+        [
+            {
+                "rule": "grid_time_exit",
+                "result": "CLOSE_POSITION",
+                "reason": GRID_CLOSE_DECISION_REASON,
+                "details": {
+                    "slot_start_ts": int(close_context["slot_start_ts"]),
+                    "slot_end_ts": int(close_context["slot_end_ts"]),
+                    "close_at_ts": int(close_context["close_at_ts"]),
+                    "slot_step_seconds": int(close_context["slot_step_seconds"]),
+                    "close_before_seconds": int(close_context["close_before_seconds"]),
+                    "position_side": position.side.value,
+                    "position_qty": float(position.quantity),
+                },
+            }
+        ],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    return TradeDecision(
+        source_signal_id=GRID_CLOSE_SOURCE_SIGNAL_ID,
+        instrument_code=position.instrument_code,
+        signal_bar_ts=close_at_ts,
+        signal_time_utc=signal_time_utc,
+        signal_time_ct=signal_time_ct,
+        signal_time_msk=signal_time_msk,
+        signal_direction="CLOSE",
+        entry_price=0.0,
+        best_pearson=0.0,
+        candidate_score_best=None,
+        potential_end_delta_points=0.0,
+        potential_max_profit_points=0.0,
+        potential_max_drawdown_points=0.0,
+        potential_used=0,
+        regime=None,
+        ma_zone=None,
+        signal_strength="GRID_CLOSE",
+        order_type="MARKET",
+        order_policy_reason="grid_time_exit",
+        limit_offset_points=None,
+        limit_price=None,
+        ttl_seconds=None,
+        rules_json=rules_json,
+        action=TradeDecisionAction.CLOSE_POSITION,
+        reason=GRID_CLOSE_DECISION_REASON,
+        position_before_side=position.side,
+        position_before_qty=float(position.quantity),
+        position_after_side=PositionSide.FLAT,
+        position_after_qty=0.0,
+    )
+
+
+def process_grid_close_once(conn, *, now_ts: int | None = None) -> list[TradeDecision]:
+    """Что делает: создаёт CLOSE_POSITION intent для GRID-режима в окне закрытия слота.
+    Зачем нужна: GRID должен закрывать позицию по времени, даже если нет нового сигнала."""
+    now_ts = int(time.time() if now_ts is None else now_ts)
+    close_context = get_grid_close_context(now_ts=now_ts)
+
+    if close_context is None:
+        return []
+
+    decisions: list[TradeDecision] = []
+
+    for position in read_open_position_snapshots(conn):
+        if has_grid_close_decision(
+                conn,
+                instrument_code=position.instrument_code,
+                close_at_ts=int(close_context["close_at_ts"]),
+        ):
+            continue
+
+        if has_active_trade_intent_for_instrument(
+                conn,
+                instrument_code=position.instrument_code,
+        ):
+            continue
+
+        decision = build_grid_close_trade_decision(
+            position=position,
+            close_context=close_context,
+        )
+        decision_id = write_trade_decision(conn, decision)
+        write_trade_intent_if_needed(
+            conn,
+            decision_id=decision_id,
+            decision=decision,
+        )
+        decisions.append(decision)
+
+    return decisions
+
+
 def process_signal_events_once(*, max_signal_age_seconds: int) -> list[TradeDecision]:
     signals = read_latest_signal_events(max_signal_age_seconds=max_signal_age_seconds)
-
-    if not signals:
-        return []
 
     conn = get_trade_db_connection()
 
@@ -850,6 +1073,8 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> list[TradeDeci
         )
 
         decisions: list[TradeDecision] = []
+
+        decisions.extend(process_grid_close_once(conn))
 
         for signal in signals:
             if has_decision_for_signal(
