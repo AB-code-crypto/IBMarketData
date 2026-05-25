@@ -543,14 +543,6 @@ async def run_signal_loop(
                         to_telegram=False,
                     )
 
-                if signal_event is not None:
-                    await send_deal_signal_notification(
-                        telegram_sender=deal_telegram_sender,
-                        message_thread_id=deal_message_thread_id,
-                        signal_id=signal_id,
-                        signal_event=signal_event,
-                        saved_plot_path=saved_plot_path,
-                    )
 
             except SignalDataNotReadyError as exc:
                 # Например, после клиринга первая строка 17:00:00 закрывается в 17:00:05,

@@ -98,8 +98,6 @@ async def main() -> None:
         await run_signal_loop(
             instrument_codes=ready_instrument_codes,
             settings=signal_config,
-            deal_telegram_sender=telegram_sender,
-            deal_message_thread_id=app_settings.telegram_message_thread_id_deal,
         )
 
     except KeyboardInterrupt:
