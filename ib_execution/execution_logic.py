@@ -1,10 +1,17 @@
+import time
+from datetime import datetime, timezone
+
 from ib_execution.execution_models import ExecutionResult, ExecutionStatus, TradeIntent
+from contracts import Instrument
+from core.time_utils import CT_TIMEZONE
+from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG
 from ib_execution.contract_resolver import build_execution_contract
 from ib_execution.order_service import OrderService
 
 
 LIMIT_DONE_TIMEOUT_EXTRA_SECONDS = 10
 DEFAULT_LIMIT_DONE_TIMEOUT_SECONDS = 600
+FUTURES_NO_NEW_TRADES_HOUR_CT = 15
 
 
 def signed_qty(side: str, qty: float) -> float:
@@ -211,6 +218,65 @@ async def execute_market_intent(
     )
 
 
+
+def get_ct_day_ts(*, now_ts: int, hour: int, minute: int = 0, second: int = 0) -> int:
+    now_ct = datetime.fromtimestamp(int(now_ts), tz=timezone.utc).astimezone(CT_TIMEZONE)
+    target_ct = now_ct.replace(
+        hour=int(hour),
+        minute=int(minute),
+        second=int(second),
+        microsecond=0,
+    )
+    return int(target_ct.astimezone(timezone.utc).timestamp())
+
+
+def get_futures_limit_cutoff_ts(*, instrument_code: str, now_ts: int) -> int | None:
+    """Что делает: возвращает 14:59:50 CT для futures, после чего лимитники жить не должны.
+    Зачем нужна: лимитные заявки не должны переноситься в последний час перед клирингом."""
+    instrument_row = Instrument.get(str(instrument_code))
+
+    if instrument_row is None:
+        return None
+
+    if str(instrument_row.get("secType", "")).upper() != "FUT":
+        return None
+
+    no_new_trades_ts = get_ct_day_ts(
+        now_ts=now_ts,
+        hour=FUTURES_NO_NEW_TRADES_HOUR_CT,
+    )
+    return int(no_new_trades_ts) - int(DEFAULT_SIGNAL_CONFIG.slot_close_before_end_seconds)
+
+
+def clamp_limit_ttl_seconds_for_futures_cutoff(intent: TradeIntent) -> int | None:
+    """Что делает: режет TTL лимитника так, чтобы он не жил после 14:59:50 CT.
+    Зачем нужна: к началу последнего часа все лимитники по futures должны быть удалены."""
+    ttl_seconds = (
+        int(intent.ttl_seconds)
+        if intent.ttl_seconds is not None and int(intent.ttl_seconds) > 0
+        else None
+    )
+
+    now_ts = int(time.time())
+    cutoff_ts = get_futures_limit_cutoff_ts(
+        instrument_code=intent.instrument_code,
+        now_ts=now_ts,
+    )
+
+    if cutoff_ts is None:
+        return ttl_seconds
+
+    seconds_to_cutoff = int(cutoff_ts) - now_ts
+
+    if seconds_to_cutoff <= 0:
+        return 1
+
+    if ttl_seconds is None:
+        return seconds_to_cutoff
+
+    return max(1, min(ttl_seconds, seconds_to_cutoff))
+
+
 async def execute_limit_intent(
         *,
         order_service: OrderService,
@@ -225,13 +291,15 @@ async def execute_limit_intent(
     if intent.limit_price is None:
         raise ValueError(f"LIMIT intent without limit_price: id={intent.trade_intent_id}")
 
+    effective_ttl_seconds = clamp_limit_ttl_seconds_for_futures_cutoff(intent)
+
     if order_action == "BUY":
         placement = await order_service.buy_limit(
             contract=contract,
             quantity=quantity,
             limit_price=float(intent.limit_price),
             order_ref=order_ref,
-            ttl_seconds=intent.ttl_seconds,
+            ttl_seconds=effective_ttl_seconds,
             wait="none",
         )
     else:
@@ -240,7 +308,7 @@ async def execute_limit_intent(
             quantity=quantity,
             limit_price=float(intent.limit_price),
             order_ref=order_ref,
-            ttl_seconds=intent.ttl_seconds,
+            ttl_seconds=effective_ttl_seconds,
             wait="none",
         )
 
@@ -248,7 +316,7 @@ async def execute_limit_intent(
     trade = placement.receipt.trade
     done = await order_service.monitor.wait_for_done(
         trade,
-        timeout=get_limit_done_timeout_seconds(intent),
+        timeout=float((effective_ttl_seconds or DEFAULT_LIMIT_DONE_TIMEOUT_SECONDS) + LIMIT_DONE_TIMEOUT_EXTRA_SECONDS),
         poll_interval=0.10,
     )
 

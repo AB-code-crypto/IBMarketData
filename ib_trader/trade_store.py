@@ -961,8 +961,8 @@ def build_grid_close_trade_decision(
         position: PositionSnapshot,
         close_context: dict,
 ) -> TradeDecision:
-    close_at_ts = int(close_context["close_at_ts"])
-    signal_time_utc, signal_time_ct, signal_time_msk = build_time_text_fields_from_ts(close_at_ts)
+    decision_ts = int(close_context.get("decision_ts", close_context["close_at_ts"]))
+    signal_time_utc, signal_time_ct, signal_time_msk = build_time_text_fields_from_ts(decision_ts)
 
     rules_json = json.dumps(
         [
@@ -989,7 +989,7 @@ def build_grid_close_trade_decision(
     return TradeDecision(
         source_signal_id=GRID_CLOSE_SOURCE_SIGNAL_ID,
         instrument_code=position.instrument_code,
-        signal_bar_ts=close_at_ts,
+        signal_bar_ts=decision_ts,
         signal_time_utc=signal_time_utc,
         signal_time_ct=signal_time_ct,
         signal_time_msk=signal_time_msk,
@@ -1019,6 +1019,184 @@ def build_grid_close_trade_decision(
     )
 
 
+
+FUTURES_DAILY_FLAT_SOURCE_SIGNAL_ID = -2
+FUTURES_DAILY_FLAT_DECISION_REASON = "futures_daily_flat_before_no_trade_hour"
+FUTURES_NO_NEW_TRADES_HOUR_CT = 15
+FUTURES_CLEARING_HOUR_CT = 16
+
+
+def get_ct_day_ts(*, now_ts: int, hour: int, minute: int = 0, second: int = 0) -> int:
+    now_ct = datetime.fromtimestamp(int(now_ts), tz=timezone.utc).astimezone(CT_TIMEZONE)
+    target_ct = now_ct.replace(
+        hour=int(hour),
+        minute=int(minute),
+        second=int(second),
+        microsecond=0,
+    )
+    return int(target_ct.astimezone(timezone.utc).timestamp())
+
+
+def get_futures_daily_flat_context(*, now_ts: int) -> dict | None:
+    """Что делает: определяет окно принудительного закрытия futures перед no-trade hour.
+    Зачем нужна: робот никогда не должен переносить futures-позицию через клиринг."""
+    settings = DEFAULT_SIGNAL_CONFIG
+    close_before_seconds = int(settings.slot_close_before_end_seconds)
+
+    no_new_trades_ts = get_ct_day_ts(
+        now_ts=now_ts,
+        hour=FUTURES_NO_NEW_TRADES_HOUR_CT,
+    )
+    clearing_ts = get_ct_day_ts(
+        now_ts=now_ts,
+        hour=FUTURES_CLEARING_HOUR_CT,
+    )
+    close_at_ts = no_new_trades_ts - close_before_seconds
+
+    # Если сервис пропустил точку 14:59:50, всё равно пытаемся закрыть до клиринга.
+    if close_at_ts <= int(now_ts) < clearing_ts:
+        return {
+            "no_new_trades_ts": int(no_new_trades_ts),
+            "clearing_ts": int(clearing_ts),
+            "close_at_ts": int(close_at_ts),
+            "close_before_seconds": int(close_before_seconds),
+        }
+
+    return None
+
+
+def is_futures_instrument(instrument_code: str) -> bool:
+    instrument_row = Instrument.get(str(instrument_code))
+
+    if instrument_row is None:
+        return False
+
+    return str(instrument_row.get("secType", "")).upper() == "FUT"
+
+
+def has_unresolved_trade_intent_for_instrument(conn, *, instrument_code: str) -> bool:
+    """Что делает: проверяет, есть ли активный/ещё не подтверждённый intent по инструменту.
+    Зачем нужна: close-manager не должен плодить повторные CLOSE до обновления positions_latest."""
+    latest_intent = read_latest_non_failed_trade_intent(
+        conn,
+        instrument_code=instrument_code,
+    )
+
+    if latest_intent is None:
+        return False
+
+    if latest_intent["status"] in {"NEW", "SENDING", "ACCEPTED"}:
+        return True
+
+    if latest_intent["status"] == "EXECUTED":
+        position_updated_at_ts = read_position_updated_at_ts(
+            conn,
+            instrument_code=instrument_code,
+        )
+        return position_updated_at_ts is None or position_updated_at_ts <= latest_intent["event_ts"]
+
+    return False
+
+
+def build_futures_daily_flat_trade_decision(
+        *,
+        position: PositionSnapshot,
+        close_context: dict,
+        decision_ts: int,
+) -> TradeDecision:
+    signal_time_utc, signal_time_ct, signal_time_msk = build_time_text_fields_from_ts(decision_ts)
+
+    rules_json = json.dumps(
+        [
+            {
+                "rule": "futures_daily_flat",
+                "result": "CLOSE_POSITION",
+                "reason": FUTURES_DAILY_FLAT_DECISION_REASON,
+                "details": {
+                    "no_new_trades_ts": int(close_context["no_new_trades_ts"]),
+                    "clearing_ts": int(close_context["clearing_ts"]),
+                    "close_at_ts": int(close_context["close_at_ts"]),
+                    "close_before_seconds": int(close_context["close_before_seconds"]),
+                    "position_side": position.side.value,
+                    "position_qty": float(position.quantity),
+                },
+            }
+        ],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    return TradeDecision(
+        source_signal_id=FUTURES_DAILY_FLAT_SOURCE_SIGNAL_ID,
+        instrument_code=position.instrument_code,
+        signal_bar_ts=int(decision_ts),
+        signal_time_utc=signal_time_utc,
+        signal_time_ct=signal_time_ct,
+        signal_time_msk=signal_time_msk,
+        signal_direction="CLOSE",
+        entry_price=0.0,
+        best_pearson=0.0,
+        candidate_score_best=None,
+        potential_end_delta_points=0.0,
+        potential_max_profit_points=0.0,
+        potential_max_drawdown_points=0.0,
+        potential_used=0,
+        regime=None,
+        ma_zone=None,
+        signal_strength="FUTURES_DAILY_FLAT",
+        order_type="MARKET",
+        order_policy_reason="futures_daily_flat",
+        limit_offset_points=None,
+        limit_price=None,
+        ttl_seconds=None,
+        rules_json=rules_json,
+        action=TradeDecisionAction.CLOSE_POSITION,
+        reason=FUTURES_DAILY_FLAT_DECISION_REASON,
+        position_before_side=position.side,
+        position_before_qty=float(position.quantity),
+        position_after_side=PositionSide.FLAT,
+        position_after_qty=0.0,
+    )
+
+
+def process_futures_daily_flat_once(conn, *, now_ts: int | None = None) -> list[TradeDecision]:
+    """Что делает: создаёт CLOSE_POSITION для открытых futures перед no-trade hour/клирингом.
+    Зачем нужна: единое правило для GRID и ROLLING — не переносить futures через ночь."""
+    now_ts = int(time.time() if now_ts is None else now_ts)
+    close_context = get_futures_daily_flat_context(now_ts=now_ts)
+
+    if close_context is None:
+        return []
+
+    decisions: list[TradeDecision] = []
+
+    for position in read_open_position_snapshots(conn):
+        if not is_futures_instrument(position.instrument_code):
+            continue
+
+        if has_unresolved_trade_intent_for_instrument(
+                conn,
+                instrument_code=position.instrument_code,
+        ):
+            continue
+
+        decision = build_futures_daily_flat_trade_decision(
+            position=position,
+            close_context=close_context,
+            decision_ts=now_ts,
+        )
+        decision_id = write_trade_decision(conn, decision)
+        write_trade_intent_if_needed(
+            conn,
+            decision_id=decision_id,
+            decision=decision,
+        )
+        decisions.append(decision)
+
+    return decisions
+
+
 def process_grid_close_once(conn, *, now_ts: int | None = None) -> list[TradeDecision]:
     """Что делает: создаёт CLOSE_POSITION intent для GRID-режима в окне закрытия слота.
     Зачем нужна: GRID должен закрывать позицию по времени, даже если нет нового сигнала."""
@@ -1031,19 +1209,13 @@ def process_grid_close_once(conn, *, now_ts: int | None = None) -> list[TradeDec
     decisions: list[TradeDecision] = []
 
     for position in read_open_position_snapshots(conn):
-        if has_grid_close_decision(
-                conn,
-                instrument_code=position.instrument_code,
-                close_at_ts=int(close_context["close_at_ts"]),
-        ):
-            continue
-
-        if has_active_trade_intent_for_instrument(
+        if has_unresolved_trade_intent_for_instrument(
                 conn,
                 instrument_code=position.instrument_code,
         ):
             continue
 
+        close_context["decision_ts"] = now_ts
         decision = build_grid_close_trade_decision(
             position=position,
             close_context=close_context,
@@ -1074,6 +1246,7 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> list[TradeDeci
 
         decisions: list[TradeDecision] = []
 
+        decisions.extend(process_futures_daily_flat_once(conn))
         decisions.extend(process_grid_close_once(conn))
 
         for signal in signals:
