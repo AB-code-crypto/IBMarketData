@@ -1,13 +1,13 @@
-# Конфигурация правил ib_trader.
+# Конфигурация интерпретации сигналов ib_signal.
 #
 # Это единственное место, где задаётся торговая логика после появления сигнала.
 #
 # Общая цепочка:
 #   ib_signal нашёл сигнал LONG/SHORT
-#   ib_trader читает signal + regime + ma_zone + position
-#   ib_trader применяет правила ниже
-#   ib_trader пишет trade_decisions / trade_intents
-#   ib_execution только исполняет trade_intents
+#   ib_signal читает signal + regime + ma_zone + position
+#   ib_signal применяет правила ниже
+#   ib_signal пишет signal_events
+#   ib_trader затем принимает stateful-решение по уже интерпретированному signal_events
 #
 # Термины:
 #   LONG  = покупка
@@ -54,7 +54,7 @@
 #       regime in neutral_regimes             -> NEUTRAL
 #       иначе                                 -> WEAK
 
-TRADER_RULES = {
+SIGNAL_RULES = {
     # Покупка разрешена, если цена находится в зоне +1 или ниже.
     "long_allowed_ma_zones": [-4, -3, -2, -1, 0, 1],
 
@@ -89,7 +89,7 @@ TRADER_RULES = {
 #
 # Это не правила допуска, а параметры исполнения и политики.
 
-TRADER_RULE_SETTINGS = {
+SIGNAL_RULE_SETTINGS = {
     # True:
     #   regime и ma_zone обязательны.
     #   Если их нет, решение = NO_ACTION.

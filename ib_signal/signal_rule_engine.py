@@ -3,12 +3,16 @@ from datetime import time
 import json
 from typing import Any
 
-from ib_trader.trader_rules_config import TRADER_RULES, TRADER_RULE_SETTINGS
-from ib_trader.trade_models import MarketFeatureSnapshot, TraderSignalEvent
+from ib_signal.signal_rules_config import SIGNAL_RULES, SIGNAL_RULE_SETTINGS
+from ib_signal.signal_rule_models import (
+    SignalMarketFeatureSnapshot as MarketFeatureSnapshot,
+    SignalRuleEvaluation,
+    SignalRuleEvent as TraderSignalEvent,
+)
 
 
 @dataclass(frozen=True)
-class TraderRuleEvaluation:
+class SignalRuleEvaluation:
     """Итог простой оценки торговых правил."""
     allowed: bool
     reject_reasons: list[str]
@@ -85,8 +89,8 @@ def reject_result(
         signal_strength: str = "NEUTRAL",
         order_type: str | None = None,
         order_policy_reason: str | None = None,
-) -> TraderRuleEvaluation:
-    settings = TRADER_RULE_SETTINGS
+) -> SignalRuleEvaluation:
+    settings = SIGNAL_RULE_SETTINGS
 
     if not any(item.get("reason") == reason for item in records):
         records.append({
@@ -96,7 +100,7 @@ def reject_result(
             "details": {},
         })
 
-    return TraderRuleEvaluation(
+    return SignalRuleEvaluation(
         allowed=False,
         reject_reasons=[reason],
         signal_strength=signal_strength,
@@ -112,10 +116,10 @@ def get_allowed_zones_for_direction(direction: str) -> list[int]:
     direction = str(direction).upper()
 
     if direction == "LONG":
-        return [int(value) for value in TRADER_RULES["long_allowed_ma_zones"]]
+        return [int(value) for value in SIGNAL_RULES["long_allowed_ma_zones"]]
 
     if direction == "SHORT":
-        return [int(value) for value in TRADER_RULES["short_allowed_ma_zones"]]
+        return [int(value) for value in SIGNAL_RULES["short_allowed_ma_zones"]]
 
     raise ValueError(f"Unknown signal direction: {direction!r}")
 
@@ -127,25 +131,25 @@ def classify_signal_strength(*, direction: str, regime: int | None) -> str:
     direction = str(direction).upper()
     regime = int(regime)
 
-    if direction == "LONG" and regime in {int(value) for value in TRADER_RULES["strong_long_regimes"]}:
+    if direction == "LONG" and regime in {int(value) for value in SIGNAL_RULES["strong_long_regimes"]}:
         return "STRONG"
 
-    if direction == "SHORT" and regime in {int(value) for value in TRADER_RULES["strong_short_regimes"]}:
+    if direction == "SHORT" and regime in {int(value) for value in SIGNAL_RULES["strong_short_regimes"]}:
         return "STRONG"
 
-    if regime in {int(value) for value in TRADER_RULES["neutral_regimes"]}:
+    if regime in {int(value) for value in SIGNAL_RULES["neutral_regimes"]}:
         return "NEUTRAL"
 
     return "WEAK"
 
 
 def choose_order_policy(*, signal: TraderSignalEvent, ma_zone: int | None) -> tuple[str, str, float | None, int | None]:
-    settings = TRADER_RULE_SETTINGS
+    settings = SIGNAL_RULE_SETTINGS
 
     order_type = str(settings["default_order_type"]).upper()
     reasons: list[str] = []
 
-    limit_order_ma_zones = {int(value) for value in TRADER_RULES["limit_order_ma_zones"]}
+    limit_order_ma_zones = {int(value) for value in SIGNAL_RULES["limit_order_ma_zones"]}
 
     if ma_zone is not None and int(ma_zone) in limit_order_ma_zones:
         order_type = str(settings["limit_order_type"]).upper()
@@ -153,7 +157,7 @@ def choose_order_policy(*, signal: TraderSignalEvent, ma_zone: int | None) -> tu
 
     if is_signal_time_inside_any_window(
             signal.signal_time_ct,
-            list(TRADER_RULES["limit_order_time_windows_ct"]),
+            list(SIGNAL_RULES["limit_order_time_windows_ct"]),
     ):
         order_type = str(settings["limit_order_type"]).upper()
         reasons.append("time_window_limit")
@@ -169,13 +173,13 @@ def choose_order_policy(*, signal: TraderSignalEvent, ma_zone: int | None) -> tu
     return order_type, "default_market", None, None
 
 
-def evaluate_trader_rules(
+def evaluate_signal_rules(
         *,
         signal: TraderSignalEvent,
         market_features: MarketFeatureSnapshot,
-) -> TraderRuleEvaluation:
-    """Оценивает простые словарные правила из trader_rules_config.py."""
-    settings = TRADER_RULE_SETTINGS
+) -> SignalRuleEvaluation:
+    """Оценивает простые словарные правила из signal_rules_config.py."""
+    settings = SIGNAL_RULE_SETTINGS
     records: list[dict[str, Any]] = []
 
     direction = str(signal.direction).upper()
@@ -195,7 +199,7 @@ def evaluate_trader_rules(
             },
         })
 
-        return TraderRuleEvaluation(
+        return SignalRuleEvaluation(
             allowed=True,
             reject_reasons=[],
             signal_strength="NEUTRAL",
@@ -286,7 +290,7 @@ def evaluate_trader_rules(
             order_policy_reason=order_policy_reason,
         )
 
-    return TraderRuleEvaluation(
+    return SignalRuleEvaluation(
         allowed=True,
         reject_reasons=[],
         signal_strength=signal_strength,

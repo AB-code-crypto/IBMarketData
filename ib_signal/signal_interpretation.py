@@ -7,8 +7,8 @@ from ib_job_data.feature_db_sql import quote_identifier
 from ib_job_data.job_features_config import MA_ZONE_COLUMN_NAME, REGIME_COLUMN_NAME
 from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 from ib_job_data.sma_features import SMA_TABLE_NAME
-from ib_trader.rule_engine import evaluate_trader_rules
-from ib_trader.trade_models import MarketFeatureSnapshot, TraderSignalEvent
+from ib_signal.signal_rule_engine import evaluate_signal_rules
+from ib_signal.signal_rule_models import SignalMarketFeatureSnapshot, SignalRuleEvent
 
 
 @dataclass(frozen=True)
@@ -35,9 +35,9 @@ def read_market_features_for_signal_event(
         *,
         instrument_code: str,
         signal_bar_ts: int,
-) -> MarketFeatureSnapshot:
+) -> SignalMarketFeatureSnapshot:
     if instrument_code not in Instrument:
-        return MarketFeatureSnapshot(str(instrument_code), int(signal_bar_ts), None, None, None)
+        return SignalMarketFeatureSnapshot(str(instrument_code), int(signal_bar_ts), None, None, None)
 
     instrument_row = Instrument[instrument_code]
     feature_db_path = get_instrument_feature_db_path(
@@ -46,7 +46,7 @@ def read_market_features_for_signal_event(
     )
 
     if not feature_db_path.is_file():
-        return MarketFeatureSnapshot(str(instrument_code), int(signal_bar_ts), None, None, None)
+        return SignalMarketFeatureSnapshot(str(instrument_code), int(signal_bar_ts), None, None, None)
 
     conn = open_sqlite_connection(
         str(feature_db_path),
@@ -70,15 +70,15 @@ def read_market_features_for_signal_event(
         ).fetchone()
 
     except sqlite3.Error:
-        return MarketFeatureSnapshot(str(instrument_code), int(signal_bar_ts), None, None, None)
+        return SignalMarketFeatureSnapshot(str(instrument_code), int(signal_bar_ts), None, None, None)
 
     finally:
         conn.close()
 
     if row is None:
-        return MarketFeatureSnapshot(str(instrument_code), int(signal_bar_ts), None, None, None)
+        return SignalMarketFeatureSnapshot(str(instrument_code), int(signal_bar_ts), None, None, None)
 
-    return MarketFeatureSnapshot(
+    return SignalMarketFeatureSnapshot(
         instrument_code=str(instrument_code),
         signal_bar_ts=int(signal_bar_ts),
         feature_bar_ts=int(row[0]),
@@ -126,8 +126,8 @@ def build_trader_signal_event_for_interpretation(
         potential_max_profit_points: float,
         potential_max_drawdown_points: float,
         potential_used: int,
-) -> TraderSignalEvent:
-    return TraderSignalEvent(
+) -> SignalRuleEvent:
+    return SignalRuleEvent(
         source_signal_id=0,
         instrument_code=str(instrument_code),
         signal_bar_ts=int(signal_bar_ts),
@@ -163,7 +163,7 @@ def interpret_signal_event(
         instrument_code=instrument_code,
         signal_bar_ts=signal_bar_ts,
     )
-    trader_signal = build_trader_signal_event_for_interpretation(
+    signal_rule_event = build_trader_signal_event_for_interpretation(
         instrument_code=instrument_code,
         signal_bar_ts=signal_bar_ts,
         signal_time_ct=signal_time_ct,
@@ -177,8 +177,8 @@ def interpret_signal_event(
         potential_used=potential_used,
     )
 
-    rule_result = evaluate_trader_rules(
-        signal=trader_signal,
+    rule_result = evaluate_signal_rules(
+        signal=signal_rule_event,
         market_features=market_features,
     )
 

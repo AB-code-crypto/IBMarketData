@@ -15,7 +15,7 @@ from ib_job_data.sma_features import SMA_TABLE_NAME
 from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG, SignalWindowMode
 from ib_signal.signal_event_store import SIGNAL_EVENTS_TABLE_NAME, initialize_signal_events_table
 from ib_signal.signal_schedule import get_grid_slot_start_ts
-from ib_trader.rule_engine import TraderRuleEvaluation, evaluate_trader_rules
+from ib_signal.signal_rule_models import SignalRuleEvaluation as TraderRuleEvaluation
 from ib_trader.trade_models import (
     MarketFeatureSnapshot,
     PositionSide,
@@ -219,7 +219,24 @@ def read_latest_signal_events(*, max_signal_age_seconds: int) -> list[TraderSign
                 se.potential_end_delta_points,
                 se.potential_max_profit_points,
                 se.potential_max_drawdown_points,
-                se.potential_used
+                se.potential_used,
+
+                se.feature_bar_ts,
+                se.regime,
+                se.ma_zone,
+
+                se.signal_allowed,
+                se.signal_reject_reason,
+
+                se.signal_strength,
+
+                se.order_type,
+                se.order_policy_reason,
+                se.limit_offset_points,
+                se.limit_price,
+                se.ttl_seconds,
+
+                se.signal_rules_json
             FROM {SIGNAL_EVENTS_TABLE_NAME} AS se
             WHERE se.signal_bar_ts >= ?
               AND se.signal_id = (
@@ -254,6 +271,18 @@ def read_latest_signal_events(*, max_signal_age_seconds: int) -> list[TraderSign
                 potential_max_profit_points=float(row[11]),
                 potential_max_drawdown_points=float(row[12]),
                 potential_used=int(row[13]),
+                feature_bar_ts=None if row[14] is None else int(row[14]),
+                regime=None if row[15] is None else int(row[15]),
+                ma_zone=None if row[16] is None else int(row[16]),
+                signal_allowed=bool(int(row[17])),
+                signal_reject_reason=None if row[18] is None else str(row[18]),
+                signal_strength=str(row[19]),
+                order_type=str(row[20]).upper(),
+                order_policy_reason=str(row[21]),
+                limit_offset_points=None if row[22] is None else float(row[22]),
+                limit_price=None if row[23] is None else float(row[23]),
+                ttl_seconds=None if row[24] is None else int(row[24]),
+                signal_rules_json=str(row[25]),
             )
             for row in rows
         ]
@@ -311,6 +340,38 @@ def read_market_features_for_signal(signal: TraderSignalEvent) -> MarketFeatureS
         feature_bar_ts=int(row[0]),
         regime=None if row[1] is None else int(row[1]),
         ma_zone=None if row[2] is None else int(row[2]),
+    )
+
+
+
+def build_market_features_from_signal_event(signal: TraderSignalEvent) -> MarketFeatureSnapshot:
+    """Что делает: строит market-features из уже интерпретированного signal_events.
+    Зачем нужна: ib_trader больше не должен читать job DB и знать правила интерпретации сигнала."""
+    return MarketFeatureSnapshot(
+        instrument_code=signal.instrument_code,
+        signal_bar_ts=signal.signal_bar_ts,
+        feature_bar_ts=signal.feature_bar_ts,
+        regime=signal.regime,
+        ma_zone=signal.ma_zone,
+    )
+
+
+def build_rule_result_from_signal_event(signal: TraderSignalEvent) -> TraderRuleEvaluation:
+    """Что делает: превращает поля signal_events в rule-result для старой decision-логики.
+    Зачем нужна: ib_trader принимает stateful-решение, но не интерпретирует сигнал заново."""
+    reject_reasons = []
+    if not signal.signal_allowed:
+        reject_reasons.append(signal.signal_reject_reason or "signal_interpretation_rejected")
+
+    return TraderRuleEvaluation(
+        allowed=bool(signal.signal_allowed),
+        reject_reasons=reject_reasons,
+        signal_strength=signal.signal_strength,
+        order_type=signal.order_type,
+        order_policy_reason=signal.order_policy_reason,
+        limit_offset_points=signal.limit_offset_points,
+        ttl_seconds=signal.ttl_seconds,
+        rules_json=signal.signal_rules_json,
     )
 
 
@@ -1258,7 +1319,7 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> list[TradeDeci
             ):
                 continue
 
-            market_features = read_market_features_for_signal(signal)
+            market_features = build_market_features_from_signal_event(signal)
             position = read_position_snapshot(conn, instrument_code=signal.instrument_code)
 
             rule_result = build_trader_intent_guard_result_if_needed(
@@ -1268,10 +1329,7 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> list[TradeDeci
             )
 
             if rule_result is None:
-                rule_result = evaluate_trader_rules(
-                    signal=signal,
-                    market_features=market_features,
-                )
+                rule_result = build_rule_result_from_signal_event(signal)
 
             decision = decide_trade_action(
                 signal=signal,

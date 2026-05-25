@@ -39,6 +39,24 @@ class TraderSignalEvent:
     potential_max_drawdown_points: float
     potential_used: int
 
+    # Уже готовая market-интерпретация из signal_events.
+    feature_bar_ts: int | None = None
+    regime: int | None = None
+    ma_zone: int | None = None
+
+    signal_allowed: bool = True
+    signal_reject_reason: str | None = None
+
+    signal_strength: str = "NEUTRAL"
+
+    order_type: str = "MARKET"
+    order_policy_reason: str = "default_market"
+    limit_offset_points: float | None = None
+    limit_price: float | None = None
+    ttl_seconds: int | None = None
+
+    signal_rules_json: str = "[]"
+
 
 @dataclass(frozen=True)
 class MarketFeatureSnapshot:
