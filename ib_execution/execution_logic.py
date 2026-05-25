@@ -1,4 +1,5 @@
 import time
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 
 from ib_execution.execution_models import ExecutionResult, ExecutionStatus, TradeIntent
@@ -7,6 +8,9 @@ from core.time_utils import CT_TIMEZONE
 from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG
 from ib_execution.contract_resolver import build_execution_contract
 from ib_execution.order_service import OrderService
+
+
+OrderSubmittedCallback = Callable[[int, str, int], Awaitable[None]]
 
 
 LIMIT_DONE_TIMEOUT_EXTRA_SECONDS = 10
@@ -189,6 +193,7 @@ async def execute_market_intent(
         order_action: str,
         quantity: int,
         order_ref: str,
+        order_submitted_callback: OrderSubmittedCallback | None = None,
 ) -> ExecutionResult:
     if order_action == "BUY":
         placement = await order_service.buy_market(
@@ -285,6 +290,7 @@ async def execute_limit_intent(
         order_action: str,
         quantity: int,
         order_ref: str,
+        order_submitted_callback: OrderSubmittedCallback | None = None,
 ) -> ExecutionResult:
     """Что делает: ставит LIMIT и ждёт финал до ttl_seconds + запас.
     Зачем нужна: trade_intents не должны навечно зависать в ACCEPTED после отмены/expiry."""
@@ -314,6 +320,9 @@ async def execute_limit_intent(
 
     order_id = placement.receipt.order_id
     trade = placement.receipt.trade
+
+    if order_submitted_callback is not None:
+        await order_submitted_callback(order_id, order_action, quantity)
     done = await order_service.monitor.wait_for_done(
         trade,
         timeout=float((effective_ttl_seconds or DEFAULT_LIMIT_DONE_TIMEOUT_SECONDS) + LIMIT_DONE_TIMEOUT_EXTRA_SECONDS),
@@ -353,6 +362,7 @@ async def execute_trade_intent(
         *,
         order_service: OrderService,
         intent: TradeIntent,
+        order_submitted_callback: OrderSubmittedCallback | None = None,
 ) -> ExecutionResult:
     order_action, quantity = calculate_order_delta(intent)
     contract = build_execution_contract(instrument_code=intent.instrument_code)
@@ -367,6 +377,7 @@ async def execute_trade_intent(
             order_action=order_action,
             quantity=quantity,
             order_ref=order_ref,
+            order_submitted_callback=order_submitted_callback,
         )
 
     if order_type == "LIMIT":
@@ -377,6 +388,7 @@ async def execute_trade_intent(
             order_action=order_action,
             quantity=quantity,
             order_ref=order_ref,
+            order_submitted_callback=order_submitted_callback,
         )
 
     raise ValueError(f"Unknown order_type: {intent.order_type!r}")

@@ -10,6 +10,7 @@ from ib_execution.execution_models import ExecutionResult, ExecutionStatus
 from ib_execution.execution_store import (
     get_trade_db_connection,
     initialize_execution_db,
+    mark_trade_intent_order_submitted,
     mark_trade_intent_sending,
     read_new_trade_intents,
     write_trade_intent_execution_result,
@@ -261,9 +262,20 @@ async def run_execution_loop(
                 mark_trade_intent_sending(conn, trade_intent_id=intent.trade_intent_id)
                 conn.commit()
 
+                async def on_order_submitted(order_id: int, order_action: str, order_quantity: int) -> None:
+                    mark_trade_intent_order_submitted(
+                        conn,
+                        trade_intent_id=intent.trade_intent_id,
+                        order_id=order_id,
+                        order_action=order_action,
+                        order_quantity=order_quantity,
+                    )
+                    conn.commit()
+
                 result = await execute_trade_intent(
                     order_service=order_service,
                     intent=intent,
+                    order_submitted_callback=on_order_submitted,
                 )
 
                 write_trade_intent_execution_result(conn, result=result)
@@ -301,7 +313,7 @@ async def run_execution_loop(
                 try:
                     failure_result = ExecutionResult(
                         trade_intent_id=intent.trade_intent_id,
-                        order_id=None,
+                        order_id=getattr(exc, "order_id", None),
                         order_action=None,
                         order_quantity=None,
                         status=ExecutionStatus.FAILED,

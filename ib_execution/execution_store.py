@@ -225,6 +225,43 @@ def mark_trade_intent_sending(conn, *, trade_intent_id: int) -> None:
     )
 
 
+
+def mark_trade_intent_order_submitted(
+        conn,
+        *,
+        trade_intent_id: int,
+        order_id: int,
+        order_action: str,
+        order_quantity: int,
+) -> None:
+    """Что делает: сразу записывает IB order_id после placeOrder.
+    Зачем нужна: если execution упадёт во время ожидания fill/expiry, связь TWS order -> trade_intent не потеряется."""
+    now_ts = int(time.time())
+
+    conn.execute(
+        f"""
+        UPDATE {TRADE_INTENTS_TABLE_NAME}
+        SET
+            status = ?,
+            order_id = COALESCE(?, order_id),
+            order_action = COALESCE(?, order_action),
+            order_quantity = COALESCE(?, order_quantity),
+            sent_at_ts = COALESCE(sent_at_ts, ?),
+            updated_at_ts = ?
+        WHERE trade_intent_id = ?
+        """,
+        (
+            ExecutionStatus.SENDING.value,
+            int(order_id),
+            str(order_action),
+            int(order_quantity),
+            now_ts,
+            now_ts,
+            int(trade_intent_id),
+        ),
+    )
+
+
 def write_trade_intent_execution_result(
         conn,
         *,
