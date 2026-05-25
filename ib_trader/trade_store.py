@@ -17,6 +17,7 @@ from ib_trader.trade_models import (
     TradeDecision,
     TradeDecisionAction,
     TraderSignalEvent,
+    TraderRuleEvaluation,
 )
 
 TRADE_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "trade.sqlite3"
