@@ -158,6 +158,13 @@ def write_trade_intent_execution_result(
         result: ExecutionResult,
 ) -> None:
     now_ts = int(time.time())
+    terminal_statuses = {
+        ExecutionStatus.EXECUTED.value,
+        ExecutionStatus.FAILED.value,
+        ExecutionStatus.CANCELLED.value,
+        ExecutionStatus.EXPIRED.value,
+    }
+    finished_at_ts = now_ts if result.status.value in terminal_statuses else None
 
     conn.execute(
         f"""
@@ -186,7 +193,7 @@ def write_trade_intent_execution_result(
             result.total_commission,
             result.realized_pnl,
             result.error_text,
-            now_ts,
+            finished_at_ts,
             now_ts,
             int(result.trade_intent_id),
         ),

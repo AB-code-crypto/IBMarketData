@@ -7,6 +7,8 @@ class ExecutionStatus(Enum):
     SENDING = "SENDING"
     ACCEPTED = "ACCEPTED"
     EXECUTED = "EXECUTED"
+    CANCELLED = "CANCELLED"
+    EXPIRED = "EXPIRED"
     FAILED = "FAILED"
 
 
