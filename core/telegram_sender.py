@@ -1,4 +1,5 @@
 import re
+from pathlib import Path
 
 import aiohttp
 
@@ -134,6 +135,67 @@ class TelegramSender:
             # Не валим робота из-за проблем Telegram.
             # Повторных попыток не делаем.
             return False
+
+
+    async def _post_form(self, method, form):
+        """Что делает: отправляет multipart/form-data в Bot API.
+        Зачем нужна: отправка изображений требует multipart, а не JSON."""
+        if not await self._ensure_session():
+            return False
+
+        url = f"{self.base_url}/{method}"
+
+        try:
+            async with self.session.post(url, data=form) as response:
+                try:
+                    response_payload = await response.json(content_type=None)
+                except Exception:
+                    await response.read()
+                    return False
+
+                if response.status < 200 or response.status >= 300:
+                    return False
+
+                return bool(response_payload.get("ok"))
+
+        except Exception:
+            return False
+
+    async def send_photo(self, photo_path, caption="", chat_id=None, message_thread_id=None):
+        """Что делает: отправляет PNG/JPG в Telegram с caption.
+        Зачем нужна: торговый сигнал должен уходить в deal-thread вместе с картинкой."""
+        resolved_chat_id = self._resolve_chat_id(chat_id)
+        resolved_message_thread_id = self._resolve_message_thread_id(message_thread_id)
+
+        photo_path = Path(photo_path)
+
+        if not photo_path.is_file():
+            return False
+
+        caption_text = self._add_robot_hashtag(caption) if caption else self.robot_hashtag
+
+        if len(caption_text) > 1024:
+            caption_text = caption_text[:1021] + "..."
+
+        form = aiohttp.FormData()
+        form.add_field("chat_id", resolved_chat_id)
+        form.add_field("caption", caption_text)
+
+        if resolved_message_thread_id is not None:
+            form.add_field("message_thread_id", str(resolved_message_thread_id))
+
+        try:
+            with photo_path.open("rb") as photo_file:
+                form.add_field(
+                    "photo",
+                    photo_file,
+                    filename=photo_path.name,
+                    content_type="image/png",
+                )
+                return await self._post_form("sendPhoto", form)
+        except Exception:
+            return False
+
 
     async def send_text(self, text, chat_id=None, message_thread_id=None):
         """Что делает: отправляет текстовое сообщение, добавляет хештег и режет длинные тексты. Зачем нужна: это публичный метод отправки Telegram-уведомлений сервисов."""

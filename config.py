@@ -13,6 +13,7 @@ ENV_PATH = BASE_DIR / ".env"
 load_dotenv(ENV_PATH, encoding="utf-8-sig")
 
 telegram_thread_id_connect_env = os.getenv("TELEGRAM_THREAD_ID_CONNECT")
+telegram_thread_id_deal_env = os.getenv("TELEGRAM_THREAD_ID_DEAL")
 
 
 @dataclass
@@ -35,6 +36,12 @@ class Settings:
     telegram_message_thread_id_tech: Optional[int] = (
         int(telegram_thread_id_connect_env)
         if telegram_thread_id_connect_env
+        else None
+    )
+    # Тема для торговых сигналов и сделок.
+    telegram_message_thread_id_deal: Optional[int] = (
+        int(telegram_thread_id_deal_env)
+        if telegram_thread_id_deal_env
         else None
     )
 
