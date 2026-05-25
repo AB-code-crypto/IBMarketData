@@ -1,4 +1,5 @@
 import asyncio
+import time
 import traceback
 
 from core.logger import get_logger, log_info, log_warning, setup_logging
@@ -9,6 +10,7 @@ logger = get_logger(__name__)
 
 TRADER_LOOP_SLEEP_SECONDS = 1
 TRADER_MAX_SIGNAL_AGE_SECONDS = 10
+TRADER_HEARTBEAT_INTERVAL_SECONDS = 60
 
 
 async def run_trader_loop() -> None:
@@ -21,6 +23,8 @@ async def run_trader_loop() -> None:
         ),
         to_telegram=False,
     )
+
+    next_heartbeat_ts = int(time.time()) + TRADER_HEARTBEAT_INTERVAL_SECONDS
 
     while True:
         try:
@@ -56,5 +60,18 @@ async def run_trader_loop() -> None:
                 f"{traceback.format_exc()}",
                 to_telegram=True,
             )
+
+        now_ts = int(time.time())
+        if now_ts >= next_heartbeat_ts:
+            log_info(
+                logger,
+                (
+                    "ib_trader heartbeat: alive, "
+                    "source=signal_events, "
+                    f"max_signal_age_seconds={TRADER_MAX_SIGNAL_AGE_SECONDS}"
+                ),
+                to_telegram=False,
+            )
+            next_heartbeat_ts = now_ts + TRADER_HEARTBEAT_INTERVAL_SECONDS
 
         await asyncio.sleep(TRADER_LOOP_SLEEP_SECONDS)

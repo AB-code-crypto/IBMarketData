@@ -1,4 +1,5 @@
 import asyncio
+import time
 import traceback
 
 from core.logger import get_logger, log_info, log_warning, setup_logging
@@ -19,6 +20,7 @@ logger = get_logger(__name__)
 EXECUTION_LOOP_SLEEP_SECONDS = 1
 NEW_INTENTS_LIMIT = 20
 MAX_NEW_INTENT_AGE_SECONDS = 10
+EXECUTION_HEARTBEAT_INTERVAL_SECONDS = 60
 
 
 async def run_execution_loop(order_service: OrderService) -> None:
@@ -31,6 +33,8 @@ async def run_execution_loop(order_service: OrderService) -> None:
         ),
         to_telegram=False,
     )
+
+    next_heartbeat_ts = int(time.time()) + EXECUTION_HEARTBEAT_INTERVAL_SECONDS
 
     while True:
         intents = read_new_trade_intents(
@@ -93,5 +97,18 @@ async def run_execution_loop(order_service: OrderService) -> None:
 
             finally:
                 conn.close()
+
+        now_ts = int(time.time())
+        if now_ts >= next_heartbeat_ts:
+            log_info(
+                logger,
+                (
+                    "ib_execution heartbeat: alive, "
+                    f"new_intents_limit={NEW_INTENTS_LIMIT}, "
+                    f"max_new_intent_age_seconds={MAX_NEW_INTENT_AGE_SECONDS}"
+                ),
+                to_telegram=False,
+            )
+            next_heartbeat_ts = now_ts + EXECUTION_HEARTBEAT_INTERVAL_SECONDS
 
         await asyncio.sleep(EXECUTION_LOOP_SLEEP_SECONDS)

@@ -1,4 +1,5 @@
 import asyncio
+import time
 import traceback
 
 from core.logger import get_logger, log_info, log_warning, setup_logging
@@ -8,6 +9,7 @@ setup_logging()
 logger = get_logger(__name__)
 
 POSITION_SYNC_LOOP_SLEEP_SECONDS = 1
+POSITION_SYNC_HEARTBEAT_INTERVAL_SECONDS = 60
 
 
 def format_snapshot_for_log(snapshot) -> str:
@@ -29,6 +31,7 @@ async def run_position_sync_loop(ib) -> None:
     )
 
     last_seen: dict[str, tuple[str, float]] = {}
+    next_heartbeat_ts = int(time.time()) + POSITION_SYNC_HEARTBEAT_INTERVAL_SECONDS
 
     while True:
         try:
@@ -53,5 +56,18 @@ async def run_position_sync_loop(ib) -> None:
                 f"{traceback.format_exc()}",
                 to_telegram=True,
             )
+
+        now_ts = int(time.time())
+        if now_ts >= next_heartbeat_ts:
+            positions_text = ", ".join(
+                f"{instrument_code}={side}/{quantity:g}"
+                for instrument_code, (side, quantity) in sorted(last_seen.items())
+            ) or "none"
+            log_info(
+                logger,
+                f"ib_position_sync heartbeat: alive, positions={positions_text}",
+                to_telegram=False,
+            )
+            next_heartbeat_ts = now_ts + POSITION_SYNC_HEARTBEAT_INTERVAL_SECONDS
 
         await asyncio.sleep(POSITION_SYNC_LOOP_SLEEP_SECONDS)
