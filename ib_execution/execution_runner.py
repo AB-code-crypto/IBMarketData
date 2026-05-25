@@ -312,6 +312,13 @@ async def run_execution_loop(
                     )
                     write_trade_intent_execution_result(conn, result=failure_result)
                     conn.commit()
+
+                    await send_deal_status_notification(
+                        telegram_sender=deal_telegram_sender,
+                        message_thread_id=deal_status_message_thread_id,
+                        intent=intent,
+                        result=failure_result,
+                    )
                 finally:
                     log_warning(
                         logger,
