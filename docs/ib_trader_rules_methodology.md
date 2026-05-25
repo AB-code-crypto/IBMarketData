@@ -1,422 +1,100 @@
-# Методичка по правилам `ib_trader`
+# Правила `ib_trader`
 
-## 1. Короткая схема
+## Главная идея
 
-```text
-ib_signal
-    пишет signal_events
-
-ib_trader
-    читает signal_events
-    читает regime / ma_zone из job DB
-    читает positions_latest из trade DB
-    применяет правила
-    пишет trade_decisions
-    если нужно исполнение — пишет trade_intents
-
-ib_execution
-    читает trade_intents
-    исполняет MARKET / LIMIT
-```
-
-`ib_trader` — это слой принятия решения.  
-`ib_execution` — только исполнитель.
-
----
-
-## 2. Главный конфиг правил
+После появления сигнала `ib_trader` применяет простой набор словарных правил из:
 
 ```text
 ib_trader/trader_rules_config.py
 ```
 
-В нём есть две ключевые сущности:
-
-```python
-REQUIRE_MARKET_FEATURES = True / False
-
-ACTIVE_RULES = [...]
-```
-
----
-
-## 3. Что такое `REQUIRE_MARKET_FEATURES`
-
-`REQUIRE_MARKET_FEATURES` отвечает на вопрос:
+Больше нет:
 
 ```text
-можно ли trader принимать решение, если regime / ma_zone неизвестны?
-```
-
-### `REQUIRE_MARKET_FEATURES = False`
-
-```text
-regime и ma_zone не обязательны
-```
-
-Используется для режима `potential_only`.
-
-Пример:
-
-```python
-REQUIRE_MARKET_FEATURES = False
-ACTIVE_RULES: list[dict] = []
-```
-
-Поведение:
-
-```text
-ib_trader входит туда, куда говорит potential / signal.direction
-regime не проверяется
-ma_zone не проверяется
-order_type = MARKET
-rules_json = []
-```
-
-Позиционная логика всё равно остаётся:
-
-```text
-UNKNOWN -> NO_ACTION
-FLAT -> OPEN_POSITION
-same side -> NO_ACTION
-opposite side -> REVERSE_POSITION
-```
-
-### `REQUIRE_MARKET_FEATURES = True`
-
-```text
-regime и ma_zone обязательны
-```
-
-Если хотя бы одно значение не прочиталось из job DB:
-
-```text
-regime is None
-или
-ma_zone is None
-```
-
-то результат:
-
-```text
-decision_action = NO_ACTION
-decision_reason = market_features_unknown
-```
-
-Используется для пресетов и правил, которые завязаны на:
-
-```text
-regime
-ma_zone
-зоны ±3/±4
-силу сигнала относительно режима
-```
-
-Практическое правило:
-
-```text
-ACTIVE_RULES пустой, торгуем только по potential -> REQUIRE_MARKET_FEATURES = False
-
-есть правила по regime / ma_zone -> REQUIRE_MARKET_FEATURES = True
-```
-
----
-
-## 4. Структура правила в `ACTIVE_RULES`
-
-```python
-{
-    "id": "zone_direction_policy",
-    "enabled": True,
-    "priority": 20,
-    "params": {...},
-}
-```
-
-Поля:
-
-```text
-id        имя правила, должно быть в RULE_REGISTRY
-enabled   включено / выключено
-priority  порядок выполнения, меньше = раньше
-params    параметры правила
-```
-
----
-
-## 5. Пресеты правил
-
-Пресеты лежат тут:
-
-```text
-presets/trader_rules/
-```
-
-Применяются через:
-
-```text
+ib_trader/rules/
+presets/
 apply_trader_rules_preset.py
 ```
 
-Список пресетов:
+Вся торговая логика читается в одном файле.
 
-```powershell
-.venv\Scripts\python.exe apply_trader_rules_preset.py
-```
+## Что проверяется
 
-Применить пресет:
-
-```powershell
-.venv\Scripts\python.exe apply_trader_rules_preset.py potential_only
-```
-
----
-
-## 6. Preset: `potential_only`
-
-Файл:
-
-```text
-presets/trader_rules/potential_only.py
-```
-
-Назначение:
-
-```text
-входить только в направлении potential / signal.direction
-```
-
-Настройки:
+### 1. Направление по зоне
 
 ```python
-REQUIRE_MARKET_FEATURES = False
-ACTIVE_RULES: list[dict] = []
+"long_allowed_ma_zones": [-4, -3, -2, -1, 0, 1]
+"short_allowed_ma_zones": [-1, 0, 1, 2, 3, 4]
 ```
 
-Итог:
+LONG разрешён только в зонах из `long_allowed_ma_zones`.
 
-```text
-regime не нужен
-ma_zone не нужен
-order_type = MARKET
-```
+SHORT разрешён только в зонах из `short_allowed_ma_zones`.
 
----
-
-## 7. Preset: `far_limit_mean_reversion`
-
-Файл:
-
-```text
-presets/trader_rules/far_limit_mean_reversion.py
-```
-
-Назначение:
-
-```text
-работать только в дальних зонах ±3/±4
-только лимитными ордерами
-только на возврат к средней
-```
-
-Ключевые настройки:
+### 2. Тип ордера
 
 ```python
-REQUIRE_MARKET_FEATURES = True
+"limit_order_ma_zones": [-4, 4]
+"limit_order_time_windows_ct": [
+    ("07:00", "08:00"),
+    ("08:00", "09:00"),
+    ("09:00", "10:00"),
+]
 ```
 
-Разрешённые направления:
+LIMIT используется, если:
 
 ```text
-ma_zone +3/+4 -> SHORT
-ma_zone -3/-4 -> LONG
-остальные зоны -> запрет
+ma_zone in limit_order_ma_zones
+или
+signal_time_ct попадает во временное окно
 ```
 
-Лимитник:
+Иначе используется MARKET.
 
-```text
-offset = 10 пунктов
-ttl = 60 секунд
-```
-
----
-
-## 8. Preset: `session_limit_near_market`
-
-Файл:
-
-```text
-presets/trader_rules/session_limit_near_market.py
-```
-
-Назначение:
-
-```text
-07:00-10:00 CT -> LIMIT, offset 10
-остальное время -> MARKET
-разрешены зоны -1/0/+1
-режим определяет силу сигнала
-```
-
-Ключевые настройки:
+### 3. Сила сигнала
 
 ```python
-REQUIRE_MARKET_FEATURES = True
+"strong_long_regimes": [1]
+"strong_short_regimes": [-1]
+"neutral_regimes": [0]
 ```
 
-Разрешённые зоны:
+LONG при `regime=1` — STRONG.
 
-```text
--1, 0, +1
-```
+SHORT при `regime=-1` — STRONG.
 
-Сила сигнала:
+`regime=0` — NEUTRAL.
 
-```text
-direction совпадает с regime -> STRONG
-direction против regime -> WEAK
-regime = 0 -> NEUTRAL
-```
+Остальное — WEAK.
 
-Сейчас `WEAK` разрешён, но помечается в:
-
-```text
-trade_decisions.signal_strength
-```
-
----
-
-## 9. Как добавить новое правило
-
-### Шаг 1. Создать файл
-
-```text
-ib_trader/rules/my_rule.py
-```
-
-Пример:
+## Настройки
 
 ```python
-from typing import Any
-
-from ib_trader.rules.base import TraderRuleContext, TraderRuleState
-
-
-class MyRule:
-    rule_id = "my_rule"
-
-    @classmethod
-    def apply(
-            cls,
-            *,
-            context: TraderRuleContext,
-            state: TraderRuleState,
-            params: dict[str, Any],
-    ) -> None:
-        state.record(
-            rule_id=cls.rule_id,
-            result="ALLOW",
-            details={},
-        )
-```
-
-### Шаг 2. Зарегистрировать
-
-```text
-ib_trader/rules/registry.py
-```
-
-```python
-from ib_trader.rules.my_rule import MyRule
-
-RULE_REGISTRY = {
-    ...
-    MyRule.rule_id: MyRule,
+TRADER_RULE_SETTINGS = {
+    "require_market_features": True,
+    "weak_signal_policy": "ALLOW",
+    "default_order_type": "MARKET",
+    "limit_order_type": "LIMIT",
+    "limit_offset_points": 10.0,
+    "limit_ttl_seconds": 60,
 }
 ```
 
-### Шаг 3. Включить в конфиг
+### `require_market_features`
 
-```python
-{
-    "id": "my_rule",
-    "enabled": True,
-    "priority": 25,
-    "params": {},
-}
-```
+Если `True`, то без `regime` или `ma_zone` сделка запрещается.
 
----
+Если `False`, то market-фильтры не применяются, вход идёт только по `signal.direction`, order_type = default.
 
-## 10. Что правило может делать
-
-Запретить сделку:
-
-```python
-state.reject(
-    rule_id=cls.rule_id,
-    reason="some_reason",
-    details={...},
-)
-```
-
-Записать диагностику:
-
-```python
-state.record(
-    rule_id=cls.rule_id,
-    result="ALLOW",
-    details={...},
-)
-```
-
-Изменить тип ордера:
-
-```python
-state.order_type = "LIMIT"
-state.order_policy_reason = "my_reason"
-state.limit_offset_points = 10.0
-state.ttl_seconds = 60
-```
-
-Изменить силу сигнала:
-
-```python
-state.signal_strength = "STRONG"
-```
-
----
-
-## 11. Чего правило делать не должно
-
-Правило не должно:
+### `weak_signal_policy`
 
 ```text
-читать SQLite
-писать SQLite
-отправлять ордера
-создавать trade_intent
-лезть в IB
+ALLOW  — слабый сигнал разрешён, но пишется signal_strength=WEAK
+REJECT — слабый сигнал запрещён
 ```
 
-Правило работает только с:
-
-```text
-context.signal
-context.market_features
-context.position
-```
-
----
-
-## 12. Где смотреть результат
-
-```text
-trade.sqlite3 -> trade_decisions
-```
-
-Полезный запрос:
+## Где смотреть результат
 
 ```sql
 SELECT
@@ -436,43 +114,4 @@ SELECT
 FROM trade_decisions
 ORDER BY decision_id DESC
 LIMIT 20;
-```
-
-Созданные приказы:
-
-```sql
-SELECT
-    trade_intent_id,
-    decision_id,
-    instrument_code,
-    action,
-    target_side,
-    target_qty,
-    order_type,
-    limit_price,
-    status
-FROM trade_intents
-ORDER BY trade_intent_id DESC
-LIMIT 20;
-```
-
----
-
-## 13. Типовые причины отказа
-
-```text
-market_features_unknown
-    REQUIRE_MARKET_FEATURES=True, но regime или ma_zone не прочитались
-
-position_unknown
-    нет подтверждённой позиции в positions_latest
-
-ma_zone_direction_forbidden
-    направление сигнала запрещено в текущей зоне
-
-weak_signal_rejected
-    сигнал против режима и weak_signal_policy="REJECT"
-
-unknown_rule_id
-    правило указано в ACTIVE_RULES, но не зарегистрировано в RULE_REGISTRY
 ```

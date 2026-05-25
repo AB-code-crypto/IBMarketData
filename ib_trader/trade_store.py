@@ -11,7 +11,6 @@ from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 from ib_job_data.sma_features import SMA_TABLE_NAME
 from ib_signal.signal_event_store import SIGNAL_EVENTS_TABLE_NAME, initialize_signal_events_table
 from ib_trader.rule_engine import TraderRuleEvaluation, evaluate_trader_rules
-from ib_trader.rules.base import TraderRuleContext
 from ib_trader.trade_models import (
     MarketFeatureSnapshot,
     PositionSide,
@@ -667,12 +666,10 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> list[TradeDeci
 
             market_features = read_market_features_for_signal(signal)
             position = read_position_snapshot(conn, instrument_code=signal.instrument_code)
-            rule_context = TraderRuleContext(
+            rule_result = evaluate_trader_rules(
                 signal=signal,
                 market_features=market_features,
-                position=position,
             )
-            rule_result = evaluate_trader_rules(rule_context)
             decision = decide_trade_action(
                 signal=signal,
                 position=position,
