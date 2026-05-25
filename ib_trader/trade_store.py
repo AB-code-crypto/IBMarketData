@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import time
 from pathlib import Path
@@ -368,6 +369,196 @@ def read_position_snapshot(conn, *, instrument_code: str) -> PositionSnapshot:
     return PositionSnapshot(str(instrument_code), side, quantity)
 
 
+
+TRADER_MAX_NEW_INTENT_AGE_SECONDS = 10
+STALE_NEW_INTENT_ERROR_TEXT = "stale trade_intent before trader decision"
+
+
+def expire_stale_new_trade_intents(
+        conn,
+        *,
+        max_age_seconds: int = TRADER_MAX_NEW_INTENT_AGE_SECONDS,
+        now_ts: int | None = None,
+) -> int:
+    """Что делает: переводит старые NEW trade_intents в FAILED.
+    Зачем нужна: если execution не был запущен, trader не должен копить старые NEW intents."""
+    max_age_seconds = int(max_age_seconds)
+
+    if max_age_seconds <= 0:
+        return 0
+
+    now_ts = int(time.time() if now_ts is None else now_ts)
+    min_created_at_ts = now_ts - max_age_seconds
+
+    changes_before = conn.total_changes
+
+    conn.execute(
+        f"""
+        UPDATE {TRADE_INTENTS_TABLE_NAME}
+        SET
+            status = 'FAILED',
+            error_text = ?,
+            updated_at_ts = ?,
+            finished_at_ts = ?
+        WHERE status = 'NEW'
+          AND created_at_ts < ?
+        """,
+        (
+            f"{STALE_NEW_INTENT_ERROR_TEXT}; max_age_seconds={max_age_seconds}",
+            now_ts,
+            now_ts,
+            min_created_at_ts,
+        ),
+    )
+
+    return int(conn.total_changes - changes_before)
+
+
+def read_position_updated_at_ts(conn, *, instrument_code: str) -> int | None:
+    row = conn.execute(
+        f"""
+        SELECT updated_at_ts
+        FROM {POSITIONS_LATEST_TABLE_NAME}
+        WHERE instrument_code = ?
+        """,
+        (str(instrument_code),),
+    ).fetchone()
+
+    if row is None or row[0] is None:
+        return None
+
+    return int(row[0])
+
+
+def read_latest_non_failed_trade_intent(conn, *, instrument_code: str) -> dict | None:
+    """Что делает: читает последний не-FAILED intent по инструменту.
+    Зачем нужна: trader не должен создавать новый приказ, пока предыдущий активен или позиция не синхронизирована."""
+    row = conn.execute(
+        f"""
+        SELECT
+            trade_intent_id,
+            action,
+            target_side,
+            target_qty,
+            status,
+            created_at_ts,
+            updated_at_ts,
+            sent_at_ts,
+            finished_at_ts
+        FROM {TRADE_INTENTS_TABLE_NAME}
+        WHERE instrument_code = ?
+          AND status != 'FAILED'
+        ORDER BY
+            COALESCE(finished_at_ts, updated_at_ts, sent_at_ts, created_at_ts) DESC,
+            trade_intent_id DESC
+        LIMIT 1
+        """,
+        (str(instrument_code),),
+    ).fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "trade_intent_id": int(row[0]),
+        "action": str(row[1]),
+        "target_side": str(row[2]),
+        "target_qty": float(row[3]),
+        "status": str(row[4]),
+        "created_at_ts": int(row[5]),
+        "updated_at_ts": int(row[6]),
+        "sent_at_ts": None if row[7] is None else int(row[7]),
+        "finished_at_ts": None if row[8] is None else int(row[8]),
+        "event_ts": int(row[8] or row[6] or row[7] or row[5]),
+    }
+
+
+def build_trader_guard_reject_result(
+        *,
+        reason: str,
+        details: dict,
+) -> TraderRuleEvaluation:
+    return TraderRuleEvaluation(
+        allowed=False,
+        reject_reasons=[reason],
+        signal_strength="NEUTRAL",
+        order_type="MARKET",
+        order_policy_reason="trader_intent_guard",
+        limit_offset_points=None,
+        ttl_seconds=None,
+        rules_json=json.dumps(
+            [
+                {
+                    "rule": "trader_intent_guard",
+                    "result": "REJECT",
+                    "reason": reason,
+                    "details": details,
+                }
+            ],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    )
+
+
+def build_trader_intent_guard_result_if_needed(
+        conn,
+        *,
+        signal: TraderSignalEvent,
+        position: PositionSnapshot,
+) -> TraderRuleEvaluation | None:
+    """Что делает: запрещает новый intent, если предыдущий ещё активен или позиция после execution не синхронизирована.
+    Зачем нужна: нельзя открывать второй ордер по новому сигналу, пока старый приказ не обработан корректно."""
+    latest_intent = read_latest_non_failed_trade_intent(
+        conn,
+        instrument_code=signal.instrument_code,
+    )
+
+    if latest_intent is None:
+        return None
+
+    active_statuses = {"NEW", "SENDING", "ACCEPTED"}
+
+    if latest_intent["status"] in active_statuses:
+        return build_trader_guard_reject_result(
+            reason="active_trade_intent_exists",
+            details={
+                "source_signal_id": signal.source_signal_id,
+                "latest_trade_intent_id": latest_intent["trade_intent_id"],
+                "latest_status": latest_intent["status"],
+                "latest_action": latest_intent["action"],
+                "latest_target_side": latest_intent["target_side"],
+                "position_side": position.side.value,
+                "position_qty": position.quantity,
+            },
+        )
+
+    if latest_intent["status"] == "EXECUTED":
+        position_updated_at_ts = read_position_updated_at_ts(
+            conn,
+            instrument_code=signal.instrument_code,
+        )
+
+        if position_updated_at_ts is None or position_updated_at_ts <= latest_intent["event_ts"]:
+            return build_trader_guard_reject_result(
+                reason="position_sync_stale_after_trade_intent",
+                details={
+                    "source_signal_id": signal.source_signal_id,
+                    "latest_trade_intent_id": latest_intent["trade_intent_id"],
+                    "latest_status": latest_intent["status"],
+                    "latest_action": latest_intent["action"],
+                    "latest_target_side": latest_intent["target_side"],
+                    "latest_event_ts": latest_intent["event_ts"],
+                    "position_side": position.side.value,
+                    "position_qty": position.quantity,
+                    "position_updated_at_ts": position_updated_at_ts,
+                },
+            )
+
+    return None
+
+
 def calculate_limit_price(
         *,
         signal_direction: str,
@@ -653,6 +844,11 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> list[TradeDeci
     try:
         initialize_trade_db(conn)
 
+        expire_stale_new_trade_intents(
+            conn,
+            max_age_seconds=TRADER_MAX_NEW_INTENT_AGE_SECONDS,
+        )
+
         decisions: list[TradeDecision] = []
 
         for signal in signals:
@@ -666,10 +862,19 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> list[TradeDeci
 
             market_features = read_market_features_for_signal(signal)
             position = read_position_snapshot(conn, instrument_code=signal.instrument_code)
-            rule_result = evaluate_trader_rules(
+
+            rule_result = build_trader_intent_guard_result_if_needed(
+                conn,
                 signal=signal,
-                market_features=market_features,
+                position=position,
             )
+
+            if rule_result is None:
+                rule_result = evaluate_trader_rules(
+                    signal=signal,
+                    market_features=market_features,
+                )
+
             decision = decide_trade_action(
                 signal=signal,
                 position=position,
