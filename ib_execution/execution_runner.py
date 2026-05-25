@@ -158,11 +158,82 @@ async def send_executed_deal_notification(
     )
 
 
+
+def build_execution_status_caption(*, intent, result, signal_event: dict | None) -> str:
+    """Что делает: собирает техническое сообщение о неисполненном/завершённом без fill ордере.
+    Зачем нужна: deal-status thread должен сразу показывать EXPIRED/CANCELLED/FAILED."""
+    signal_time_ct = signal_event.get("signal_time_ct") if signal_event else "n/a"
+    signal_direction = signal_event.get("direction") if signal_event else "n/a"
+    entry_price = signal_event.get("entry_price") if signal_event else None
+    potential_end = signal_event.get("potential_end_delta_points") if signal_event else None
+
+    entry_text = f"{float(entry_price):.2f}" if entry_price is not None else "n/a"
+    potential_text = f"{float(potential_end):+.2f} pt" if potential_end is not None else "n/a"
+
+    return (
+        "⚠️ Ордер завершён без открытия сделки\n"
+        f"status: {result.status.value}\n"
+        f"instrument: {intent.instrument_code}\n"
+        f"trade_intent_id: {intent.trade_intent_id}\n"
+        f"source_signal_id: {intent.source_signal_id}\n"
+        f"signal_time_ct: {signal_time_ct}\n"
+        f"signal_direction: {signal_direction}\n"
+        f"entry_price: {entry_text}\n"
+        f"potential_end: {potential_text}\n"
+        f"action: {intent.action}\n"
+        f"target: {intent.target_side}/{intent.target_qty:g}\n"
+        f"order_type: {intent.order_type}\n"
+        f"limit_price: {intent.limit_price}\n"
+        f"ttl_seconds: {intent.ttl_seconds}\n"
+        f"order_id: {result.order_id}\n"
+        f"order_action: {result.order_action}\n"
+        f"order_qty: {result.order_quantity}\n"
+        f"error_text: {result.error_text}"
+    )
+
+
+async def send_deal_status_notification(
+        *,
+        telegram_sender,
+        message_thread_id,
+        intent,
+        result,
+) -> None:
+    """Что делает: отправляет технический статус неисполненного ордера в deal-status thread.
+    Зачем нужна: EXPIRED/CANCELLED/FAILED не должны теряться в консоли."""
+    if telegram_sender is None:
+        return
+
+    terminal_problem_statuses = {
+        ExecutionStatus.EXPIRED,
+        ExecutionStatus.CANCELLED,
+        ExecutionStatus.FAILED,
+    }
+
+    if result.status not in terminal_problem_statuses:
+        return
+
+    signal_event = read_signal_event_snapshot(
+        source_signal_id=intent.source_signal_id,
+    )
+    caption = build_execution_status_caption(
+        intent=intent,
+        result=result,
+        signal_event=signal_event,
+    )
+
+    await telegram_sender.send_text(
+        caption,
+        message_thread_id=message_thread_id,
+    )
+
+
 async def run_execution_loop(
         order_service: OrderService,
         *,
         deal_telegram_sender=None,
         deal_message_thread_id=None,
+        deal_status_message_thread_id=None,
 ) -> None:
     log_info(
         logger,
@@ -213,6 +284,13 @@ async def run_execution_loop(
                 await send_executed_deal_notification(
                     telegram_sender=deal_telegram_sender,
                     message_thread_id=deal_message_thread_id,
+                    intent=intent,
+                    result=result,
+                )
+
+                await send_deal_status_notification(
+                    telegram_sender=deal_telegram_sender,
+                    message_thread_id=deal_status_message_thread_id,
                     intent=intent,
                     result=result,
                 )

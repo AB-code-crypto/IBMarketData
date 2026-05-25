@@ -87,6 +87,7 @@ async def main() -> None:
                 order_service,
                 deal_telegram_sender=telegram_sender,
                 deal_message_thread_id=app_settings.telegram_message_thread_id_deal,
+                deal_status_message_thread_id=app_settings.telegram_message_thread_id_deal_status,
             )
         finally:
             monitor_task.cancel()
