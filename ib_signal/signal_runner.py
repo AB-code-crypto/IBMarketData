@@ -118,64 +118,6 @@ def format_regression_relation_summary(label: str, relation) -> str:
 
 
 
-async def send_deal_signal_notification(
-        *,
-        telegram_sender,
-        message_thread_id,
-        signal_id: int,
-        signal_event,
-        saved_plot_path,
-) -> None:
-    """Что делает: отправляет Telegram-уведомление о новом actionable signal_event.
-    Зачем нужна: в deal-thread должна уходить картинка сигнала и параметры предполагаемой сделки."""
-    if telegram_sender is None:
-        return
-
-    score_text = (
-        f"{signal_event.candidate_score_best:.4f}"
-        if signal_event.candidate_score_best is not None
-        else "n/a"
-    )
-
-    caption = (
-        "🚨 Сигнал на открытие сделки\n"
-        f"instrument: {signal_event.instrument_code}\n"
-        f"signal_id: {signal_id}\n"
-        f"time CT: {signal_event.signal_time_ct}\n"
-        f"direction: {signal_event.direction}\n"
-        f"entry: {signal_event.entry_price:.2f}\n"
-        f"potential_end: {signal_event.potential_end_delta_points:+.2f} pt\n"
-        f"potential_max_profit: {signal_event.potential_max_profit_points:+.2f} pt\n"
-        f"potential_max_drawdown: {signal_event.potential_max_drawdown_points:+.2f} pt\n"
-        f"potential_used: {signal_event.potential_used}\n"
-        f"best_pearson: {signal_event.best_pearson:.4f}\n"
-        f"candidate_score_best: {score_text}\n"
-        f"signal_window: {signal_event.signal_window_mode}\n"
-        f"regime_filter: {signal_event.market_regime_filter_mode}"
-    )
-
-    ok = False
-
-    if saved_plot_path is not None:
-        ok = await telegram_sender.send_photo(
-            saved_plot_path,
-            caption=caption,
-            message_thread_id=message_thread_id,
-        )
-
-    if ok:
-        return
-
-    fallback_text = caption
-    if saved_plot_path is not None:
-        fallback_text += f"\nPNG: {saved_plot_path}"
-
-    await telegram_sender.send_text(
-        fallback_text,
-        message_thread_id=message_thread_id,
-    )
-
-
 async def wait_for_fresh_job_bars(
         instrument_codes: list[str],
         settings: SignalConfig,
@@ -225,9 +167,6 @@ async def wait_for_fresh_job_bars(
 async def run_signal_loop(
         instrument_codes: list[str],
         settings: SignalConfig,
-        *,
-        deal_telegram_sender=None,
-        deal_message_thread_id=None,
 ) -> None:
     """Что делает: отслеживает новые job-бары и определяет due signal_bar_ts по активному режиму.
     Зачем нужна: это основной runtime-цикл signal-сервиса, пока без фактического расчёта сигнала."""
@@ -508,18 +447,6 @@ async def run_signal_loop(
                         potential_max_profit_points=candidate_potential_result.max_profit_points,
                         potential_max_drawdown_points=candidate_potential_result.max_drawdown_points,
                         potential_used=candidate_potential_result.used_candidates_count,
-                        feature_bar_ts=signal_interpretation.feature_bar_ts,
-                        regime=signal_interpretation.regime,
-                        ma_zone=signal_interpretation.ma_zone,
-                        signal_allowed=signal_interpretation.signal_allowed,
-                        signal_reject_reason=signal_interpretation.signal_reject_reason,
-                        signal_strength=signal_interpretation.signal_strength,
-                        order_type=signal_interpretation.order_type,
-                        order_policy_reason=signal_interpretation.order_policy_reason,
-                        limit_offset_points=signal_interpretation.limit_offset_points,
-                        limit_price=signal_interpretation.limit_price,
-                        ttl_seconds=signal_interpretation.ttl_seconds,
-                        signal_rules_json=signal_interpretation.signal_rules_json,
                     )
                     signal_event = build_signal_event(
                         instrument_code=instrument_code,
@@ -534,6 +461,18 @@ async def run_signal_loop(
                         potential_max_profit_points=candidate_potential_result.max_profit_points,
                         potential_max_drawdown_points=candidate_potential_result.max_drawdown_points,
                         potential_used=candidate_potential_result.used_candidates_count,
+                        feature_bar_ts=signal_interpretation.feature_bar_ts,
+                        regime=signal_interpretation.regime,
+                        ma_zone=signal_interpretation.ma_zone,
+                        signal_allowed=signal_interpretation.signal_allowed,
+                        signal_reject_reason=signal_interpretation.signal_reject_reason,
+                        signal_strength=signal_interpretation.signal_strength,
+                        order_type=signal_interpretation.order_type,
+                        order_policy_reason=signal_interpretation.order_policy_reason,
+                        limit_offset_points=signal_interpretation.limit_offset_points,
+                        limit_price=signal_interpretation.limit_price,
+                        ttl_seconds=signal_interpretation.ttl_seconds,
+                        signal_rules_json=signal_interpretation.signal_rules_json,
                     )
                     signal_id = write_signal_event(signal_event)
                     log_info(
