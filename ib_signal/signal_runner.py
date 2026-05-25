@@ -168,8 +168,8 @@ async def run_signal_loop(
         instrument_codes: list[str],
         settings: SignalConfig,
 ) -> None:
-    """Что делает: отслеживает новые job-бары и определяет due signal_bar_ts по активному режиму.
-    Зачем нужна: это основной runtime-цикл signal-сервиса, пока без фактического расчёта сигнала."""
+    """Что делает: отслеживает новые job-бары, считает raw-сигнал и пишет interpreted signal_event.
+    Зачем нужна: это основной runtime-цикл signal-сервиса."""
 
     # last_seen_ts_by_instrument - память для логирования появления нового job-бара.
     last_seen_ts_by_instrument: dict[str, int | None] = {
@@ -427,9 +427,6 @@ async def run_signal_loop(
                     else None
                 )
 
-                signal_event = None
-                signal_id = None
-
                 if (
                         candidate_potential_result.is_available
                         and candidate_potential_result.direction in ("LONG", "SHORT")
@@ -441,12 +438,6 @@ async def run_signal_loop(
                         signal_time_ct=candidate_search_result.current_signal_bar_time_ct,
                         direction=candidate_potential_result.direction,
                         entry_price=float(pattern_matrix_result.current_values[-1]),
-                        best_pearson=signal_event_best_pearson,
-                        candidate_score_best=signal_event_candidate_score_best,
-                        potential_end_delta_points=candidate_potential_result.end_delta_points,
-                        potential_max_profit_points=candidate_potential_result.max_profit_points,
-                        potential_max_drawdown_points=candidate_potential_result.max_drawdown_points,
-                        potential_used=candidate_potential_result.used_candidates_count,
                     )
                     signal_event = build_signal_event(
                         instrument_code=instrument_code,

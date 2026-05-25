@@ -270,12 +270,6 @@ def interpret_signal_event(
         signal_time_ct: str | None,
         direction: str,
         entry_price: float,
-        best_pearson: float,
-        candidate_score_best: float | None,
-        potential_end_delta_points: float,
-        potential_max_profit_points: float,
-        potential_max_drawdown_points: float,
-        potential_used: int,
 ) -> SignalInterpretation:
     """Интерпретирует raw-сигнал через ma_zone/regime/time и SIGNAL_RULES."""
     market = read_market_snapshot(
