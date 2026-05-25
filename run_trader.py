@@ -53,10 +53,7 @@ async def main() -> None:
             "===========\n"
         )
 
-        await run_trader_loop(
-            deal_telegram_sender=telegram_sender,
-            deal_message_thread_id=app_settings.telegram_message_thread_id_deal,
-        )
+        await run_trader_loop()
 
     except KeyboardInterrupt:
         shutdown_message = "===========\nСтоп ib_trader сервиса: остановлен пользователем\n==========="

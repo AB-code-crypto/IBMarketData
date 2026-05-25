@@ -118,7 +118,7 @@ TRADER_RULE_SETTINGS = {
     "limit_offset_points": 10.0,
 
     # Сколько секунд держим лимитник живым.
-    "limit_ttl_seconds": 60,
+    "limit_ttl_seconds": 600,
 }
 
 

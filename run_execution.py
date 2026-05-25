@@ -83,7 +83,11 @@ async def main() -> None:
         order_service = OrderService(ib)
 
         try:
-            await run_execution_loop(order_service)
+            await run_execution_loop(
+                order_service,
+                deal_telegram_sender=telegram_sender,
+                deal_message_thread_id=app_settings.telegram_message_thread_id_deal,
+            )
         finally:
             monitor_task.cancel()
             heartbeat_task.cancel()

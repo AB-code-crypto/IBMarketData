@@ -118,11 +118,6 @@ async def run_trader_loop(
                     to_telegram=False,
                 )
 
-                await send_deal_decision_notification(
-                    telegram_sender=deal_telegram_sender,
-                    message_thread_id=deal_message_thread_id,
-                    decision=decision,
-                )
 
         except Exception as exc:
             log_warning(

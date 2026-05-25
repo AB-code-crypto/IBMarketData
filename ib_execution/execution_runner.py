@@ -1,8 +1,10 @@
 import asyncio
+import sqlite3
 import time
 import traceback
 
 from core.logger import get_logger, log_info, log_warning, setup_logging
+from core.state_db import STATE_DB_PATH
 from ib_execution.execution_logic import execute_trade_intent
 from ib_execution.execution_models import ExecutionResult, ExecutionStatus
 from ib_execution.execution_store import (
@@ -13,6 +15,8 @@ from ib_execution.execution_store import (
     write_trade_intent_execution_result,
 )
 from ib_execution.order_service import OrderService
+from ib_signal.signal_event_store import SIGNAL_EVENTS_TABLE_NAME
+from ib_signal.signal_plot import build_plot_path
 
 setup_logging()
 logger = get_logger(__name__)
@@ -23,7 +27,143 @@ MAX_NEW_INTENT_AGE_SECONDS = 10
 EXECUTION_HEARTBEAT_INTERVAL_SECONDS = 60
 
 
-async def run_execution_loop(order_service: OrderService) -> None:
+
+def read_signal_event_snapshot(*, source_signal_id: int) -> dict | None:
+    """Что делает: читает signal_event для execution-уведомления.
+    Зачем нужна: сделка исполняется по trade_intent, но картинка и signal_time лежат в signal_events."""
+    try:
+        conn = sqlite3.connect(str(STATE_DB_PATH))
+        conn.row_factory = sqlite3.Row
+
+        try:
+            row = conn.execute(
+                f"""
+                SELECT
+                    signal_id,
+                    instrument_code,
+                    signal_bar_ts,
+                    signal_time_ct,
+                    direction,
+                    entry_price,
+                    potential_end_delta_points,
+                    potential_max_profit_points,
+                    potential_max_drawdown_points,
+                    potential_used,
+                    best_pearson,
+                    candidate_score_best
+                FROM {SIGNAL_EVENTS_TABLE_NAME}
+                WHERE signal_id = ?
+                LIMIT 1
+                """,
+                (int(source_signal_id),),
+            ).fetchone()
+
+            if row is None:
+                return None
+
+            return dict(row)
+
+        finally:
+            conn.close()
+
+    except Exception:
+        return None
+
+
+def build_executed_deal_caption(*, intent, result, signal_event: dict | None) -> str:
+    signal_time_ct = signal_event.get("signal_time_ct") if signal_event else "n/a"
+    signal_direction = signal_event.get("direction") if signal_event else "n/a"
+    entry_price = signal_event.get("entry_price") if signal_event else None
+    potential_end = signal_event.get("potential_end_delta_points") if signal_event else None
+
+    entry_text = f"{float(entry_price):.2f}" if entry_price is not None else "n/a"
+    potential_text = f"{float(potential_end):+.2f} pt" if potential_end is not None else "n/a"
+
+    avg_fill_text = (
+        f"{float(result.avg_fill_price):.2f}"
+        if result.avg_fill_price is not None
+        else "n/a"
+    )
+
+    return (
+        "✅ Сделка исполнена\n"
+        f"instrument: {intent.instrument_code}\n"
+        f"trade_intent_id: {intent.trade_intent_id}\n"
+        f"source_signal_id: {intent.source_signal_id}\n"
+        f"signal_time_ct: {signal_time_ct}\n"
+        f"signal_direction: {signal_direction}\n"
+        f"entry_price: {entry_text}\n"
+        f"potential_end: {potential_text}\n"
+        f"action: {intent.action}\n"
+        f"target: {intent.target_side}/{intent.target_qty:g}\n"
+        f"order_type: {intent.order_type}\n"
+        f"order_id: {result.order_id}\n"
+        f"order_action: {result.order_action}\n"
+        f"order_qty: {result.order_quantity}\n"
+        f"avg_fill: {avg_fill_text}\n"
+        f"commission: {result.total_commission}\n"
+        f"realized_pnl: {result.realized_pnl}"
+    )
+
+
+async def send_executed_deal_notification(
+        *,
+        telegram_sender,
+        message_thread_id,
+        intent,
+        result,
+) -> None:
+    """Что делает: отправляет deal-уведомление только после EXECUTED.
+    Зачем нужна: сигнал/лимитный ACCEPTED не являются совершённой сделкой."""
+    if telegram_sender is None:
+        return
+
+    if result.status != ExecutionStatus.EXECUTED:
+        return
+
+    signal_event = read_signal_event_snapshot(
+        source_signal_id=intent.source_signal_id,
+    )
+    caption = build_executed_deal_caption(
+        intent=intent,
+        result=result,
+        signal_event=signal_event,
+    )
+
+    plot_path = None
+    if signal_event is not None:
+        plot_path = build_plot_path(
+            instrument_code=str(signal_event["instrument_code"]),
+            signal_bar_time_ct=str(signal_event["signal_time_ct"]),
+        )
+
+    ok = False
+
+    if plot_path is not None and plot_path.is_file():
+        ok = await telegram_sender.send_photo(
+            plot_path,
+            caption=caption,
+            message_thread_id=message_thread_id,
+        )
+
+    if ok:
+        return
+
+    if plot_path is not None and not plot_path.is_file():
+        caption += f"\nPNG not found: {plot_path}"
+
+    await telegram_sender.send_text(
+        caption,
+        message_thread_id=message_thread_id,
+    )
+
+
+async def run_execution_loop(
+        order_service: OrderService,
+        *,
+        deal_telegram_sender=None,
+        deal_message_thread_id=None,
+) -> None:
     log_info(
         logger,
         (
@@ -68,6 +208,13 @@ async def run_execution_loop(order_service: OrderService) -> None:
                         f"realized_pnl={result.realized_pnl}, commission={result.total_commission}"
                     ),
                     to_telegram=False,
+                )
+
+                await send_executed_deal_notification(
+                    telegram_sender=deal_telegram_sender,
+                    message_thread_id=deal_message_thread_id,
+                    intent=intent,
+                    result=result,
                 )
 
             except Exception as exc:
