@@ -146,6 +146,7 @@ def read_new_trade_intents(*, limit: int = 20, max_age_seconds: int = 10) -> lis
                 trade_intent_id,
                 source_signal_id,
                 instrument_code,
+                order_ref,
 
                 action,
                 target_side,
@@ -170,25 +171,39 @@ def read_new_trade_intents(*, limit: int = 20, max_age_seconds: int = 10) -> lis
             (min_created_at_ts, int(limit)),
         ).fetchall()
 
-        return [
-            TradeIntent(
-                trade_intent_id=int(row[0]),
-                source_signal_id=int(row[1]),
-                instrument_code=str(row[2]),
-                action=str(row[3]),
-                target_side=str(row[4]),
-                target_qty=float(row[5]),
-                position_before_side=str(row[6]),
-                position_before_qty=float(row[7]),
-                order_type=str(row[8]).upper(),
-                limit_price=None if row[9] is None else float(row[9]),
-                limit_offset_points=None if row[10] is None else float(row[10]),
-                ttl_seconds=None if row[11] is None else int(row[11]),
-                status=str(row[12]),
-                created_at_ts=int(row[13]),
+        result: list[TradeIntent] = []
+
+        for row in rows:
+            order_ref = "" if row[3] is None else str(row[3]).strip()
+
+            if not order_ref:
+                raise RuntimeError(
+                    f"TradeIntent without order_ref: "
+                    f"trade_intent_id={int(row[0])}, "
+                    f"instrument_code={str(row[2])}"
+                )
+
+            result.append(
+                TradeIntent(
+                    trade_intent_id=int(row[0]),
+                    source_signal_id=int(row[1]),
+                    instrument_code=str(row[2]),
+                    order_ref=order_ref,
+                    action=str(row[4]),
+                    target_side=str(row[5]),
+                    target_qty=float(row[6]),
+                    position_before_side=str(row[7]),
+                    position_before_qty=float(row[8]),
+                    order_type=str(row[9]).upper(),
+                    limit_price=None if row[10] is None else float(row[10]),
+                    limit_offset_points=None if row[11] is None else float(row[11]),
+                    ttl_seconds=None if row[12] is None else int(row[12]),
+                    status=str(row[13]),
+                    created_at_ts=int(row[14]),
+                )
             )
-            for row in rows
-        ]
+
+        return result
 
     finally:
         conn.close()

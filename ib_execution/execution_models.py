@@ -17,6 +17,7 @@ class TradeIntent:
     trade_intent_id: int
     source_signal_id: int
     instrument_code: str
+    order_ref: str
 
     action: str
     target_side: str

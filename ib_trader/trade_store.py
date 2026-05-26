@@ -23,6 +23,7 @@ TRADE_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "trade.sqlite3
 
 POSITIONS_LATEST_TABLE_NAME = "positions_latest"
 TRADE_INTENTS_TABLE_NAME = "trade_intents"
+ORDER_REF_PREFIX = "IBMD_INTENT"
 
 GRID_CLOSE_SOURCE_SIGNAL_ID = -1
 GRID_CLOSE_INTENT_SOURCE = "GRID_CLOSE"
@@ -114,6 +115,7 @@ def create_trade_intents_table_sql() -> str:
 
         status TEXT NOT NULL,
 
+        order_ref TEXT,
         order_id INTEGER,
         order_action TEXT,
         order_quantity INTEGER,
@@ -483,6 +485,11 @@ def has_trade_intent_for_signal(
     return row is not None
 
 
+
+def build_trade_order_ref(*, trade_intent_id: int, instrument_code: str) -> str:
+    return f"{ORDER_REF_PREFIX}_{int(trade_intent_id)}_{str(instrument_code)}"
+
+
 def write_trade_intent(conn, draft: TradeIntentDraft) -> int:
     initialize_trade_db(conn)
 
@@ -565,7 +572,25 @@ def write_trade_intent(conn, draft: TradeIntentDraft) -> int:
     if row is None or row[0] is None:
         raise RuntimeError("TradeIntent был записан, но trade_intent_id не найден")
 
-    return int(row[0])
+    trade_intent_id = int(row[0])
+    order_ref = build_trade_order_ref(
+        trade_intent_id=trade_intent_id,
+        instrument_code=draft.instrument_code,
+    )
+
+    conn.execute(
+        f"""
+        UPDATE {TRADE_INTENTS_TABLE_NAME}
+        SET order_ref = ?
+        WHERE trade_intent_id = ?
+        """,
+        (
+            order_ref,
+            trade_intent_id,
+        ),
+    )
+
+    return trade_intent_id
 
 
 def build_created_event(*, trade_intent_id: int, draft: TradeIntentDraft) -> TradeIntentCreated:

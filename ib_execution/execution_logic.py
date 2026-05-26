@@ -366,7 +366,11 @@ async def execute_trade_intent(
 ) -> ExecutionResult:
     order_action, quantity = calculate_order_delta(intent)
     contract = build_execution_contract(instrument_code=intent.instrument_code)
-    order_ref = f"IBMD_INTENT_{intent.trade_intent_id}_{intent.instrument_code}"
+
+    if not intent.order_ref:
+        raise ValueError(f"TradeIntent without order_ref: id={intent.trade_intent_id}")
+
+    order_ref = intent.order_ref
     order_type = str(intent.order_type).upper()
 
     if order_type == "MARKET":
