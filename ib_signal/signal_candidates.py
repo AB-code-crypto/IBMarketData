@@ -134,7 +134,7 @@ def build_candidate_window(
     )
 
 
-def is_same_grid_offset(
+def is_same_slot_offset(
     *,
     candidate_signal_bar_ts: int,
     current_window: SignalWindow,
@@ -297,7 +297,7 @@ def find_candidate_windows(
     candidates: list[CandidateWindow] = []
 
     for signal_bar_ts, signal_bar_time_ct, hour_slot_ct in candidate_rows:
-        if not is_same_grid_offset(
+        if not is_same_slot_offset(
             candidate_signal_bar_ts=signal_bar_ts,
             current_window=current_window,
             settings=settings,

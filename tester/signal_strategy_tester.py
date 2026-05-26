@@ -278,8 +278,8 @@ class RunCounters:
     entries: int = 0
     reversals: int = 0
     same_side_ignored: int = 0
-    grid_entry_window_skips: int = 0
-    grid_window_closes: int = 0
+    slot_entry_window_skips: int = 0
+    slot_window_closes: int = 0
     interval_forced_closes: int = 0
 
 
@@ -302,7 +302,7 @@ class BacktestState:
 @dataclass(frozen=True)
 class RunPlan:
     due_signal_bar_timestamps: list[int]
-    grid_entry_window_skips: int
+    slot_entry_window_skips: int
     max_due_limit_reached: bool
 
 
@@ -684,7 +684,7 @@ def load_job_data_cache(
 # ============================================================
 
 
-def is_same_grid_offset_cached(
+def is_same_slot_offset_cached(
         *,
         candidate_signal_bar_ts: int,
         current_window: SignalWindow,
@@ -762,7 +762,7 @@ def find_candidate_windows_cached(
 
         for signal_bar_ts_raw, hour_raw in zip(candidate_signal_ts[allowed_mask], candidate_hours[allowed_mask]):
             signal_bar_ts = int(signal_bar_ts_raw)
-            if not is_same_grid_offset_cached(
+            if not is_same_slot_offset_cached(
                     candidate_signal_bar_ts=signal_bar_ts,
                     current_window=current_window,
                     settings=settings,
@@ -1490,7 +1490,7 @@ def calculate_pattern_signals_all_filters(
 # ============================================================
 
 
-def is_grid_signal_bar_inside_entry_window(*, signal_bar_ts: int, settings: SignalConfig) -> bool:
+def is_slot_signal_bar_inside_entry_window(*, signal_bar_ts: int, settings: SignalConfig) -> bool:
     if settings.signal_window_mode != SignalWindowMode.SLOT:
         return True
 
@@ -1520,7 +1520,7 @@ def build_run_plan(
         settings: SignalConfig,
 ) -> RunPlan:
     due_signal_bar_timestamps: list[int] = []
-    grid_entry_window_skips = 0
+    slot_entry_window_skips = 0
     max_due_limit_reached = False
     last_calculated_bar_ts: int | None = None
 
@@ -1540,11 +1540,11 @@ def build_run_plan(
         if due_signal_bar_ts < start_ts or due_signal_bar_ts > end_ts:
             continue
 
-        if signal_window_mode == SignalWindowMode.SLOT and not is_grid_signal_bar_inside_entry_window(
+        if signal_window_mode == SignalWindowMode.SLOT and not is_slot_signal_bar_inside_entry_window(
                 signal_bar_ts=due_signal_bar_ts,
                 settings=settings,
         ):
-            grid_entry_window_skips += 1
+            slot_entry_window_skips += 1
             continue
 
         if (
@@ -1558,7 +1558,7 @@ def build_run_plan(
 
     return RunPlan(
         due_signal_bar_timestamps=due_signal_bar_timestamps,
-        grid_entry_window_skips=grid_entry_window_skips,
+        slot_entry_window_skips=slot_entry_window_skips,
         max_due_limit_reached=max_due_limit_reached,
     )
 
@@ -1692,7 +1692,7 @@ def process_signal_action(
     return f"REVERSE_{previous_direction}_TO_{signal.direction}"
 
 
-def maybe_close_grid_position(*, state: BacktestState, current_bar_ts: int, cache: JobDataCache) -> None:
+def maybe_close_slot_position(*, state: BacktestState, current_bar_ts: int, cache: JobDataCache) -> None:
     if state.signal_window_mode != SignalWindowMode.SLOT:
         return
 
@@ -1711,8 +1711,8 @@ def maybe_close_grid_position(*, state: BacktestState, current_bar_ts: int, cach
         state.counters.no_price += 1
         return
 
-    close_position(state=state, exit_price_point=exit_price_point, exit_reason="grid_window_end")
-    state.counters.grid_window_closes += 1
+    close_position(state=state, exit_price_point=exit_price_point, exit_reason="slot_window_end")
+    state.counters.slot_window_closes += 1
 
 
 def append_signal_row(*, state: BacktestState, signal: PatternSignalResult, action: str) -> None:
@@ -1826,8 +1826,8 @@ def build_summary_row(*, state: BacktestState, start_ts: int, end_ts: int, setti
         "entries": state.counters.entries,
         "reversals": state.counters.reversals,
         "same_side_ignored": state.counters.same_side_ignored,
-        "grid_entry_window_skips": state.counters.grid_entry_window_skips,
-        "grid_window_closes": state.counters.grid_window_closes,
+        "slot_entry_window_skips": state.counters.slot_entry_window_skips,
+        "slot_window_closes": state.counters.slot_window_closes,
         "interval_forced_closes": state.counters.interval_forced_closes,
         "trades": total_trades,
         "wins": len(wins),
@@ -2171,7 +2171,7 @@ def run_backtest_interval_group(
             signal_rows=[],
             counters=RunCounters(closed_bars_seen=len(closed_bar_timestamps)),
         )
-        states[mode].counters.grid_entry_window_skips = plan.grid_entry_window_skips
+        states[mode].counters.slot_entry_window_skips = plan.slot_entry_window_skips
 
     progress_print(
         "PLAN "
@@ -2180,7 +2180,7 @@ def run_backtest_interval_group(
         f"filters={','.join(mode.value for mode in filter_modes)} "
         f"closed_bars={len(closed_bar_timestamps)} "
         f"due_to_calculate={len(plan.due_signal_bar_timestamps)} "
-        f"grid_entry_window_skips={plan.grid_entry_window_skips} "
+        f"slot_entry_window_skips={plan.slot_entry_window_skips} "
         f"max_due={MAX_DUE_SIGNALS_PER_WINDOW_MODE if MAX_DUE_SIGNALS_PER_WINDOW_MODE is not None else 'none'} "
         f"limit_reached={plan.max_due_limit_reached}"
     )
@@ -2191,7 +2191,7 @@ def run_backtest_interval_group(
 
     for current_bar_ts in closed_bar_timestamps:
         for state in states.values():
-            maybe_close_grid_position(state=state, current_bar_ts=current_bar_ts, cache=cache)
+            maybe_close_slot_position(state=state, current_bar_ts=current_bar_ts, cache=cache)
 
         if current_bar_ts not in due_set:
             continue
@@ -2260,8 +2260,8 @@ def run_backtest_interval_group(
                 fallback_closed_ts=end_ts,
             )
             if exit_price_point is not None:
-                close_position(state=state, exit_price_point=exit_price_point, exit_reason="grid_window_end")
-                state.counters.grid_window_closes += 1
+                close_position(state=state, exit_price_point=exit_price_point, exit_reason="slot_window_end")
+                state.counters.slot_window_closes += 1
             else:
                 state.counters.no_price += 1
 
