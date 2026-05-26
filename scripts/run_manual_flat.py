@@ -71,12 +71,56 @@ def format_execution_result(intent: TradeIntent, result: ExecutionResult) -> str
     )
 
 
+def format_optional_price(value) -> str:
+    if value is None:
+        return "n/a"
+
+    return f"{float(value):.2f}"
+
+
+def format_optional_money(value) -> str:
+    if value is None:
+        return "n/a"
+
+    return f"{float(value):+.2f} USD"
+
+
+def build_manual_flat_deal_message(intent: TradeIntent, result: ExecutionResult) -> str:
+    before_text = f"{intent.position_before_side}/{float(intent.position_before_qty):g}"
+    target_text = f"{intent.target_side}/{float(intent.target_qty):g}"
+
+    return (
+        "✅ MANUAL FLAT: позиция закрыта\n"
+        f"instrument: {intent.instrument_code}\n"
+        f"trade_intent_id: {intent.trade_intent_id}\n"
+        f"order_ref: {intent.order_ref}\n"
+        f"close: {before_text} -> {target_text}\n"
+        f"order: {result.order_action} {result.order_quantity}\n"
+        f"avg_fill: {format_optional_price(result.avg_fill_price)}\n"
+        f"realized_pnl: {format_optional_money(result.realized_pnl)}\n"
+        f"commission: {format_optional_price(result.total_commission)}\n"
+        f"status: {result.status.value}"
+    )
+
+
 async def send_message(telegram_sender: TelegramSender, text: str, *, to_deal_status: bool = True) -> None:
     print(text)
 
     message_thread_id = None
     if to_deal_status:
         message_thread_id = getattr(app_settings, "telegram_message_thread_id_deal_status", None)
+
+    try:
+        await telegram_sender.send_text(text, message_thread_id=message_thread_id)
+    except Exception:
+        # Telegram не должен ломать emergency close.
+        pass
+
+
+async def send_deal_message(telegram_sender: TelegramSender, text: str) -> None:
+    print(text)
+
+    message_thread_id = getattr(app_settings, "telegram_message_thread_id_deal", None)
 
     try:
         await telegram_sender.send_text(text, message_thread_id=message_thread_id)
@@ -304,6 +348,12 @@ async def main() -> None:
                 telegram_sender,
                 f"{icon} MANUAL_FLAT result\n{format_execution_result(intent, result)}",
             )
+
+            if result.status == ExecutionStatus.EXECUTED:
+                await send_deal_message(
+                    telegram_sender,
+                    build_manual_flat_deal_message(intent, result),
+                )
 
         snapshots = await sync_broker_positions_once(ib)
 
