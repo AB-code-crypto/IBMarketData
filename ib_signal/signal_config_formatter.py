@@ -28,10 +28,10 @@ def format_signal_config(settings: SignalConfig) -> str:
             ]
         )
 
-    elif settings.signal_window_mode == SignalWindowMode.GRID:
+    elif settings.signal_window_mode == SignalWindowMode.SLOT:
         lines.extend(
             [
-                "GRID:",
+                "SLOT:",
                 f"slot_signal_step_seconds={settings.slot_signal_step_seconds}",
                 f"slot_step_minutes={settings.slot_step_minutes}",
                 f"slot_start_minute_of_day={settings.slot_start_minute_of_day}",

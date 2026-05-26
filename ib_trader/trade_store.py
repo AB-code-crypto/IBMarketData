@@ -10,7 +10,7 @@ from core.state_db import STATE_DB_PATH, initialize_state_db
 from core.time_utils import CT_TIMEZONE, MSK_TIMEZONE, SQLITE_DATETIME_FORMAT
 from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG, SignalWindowMode
 from ib_signal.signal_event_store import SIGNAL_EVENTS_TABLE_NAME, initialize_signal_events_table
-from ib_signal.signal_schedule import get_grid_slot_start_ts
+from ib_signal.signal_schedule import get_slot_start_ts
 from ib_trader.trade_models import (
     PositionSide,
     PositionSnapshot,
@@ -25,9 +25,9 @@ POSITIONS_LATEST_TABLE_NAME = "positions_latest"
 TRADE_INTENTS_TABLE_NAME = "trade_intents"
 ORDER_REF_PREFIX = "IBMD_INTENT"
 
-GRID_CLOSE_SOURCE_SIGNAL_ID = -1
-GRID_CLOSE_INTENT_SOURCE = "GRID_CLOSE"
-GRID_CLOSE_REASON = "grid_close_before_slot_end"
+SLOT_CLOSE_SOURCE_SIGNAL_ID = -1
+SLOT_CLOSE_INTENT_SOURCE = "SLOT_CLOSE"
+SLOT_CLOSE_REASON = "slot_close_before_slot_end"
 
 FUTURES_DAILY_FLAT_SOURCE_SIGNAL_ID = -2
 FUTURES_DAILY_FLAT_INTENT_SOURCE = "FUTURES_DAILY_FLAT"
@@ -683,10 +683,10 @@ def build_signal_trade_intent_draft(
     )
 
 
-def get_grid_close_context(*, now_ts: int) -> dict | None:
+def get_slot_close_context(*, now_ts: int) -> dict | None:
     settings = DEFAULT_SIGNAL_CONFIG
 
-    if settings.signal_window_mode != SignalWindowMode.GRID:
+    if settings.signal_window_mode != SignalWindowMode.SLOT:
         return None
 
     slot_step_seconds = int(settings.slot_step_minutes) * 60
@@ -698,7 +698,7 @@ def get_grid_close_context(*, now_ts: int) -> dict | None:
     if close_before_seconds < 0 or close_before_seconds >= slot_step_seconds:
         return None
 
-    slot_start_ts = get_grid_slot_start_ts(
+    slot_start_ts = get_slot_start_ts(
         current_bar_ts=int(now_ts),
         slot_step_minutes=int(settings.slot_step_minutes),
         slot_start_minute_of_day=int(settings.slot_start_minute_of_day),
@@ -717,7 +717,7 @@ def get_grid_close_context(*, now_ts: int) -> dict | None:
     return None
 
 
-def build_grid_close_trade_intent_draft(
+def build_slot_close_trade_intent_draft(
         *,
         position: PositionSnapshot,
         close_context: dict,
@@ -726,19 +726,19 @@ def build_grid_close_trade_intent_draft(
     _, signal_time_ct, _ = build_time_text_fields_from_ts(now_ts)
 
     return TradeIntentDraft(
-        source_signal_id=GRID_CLOSE_SOURCE_SIGNAL_ID,
+        source_signal_id=SLOT_CLOSE_SOURCE_SIGNAL_ID,
         instrument_code=position.instrument_code,
         signal_bar_ts=int(now_ts),
         signal_time_ct=signal_time_ct,
-        intent_source=GRID_CLOSE_INTENT_SOURCE,
+        intent_source=SLOT_CLOSE_INTENT_SOURCE,
         action=TradeDecisionAction.CLOSE_POSITION,
-        reason=GRID_CLOSE_REASON,
+        reason=SLOT_CLOSE_REASON,
         signal_direction="CLOSE",
         entry_price=0.0,
         potential_end_delta_points=0.0,
         regime=None,
         ma_zone=None,
-        signal_strength="GRID_CLOSE",
+        signal_strength="SLOT_CLOSE",
         order_type="MARKET",
         limit_price=None,
         limit_offset_points=None,
@@ -828,9 +828,9 @@ def build_futures_daily_flat_trade_intent_draft(
     )
 
 
-def process_grid_close_once(conn, *, now_ts: int | None = None) -> list[TradeIntentCreated]:
+def process_slot_close_once(conn, *, now_ts: int | None = None) -> list[TradeIntentCreated]:
     now_ts = int(time.time() if now_ts is None else now_ts)
-    close_context = get_grid_close_context(now_ts=now_ts)
+    close_context = get_slot_close_context(now_ts=now_ts)
 
     if close_context is None:
         return []
@@ -844,7 +844,7 @@ def process_grid_close_once(conn, *, now_ts: int | None = None) -> list[TradeInt
         ):
             continue
 
-        draft = build_grid_close_trade_intent_draft(
+        draft = build_slot_close_trade_intent_draft(
             position=position,
             close_context=close_context,
             now_ts=now_ts,
@@ -898,7 +898,7 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> list[TradeInte
 
         created: list[TradeIntentCreated] = []
         created.extend(process_futures_daily_flat_once(conn))
-        created.extend(process_grid_close_once(conn))
+        created.extend(process_slot_close_once(conn))
 
         for signal in signals:
             if has_trade_intent_for_signal(

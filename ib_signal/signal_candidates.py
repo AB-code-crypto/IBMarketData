@@ -10,7 +10,7 @@ from ib_job_data.feature_db_sql import MID_PRICE_TABLE_NAME, quote_identifier
 from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 from ib_signal.signal_config import SignalConfig, SignalWindowMode
 from ib_signal.signal_errors import SignalDataNotReadyError
-from ib_signal.signal_schedule import get_grid_slot_start_ts
+from ib_signal.signal_schedule import get_slot_start_ts
 from ib_signal.signal_time import resolve_allowed_hour_slots
 from ib_signal.signal_window import SignalWindow
 
@@ -140,15 +140,15 @@ def is_same_grid_offset(
     current_window: SignalWindow,
     settings: SignalConfig,
 ) -> bool:
-    """Что делает: проверяет, что GRID-кандидат имеет тот же offset внутри своего слота.
-    Зачем нужна: GRID-сигнал с offset 45 минут нельзя сравнивать с историческим offset 30 минут."""
-    if settings.signal_window_mode != SignalWindowMode.GRID:
+    """Что делает: проверяет, что SLOT-кандидат имеет тот же offset внутри своего слота.
+    Зачем нужна: SLOT-сигнал с offset 45 минут нельзя сравнивать с историческим offset 30 минут."""
+    if settings.signal_window_mode != SignalWindowMode.SLOT:
         return True
 
     if current_window.slot_offset_seconds is None:
-        raise ValueError("Для GRID-режима current_window.slot_offset_seconds не должен быть None")
+        raise ValueError("Для SLOT-режима current_window.slot_offset_seconds не должен быть None")
 
-    candidate_slot_start_ts = get_grid_slot_start_ts(
+    candidate_slot_start_ts = get_slot_start_ts(
         current_bar_ts=candidate_signal_bar_ts,
         slot_step_minutes=settings.slot_step_minutes,
         slot_start_minute_of_day=settings.slot_start_minute_of_day,

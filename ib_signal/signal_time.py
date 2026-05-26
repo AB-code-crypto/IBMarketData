@@ -4,7 +4,7 @@
 Для current и candidate используем час bar_time_ct у signal_bar.
 Длина candidate pattern всегда равна длине current pattern.
 Для ROLLING candidate window строится назад на rolling_back_minutes.
-Для GRID candidate должен иметь тот же offset внутри slot, что и current signal_bar.
+Для SLOT candidate должен иметь тот же offset внутри slot, что и current signal_bar.
 candidate future/trade window должен полностью завершиться до текущего signal_bar_ts.
 '''
 

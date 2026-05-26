@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from core.time_utils import build_bar_time_fields_from_utc_dt
 from ib_signal.signal_config import SignalConfig, SignalWindowMode
-from ib_signal.signal_schedule import get_grid_slot_start_ts
+from ib_signal.signal_schedule import get_slot_start_ts
 
 SECONDS_PER_MINUTE = 60
 
@@ -34,7 +34,7 @@ class SignalWindow:
     trade_end_ts: int
     trade_seconds: int
 
-    # GRID-служебные поля. Для ROLLING они остаются None.
+    # SLOT-служебные поля. Для ROLLING они остаются None.
     slot_start_ts: int | None = None
     slot_offset_seconds: int | None = None
 
@@ -89,14 +89,14 @@ def build_rolling_signal_window(
     return window
 
 
-def build_grid_signal_window(
+def build_slot_signal_window(
     *,
     signal_bar_ts: int,
     settings: SignalConfig,
 ) -> SignalWindow:
-    """Что делает: строит GRID-окно анализа от старта слота до signal_bar_ts и future/trade-окно до конца слота.
-    Зачем нужна: GRID-кандидаты должны иметь такой же offset внутри своего исторического слота."""
-    slot_start_ts = get_grid_slot_start_ts(
+    """Что делает: строит SLOT-окно анализа от старта слота до signal_bar_ts и future/trade-окно до конца слота.
+    Зачем нужна: SLOT-кандидаты должны иметь такой же offset внутри своего исторического слота."""
+    slot_start_ts = get_slot_start_ts(
         current_bar_ts=signal_bar_ts,
         slot_step_minutes=settings.slot_step_minutes,
         slot_start_minute_of_day=settings.slot_start_minute_of_day,
@@ -131,7 +131,7 @@ def build_current_signal_window(
     signal_bar_ts: int,
     settings: SignalConfig,
 ) -> SignalWindow:
-    """Что делает: выбирает построение окна по активному режиму ROLLING или GRID.
+    """Что делает: выбирает построение окна по активному режиму ROLLING или SLOT.
     Зачем нужна: signal-runner и будущий candidate search получают один объект с границами расчёта."""
     if settings.signal_window_mode == SignalWindowMode.ROLLING:
         return build_rolling_signal_window(
@@ -139,8 +139,8 @@ def build_current_signal_window(
             settings=settings,
         )
 
-    if settings.signal_window_mode == SignalWindowMode.GRID:
-        return build_grid_signal_window(
+    if settings.signal_window_mode == SignalWindowMode.SLOT:
+        return build_slot_signal_window(
             signal_bar_ts=signal_bar_ts,
             settings=settings,
         )

@@ -20,7 +20,7 @@ ROLLING:
 - отсутствие сигнала не закрывает позицию;
 - в конце интервала позиция закрывается принудительно, если FORCE_CLOSE_AT_INTERVAL_END=True.
 
-GRID:
+SLOT:
 - signal calculation выполняется только внутри entry/reverse окна слота;
 - позиция закрывается на trade_end_ts слота, даже если вне entry/reverse окна расчеты пропускаются;
 - вне entry/reverse окна время идет дальше только для закрытия позиции и статистики.
@@ -84,7 +84,7 @@ from ib_signal.signal_errors import SignalDataNotReadyError
 from ib_signal.signal_regression import build_linear_regression, classify_regression_direction
 from ib_signal.signal_regression_relation import build_regression_relation
 from ib_signal.signal_regression_threshold import get_regression_flat_delta_threshold_bps
-from ib_signal.signal_schedule import get_due_signal_bar_ts, get_grid_slot_start_ts
+from ib_signal.signal_schedule import get_due_signal_bar_ts, get_slot_start_ts
 from ib_signal.signal_time import resolve_allowed_hour_slots
 from ib_signal.signal_window import SignalWindow, build_current_signal_window
 
@@ -114,7 +114,7 @@ BASE_SETTINGS: SignalConfig = DEFAULT_SIGNAL_CONFIG
 # Примеры:
 # TESTER_CONFIG = {"SignalWindowMode": ["ROLLING"]}
 # TESTER_CONFIG = {
-#     "SignalWindowMode": ["ROLLING", "GRID"],
+#     "SignalWindowMode": ["ROLLING", "SLOT"],
 #     "MarketRegimeFilterMode": ["OFF", "SOFT", "HARD"],
 #     "pearson_min": [0.65, 0.70, 0.75],
 # }
@@ -130,10 +130,10 @@ MAX_DUE_SIGNALS_PER_WINDOW_MODE: int | None = None
 # иначе нельзя получить конечный realized PnL по тестовому отрезку.
 FORCE_CLOSE_AT_INTERVAL_END = True
 
-# Если True, GRID считает сигналы только в entry/reverse окне:
+# Если True, SLOT считает сигналы только в entry/reverse окне:
 # slot_start + slot_back_minutes .. + slot_entry_minutes.
 # Позиция при этом держится до штатного trade_end_ts слота.
-GRID_USE_SLOT_ENTRY_WINDOW = True
+SLOT_USE_SLOT_ENTRY_WINDOW = True
 
 # Большие интервалы могут создать крупный signals.csv. Для ускорения можно поставить False.
 WRITE_SIGNALS_CSV = True
@@ -503,7 +503,7 @@ def get_active_pattern_seconds(settings: SignalConfig) -> int:
     if settings.signal_window_mode == SignalWindowMode.ROLLING:
         return int(settings.rolling_back_minutes) * 60
 
-    if settings.signal_window_mode == SignalWindowMode.GRID:
+    if settings.signal_window_mode == SignalWindowMode.SLOT:
         return int(settings.slot_step_minutes) * 60
 
     rolling_pattern = int(settings.rolling_back_minutes) * 60
@@ -690,13 +690,13 @@ def is_same_grid_offset_cached(
         current_window: SignalWindow,
         settings: SignalConfig,
 ) -> bool:
-    if settings.signal_window_mode != SignalWindowMode.GRID:
+    if settings.signal_window_mode != SignalWindowMode.SLOT:
         return True
 
     if current_window.slot_offset_seconds is None:
-        raise ValueError("Для GRID-режима current_window.slot_offset_seconds не должен быть None")
+        raise ValueError("Для SLOT-режима current_window.slot_offset_seconds не должен быть None")
 
-    candidate_slot_start_ts = get_grid_slot_start_ts(
+    candidate_slot_start_ts = get_slot_start_ts(
         current_bar_ts=candidate_signal_bar_ts,
         slot_step_minutes=settings.slot_step_minutes,
         slot_start_minute_of_day=settings.slot_start_minute_of_day,
@@ -1486,18 +1486,18 @@ def calculate_pattern_signals_all_filters(
 
 
 # ============================================================
-# RUN PLAN / GRID ENTRY WINDOW
+# RUN PLAN / SLOT ENTRY WINDOW
 # ============================================================
 
 
 def is_grid_signal_bar_inside_entry_window(*, signal_bar_ts: int, settings: SignalConfig) -> bool:
-    if settings.signal_window_mode != SignalWindowMode.GRID:
+    if settings.signal_window_mode != SignalWindowMode.SLOT:
         return True
 
-    if not GRID_USE_SLOT_ENTRY_WINDOW:
+    if not SLOT_USE_SLOT_ENTRY_WINDOW:
         return True
 
-    slot_start_ts = get_grid_slot_start_ts(
+    slot_start_ts = get_slot_start_ts(
         current_bar_ts=signal_bar_ts,
         slot_step_minutes=settings.slot_step_minutes,
         slot_start_minute_of_day=settings.slot_start_minute_of_day,
@@ -1534,13 +1534,13 @@ def build_run_plan(
             continue
 
         # Повтор live-логики: due-точка считается обработанной сразу после определения,
-        # даже если дальше отсекается интервалом или GRID entry-window.
+        # даже если дальше отсекается интервалом или SLOT entry-window.
         last_calculated_bar_ts = due_signal_bar_ts
 
         if due_signal_bar_ts < start_ts or due_signal_bar_ts > end_ts:
             continue
 
-        if signal_window_mode == SignalWindowMode.GRID and not is_grid_signal_bar_inside_entry_window(
+        if signal_window_mode == SignalWindowMode.SLOT and not is_grid_signal_bar_inside_entry_window(
                 signal_bar_ts=due_signal_bar_ts,
                 settings=settings,
         ):
@@ -1622,7 +1622,7 @@ def open_position(*, state: BacktestState, signal: PatternSignalResult) -> None:
     if signal.direction is None or signal.entry_price is None:
         raise ValueError("Нельзя открыть позицию без direction и entry_price")
 
-    close_due_ts = signal.trade_end_ts if state.signal_window_mode == SignalWindowMode.GRID else None
+    close_due_ts = signal.trade_end_ts if state.signal_window_mode == SignalWindowMode.SLOT else None
 
     state.position = OpenPosition(
         direction=signal.direction,
@@ -1693,7 +1693,7 @@ def process_signal_action(
 
 
 def maybe_close_grid_position(*, state: BacktestState, current_bar_ts: int, cache: JobDataCache) -> None:
-    if state.signal_window_mode != SignalWindowMode.GRID:
+    if state.signal_window_mode != SignalWindowMode.SLOT:
         return
 
     if state.position is None or state.position.close_due_ts is None:
@@ -2250,7 +2250,7 @@ def run_backtest_interval_group(
             continue
 
         if (
-                state.signal_window_mode == SignalWindowMode.GRID
+                state.signal_window_mode == SignalWindowMode.SLOT
                 and state.position.close_due_ts is not None
                 and state.position.close_due_ts <= end_ts
         ):

@@ -4,7 +4,7 @@ from enum import Enum
 
 class SignalWindowMode(Enum):
     ROLLING = "ROLLING"
-    GRID = "GRID"
+    SLOT = "SLOT"
 
 
 class MarketRegimeFilterMode(Enum):
@@ -32,7 +32,7 @@ class SignalConfig:
     rolling_back_minutes: int = 90  # Смотрим на столько минут назад
     rolling_trade_minutes: int = 30  # Длительность сделки по времени
 
-    # GRID-режим.
+    # SLOT-режим.
     slot_signal_step_seconds: int = 5  # Считаем сигнал на каждом баре в 5 секунд
     slot_step_minutes: int = 60  # Размер слота внутри которого торгуем. Слоты не накладываются друг на друга
     slot_start_minute_of_day: int = 0  # Смещение слота от начала дня. Если хочется торговать не 30-60 минут, а 0-30
