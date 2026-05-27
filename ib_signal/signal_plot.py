@@ -22,7 +22,10 @@ from ib_signal.signal_regression import (
 )
 from ib_signal.signal_regression_relation import build_regression_relation
 from ib_signal.signal_sma_reader import read_current_sma_lines
-from ib_signal.signal_ma_zone_reader import read_current_ma_zone_ranges
+from ib_signal.signal_ma_zone_reader import (
+    read_current_ma_zone_ranges,
+    read_current_ma_zone_values,
+)
 from ib_signal.signal_regime_reader import read_signal_regime_values
 from ib_signal.signal_window import SignalWindow
 
@@ -347,6 +350,11 @@ def save_signal_candidate_plot(
         signal_window=signal_window,
         expected_points=current_values.size,
     )
+    current_ma_zone_values = read_current_ma_zone_values(
+        instrument_code=instrument_code,
+        signal_window=signal_window,
+        expected_points=current_values.size,
+    )
 
     current_line = normalize_series_for_plot(np.asarray(current_values, dtype=float))
     current_path_features = calculate_pattern_path_features(current_values)
@@ -355,6 +363,9 @@ def save_signal_candidate_plot(
         signal_window=signal_window,
         expected_points=current_values.size,
     )
+    current_regime_value = current_regime_values[-1] if current_regime_values else None
+    current_ma_zone_value = current_ma_zone_values[-1] if current_ma_zone_values else None
+
     current_regression = build_linear_regression(current_values)
     current_regression_direction = classify_regression_direction(
         current_regression,
@@ -642,6 +653,11 @@ def save_signal_candidate_plot(
     else:
         regression_rows.append(("sma 600       : regression=None", None))
 
+    current_market_rows: list[tuple[str, str | None]] = [
+        (f"regime       : {current_regime_value}", get_regime_color(current_regime_value)),
+        (f"ma_zone      : {current_ma_zone_value}", None),
+    ]
+
     relation_rows: list[tuple[str, str | None]] = []
     if price_sma_600_relation is not None:
         relation_rows.extend([
@@ -761,6 +777,13 @@ def save_signal_candidate_plot(
         ax_info,
         title="RELATION (bps / pt)",
         rows=relation_rows,
+        y=y,
+        line_height=line_height,
+    )
+    y = draw_info_section(
+        ax_info,
+        title="CURRENT MARKET",
+        rows=current_market_rows,
         y=y,
         line_height=line_height,
     )

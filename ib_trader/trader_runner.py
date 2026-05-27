@@ -47,8 +47,6 @@ async def run_trader_loop() -> None:
                         f"regime={intent.regime}, "
                         f"ma_zone={intent.ma_zone}, "
                         f"strength={intent.signal_strength}, "
-                        f"Regime: {intent.regime}",
-                        f"MA zone: {intent.ma_zone}",
                         f"order_type={intent.order_type}, "
                         f"limit_price={intent.limit_price}, "
                         f"position_before={intent.position_before_side.value}/{intent.position_before_qty:g}, "
