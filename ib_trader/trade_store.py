@@ -84,7 +84,8 @@ def create_positions_latest_table_sql() -> str:
         instrument_code TEXT PRIMARY KEY,
         side TEXT NOT NULL,
         quantity REAL NOT NULL,
-        updated_at_ts INTEGER NOT NULL
+        updated_at_ts INTEGER NOT NULL,
+        updated_at_utc TEXT NOT NULL
     );
     """
 

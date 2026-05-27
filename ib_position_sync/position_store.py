@@ -2,6 +2,7 @@ import time
 from typing import Any
 
 from contracts import Instrument, PLACEHOLDER_CON_ID
+from core.time_utils import format_utc_ts
 from ib_execution.contract_resolver import get_active_contract_row
 from ib_trader.trade_store import (
     POSITIONS_LATEST_TABLE_NAME,
@@ -170,20 +171,23 @@ def write_position_snapshot(
             instrument_code,
             side,
             quantity,
-            updated_at_ts
+            updated_at_ts,
+            updated_at_utc
         )
-        VALUES (?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?)
 
         ON CONFLICT(instrument_code) DO UPDATE SET
             side = excluded.side,
             quantity = excluded.quantity,
-            updated_at_ts = excluded.updated_at_ts
+            updated_at_ts = excluded.updated_at_ts,
+            updated_at_utc = excluded.updated_at_utc
         """,
         (
             snapshot.instrument_code,
             snapshot.side,
             float(snapshot.quantity),
             int(updated_at_ts),
+            format_utc_ts(int(updated_at_ts)),
         ),
     )
 
