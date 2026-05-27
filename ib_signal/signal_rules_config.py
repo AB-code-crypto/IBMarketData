@@ -41,7 +41,7 @@ SIGNAL_RULE_SETTINGS = {
 
     # LONG  LIMIT = entry_price - offset
     # SHORT LIMIT = entry_price + offset
-    "limit_offset_points": 10.0,
+    "limit_offset_points": 30.0,
 
     # Жизнь лимитника. Для futures execution дополнительно обрежет TTL перед 14:59:50 CT.
     "limit_ttl_seconds": 600,

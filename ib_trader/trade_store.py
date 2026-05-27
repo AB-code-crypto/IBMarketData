@@ -656,20 +656,41 @@ def build_signal_trade_intent_draft(
     if signal_direction not in {"LONG", "SHORT"}:
         return None
 
+    signal_order_type = str(signal.order_type).upper()
+
     if position.side == PositionSide.FLAT or position.quantity <= 0.0:
         action = TradeDecisionAction.OPEN_POSITION
         reason = "flat_position_open_by_signal"
         after_side = PositionSide(signal_direction)
         after_qty = 1.0
+        order_type = signal_order_type
+        limit_price = signal.limit_price if signal_order_type == "LIMIT" else None
+        limit_offset_points = signal.limit_offset_points
+        ttl_seconds = signal.ttl_seconds
 
     elif position.side.value == signal_direction:
         return None
 
     else:
-        action = TradeDecisionAction.REVERSE_POSITION
-        reason = "opposite_signal_reverse_position"
-        after_side = PositionSide(signal_direction)
-        after_qty = max(1.0, float(position.quantity))
+        if signal_order_type == "LIMIT":
+            action = TradeDecisionAction.CLOSE_POSITION
+            reason = "opposite_limit_signal_close_position_only"
+            after_side = PositionSide.FLAT
+            after_qty = 0.0
+            order_type = "MARKET"
+            limit_price = None
+            limit_offset_points = None
+            ttl_seconds = None
+
+        else:
+            action = TradeDecisionAction.REVERSE_POSITION
+            reason = "opposite_signal_reverse_position"
+            after_side = PositionSide(signal_direction)
+            after_qty = max(1.0, float(position.quantity))
+            order_type = "MARKET"
+            limit_price = None
+            limit_offset_points = None
+            ttl_seconds = None
 
     return TradeIntentDraft(
         source_signal_id=signal.source_signal_id,
@@ -685,10 +706,10 @@ def build_signal_trade_intent_draft(
         regime=signal.regime,
         ma_zone=signal.ma_zone,
         signal_strength=signal.signal_strength,
-        order_type=str(signal.order_type).upper(),
-        limit_price=signal.limit_price if str(signal.order_type).upper() == "LIMIT" else None,
-        limit_offset_points=signal.limit_offset_points,
-        ttl_seconds=signal.ttl_seconds,
+        order_type=order_type,
+        limit_price=limit_price,
+        limit_offset_points=limit_offset_points,
+        ttl_seconds=ttl_seconds,
         position_before_side=position.side,
         position_before_qty=float(position.quantity),
         position_after_side=after_side,
