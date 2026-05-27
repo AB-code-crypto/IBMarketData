@@ -175,6 +175,25 @@ def classify_signal_strength(*, direction: str, regime: int | None) -> str:
     return "WEAK"
 
 
+def allowed_directions_for_regime(regime: int | None) -> list[str]:
+    if regime is None:
+        return []
+
+    regime = int(regime)
+
+    if regime > 0:
+        return ["LONG"]
+
+    if regime < 0:
+        return ["SHORT"]
+
+    return ["LONG", "SHORT"]
+
+
+def is_direction_allowed_by_regime(*, direction: str, regime: int | None) -> bool:
+    return str(direction).upper() in allowed_directions_for_regime(regime)
+
+
 def choose_order_policy(
         *,
         signal_time_ct: str | None,
@@ -360,6 +379,55 @@ def interpret_signal_event(
             "direction": direction,
             "ma_zone": int(ma_zone),
             "allowed_zones": allowed_zones,
+        },
+    })
+
+    regime_direction_policy = str(
+        settings.get("regime_direction_policy", "ALLOW"),
+    ).upper()
+    regime_allowed_directions = allowed_directions_for_regime(int(regime))
+    regime_direction_allowed = is_direction_allowed_by_regime(
+        direction=direction,
+        regime=int(regime),
+    )
+
+    if regime_direction_policy == "REJECT" and not regime_direction_allowed:
+        signal_strength = classify_signal_strength(
+            direction=direction,
+            regime=int(regime),
+        )
+        records.append({
+            "rule": "regime_direction_policy",
+            "result": "REJECT",
+            "reason": "regime_direction_forbidden",
+            "details": {
+                "direction": direction,
+                "regime": int(regime),
+                "allowed_directions": regime_allowed_directions,
+                "policy": regime_direction_policy,
+            },
+        })
+        return build_interpretation_result(
+            market=market,
+            allowed=False,
+            reject_reason="regime_direction_forbidden",
+            signal_strength=signal_strength,
+            order_type=str(settings["default_order_type"]).upper(),
+            order_policy_reason="rejected",
+            limit_offset_points=None,
+            limit_price=None,
+            ttl_seconds=None,
+            records=records,
+        )
+
+    records.append({
+        "rule": "regime_direction_policy",
+        "result": "ALLOW" if regime_direction_policy == "REJECT" else "SKIP",
+        "details": {
+            "direction": direction,
+            "regime": int(regime),
+            "allowed_directions": regime_allowed_directions,
+            "policy": regime_direction_policy,
         },
     })
 

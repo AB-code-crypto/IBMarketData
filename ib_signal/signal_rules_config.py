@@ -36,6 +36,10 @@ SIGNAL_RULE_SETTINGS = {
     # REJECT — слабый сигнал запрещён.
     "weak_signal_policy": "ALLOW",
 
+    # ALLOW — не запрещать сигналы против текущего regime.
+    # REJECT — LONG разрешён только при regime=+1 или 0, SHORT только при regime=-1 или 0.
+    "regime_direction_policy": "REJECT",
+
     "default_order_type": "MARKET",
     "limit_order_type": "LIMIT",
 
