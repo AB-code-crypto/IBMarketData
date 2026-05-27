@@ -1,4 +1,4 @@
-
+import logging
 import sqlite3
 from dataclasses import dataclass
 
@@ -14,78 +14,33 @@ from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 from ib_job_data.sma_features import SMA_TABLE_NAME
 from ib_signal.signal_window import SignalWindow
 
+log = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
-class MaZoneRangeValues:
-    """Что делает: хранит верхний/нижний zone-range для текущего signal-window.
-    Зачем нужна: signal_plot рисует линии зон без повторного расчёта MA-zone."""
+class MaZoneValues:
+    zone_values: list[int | None]
     upper_range_points: list[float | None]
     lower_range_points: list[float | None]
 
 
-def read_current_ma_zone_ranges(
-        *,
-        instrument_code: str,
-        signal_window: SignalWindow,
-        expected_points: int,
-) -> MaZoneRangeValues:
-    expected_points = int(expected_points)
+def pad_left(values: list, *, expected_points: int, fill_value):
+    if len(values) >= expected_points:
+        return values
 
-    if expected_points <= 0:
-        return MaZoneRangeValues([], [])
+    return [fill_value] * (expected_points - len(values)) + values
 
-    instrument_row = Instrument[instrument_code]
-    feature_db_path = get_instrument_feature_db_path(
-        instrument_code=instrument_code,
-        instrument_row=instrument_row,
-    )
-
-    conn = open_sqlite_connection(str(feature_db_path), require_existing_file=True, use_wal=False)
-
-    try:
-        rows = conn.execute(
-            f"""
-            SELECT
-                {quote_identifier(MA_ZONE_UPPER_RANGE_COLUMN_NAME)},
-                {quote_identifier(MA_ZONE_LOWER_RANGE_COLUMN_NAME)}
-            FROM {quote_identifier(SMA_TABLE_NAME)}
-            WHERE bar_time_ts <= ?
-            ORDER BY bar_time_ts DESC
-            LIMIT ?
-            """,
-            (int(signal_window.signal_bar_ts), expected_points),
-        ).fetchall()
-    except sqlite3.Error as exc:
-        print(f"[signal_plot] ma_zone range read warning: {exc}")
-        return MaZoneRangeValues([None] * expected_points, [None] * expected_points)
-    finally:
-        conn.close()
-
-    upper_values = [None if row[0] is None else float(row[0]) for row in reversed(rows)]
-    lower_values = [None if row[1] is None else float(row[1]) for row in reversed(rows)]
-
-    if len(upper_values) < expected_points:
-        missing = expected_points - len(upper_values)
-        upper_values = [None] * missing + upper_values
-        lower_values = [None] * missing + lower_values
-
-    return MaZoneRangeValues(
-        upper_range_points=upper_values,
-        lower_range_points=lower_values,
-    )
 
 def read_current_ma_zone_values(
         *,
         instrument_code: str,
         signal_window: SignalWindow,
         expected_points: int,
-) -> list[int | None]:
-    """Что делает: читает ma_zone значения для текущего signal-window из sma_5s.
-    Зачем нужна: PNG должна показывать текущую зону в правом столбике не только линиями."""
+) -> MaZoneValues:
     expected_points = int(expected_points)
 
     if expected_points <= 0:
-        return []
+        return MaZoneValues([], [], [])
 
     instrument_row = Instrument[instrument_code]
     feature_db_path = get_instrument_feature_db_path(
@@ -96,28 +51,45 @@ def read_current_ma_zone_values(
     conn = open_sqlite_connection(str(feature_db_path), require_existing_file=True, use_wal=False)
 
     try:
+        sql = (
+            f"SELECT "
+            f"{quote_identifier(MA_ZONE_COLUMN_NAME)}, "
+            f"{quote_identifier(MA_ZONE_UPPER_RANGE_COLUMN_NAME)}, "
+            f"{quote_identifier(MA_ZONE_LOWER_RANGE_COLUMN_NAME)} "
+            f"FROM {quote_identifier(SMA_TABLE_NAME)} "
+            "WHERE bar_time_ts <= ? "
+            "ORDER BY bar_time_ts DESC "
+            "LIMIT ?"
+        )
         rows = conn.execute(
-            f"""
-            SELECT {quote_identifier(MA_ZONE_COLUMN_NAME)}
-            FROM {quote_identifier(SMA_TABLE_NAME)}
-            WHERE bar_time_ts <= ?
-            ORDER BY bar_time_ts DESC
-            LIMIT ?
-            """,
+            sql,
             (int(signal_window.signal_bar_ts), expected_points),
         ).fetchall()
     except sqlite3.Error as exc:
-        print(f"[signal_plot] ma_zone value read warning: {exc}")
-        return [None] * expected_points
+        log.warning("[signal_plot] ma_zone read warning: %s", exc)
+        return MaZoneValues(
+            zone_values=[None] * expected_points,
+            upper_range_points=[None] * expected_points,
+            lower_range_points=[None] * expected_points,
+        )
     finally:
         conn.close()
 
-    values = [
+    zone_values = [
         None if row[0] is None else int(row[0])
         for row in reversed(rows)
     ]
+    upper_values = [
+        None if row[1] is None else float(row[1])
+        for row in reversed(rows)
+    ]
+    lower_values = [
+        None if row[2] is None else float(row[2])
+        for row in reversed(rows)
+    ]
 
-    if len(values) < expected_points:
-        values = [None] * (expected_points - len(values)) + values
-
-    return values
+    return MaZoneValues(
+        zone_values=pad_left(zone_values, expected_points=expected_points, fill_value=None),
+        upper_range_points=pad_left(upper_values, expected_points=expected_points, fill_value=None),
+        lower_range_points=pad_left(lower_values, expected_points=expected_points, fill_value=None),
+    )

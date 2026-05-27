@@ -22,10 +22,7 @@ from ib_signal.signal_regression import (
 )
 from ib_signal.signal_regression_relation import build_regression_relation
 from ib_signal.signal_sma_reader import read_current_sma_lines
-from ib_signal.signal_ma_zone_reader import (
-    read_current_ma_zone_ranges,
-    read_current_ma_zone_values,
-)
+from ib_signal.signal_ma_zone_reader import read_current_ma_zone_values
 from ib_signal.signal_regime_reader import read_signal_regime_values
 from ib_signal.signal_window import SignalWindow
 
@@ -141,6 +138,33 @@ def get_regime_color(regime_value: int | None) -> str:
     """Что делает: возвращает цвет режима для нижней полосы на PNG.
     Зачем нужна: текущий regime должен читаться визуально по цвету."""
     return REGIME_COLORS.get(regime_value, REGIME_COLORS[None])
+
+
+def format_regime_for_plot(regime_value: int | None) -> str:
+    if regime_value is None:
+        return "None"
+
+    value = int(regime_value)
+
+    if value > 0:
+        return f"{value:+d} LONG"
+
+    if value < 0:
+        return f"{value:+d} SHORT"
+
+    return "0 NEUTRAL"
+
+
+def format_ma_zone_for_plot(ma_zone_value: int | None) -> str:
+    if ma_zone_value is None:
+        return "None"
+
+    value = int(ma_zone_value)
+
+    if value == 0:
+        return "0"
+
+    return f"{value:+d}"
 
 
 def draw_regime_panel(
@@ -345,11 +369,6 @@ def save_signal_candidate_plot(
         instrument_code=instrument_code,
         signal_window=signal_window,
     )
-    current_ma_zone_ranges = read_current_ma_zone_ranges(
-        instrument_code=instrument_code,
-        signal_window=signal_window,
-        expected_points=current_values.size,
-    )
     current_ma_zone_values = read_current_ma_zone_values(
         instrument_code=instrument_code,
         signal_window=signal_window,
@@ -364,7 +383,11 @@ def save_signal_candidate_plot(
         expected_points=current_values.size,
     )
     current_regime_value = current_regime_values[-1] if current_regime_values else None
-    current_ma_zone_value = current_ma_zone_values[-1] if current_ma_zone_values else None
+    current_ma_zone_value = (
+        current_ma_zone_values.zone_values[-1]
+        if current_ma_zone_values.zone_values
+        else None
+    )
 
     current_regression = build_linear_regression(current_values)
     current_regression_direction = classify_regression_direction(
@@ -439,8 +462,8 @@ def save_signal_candidate_plot(
         ax,
         x_values=current_x_minutes,
         sma_600_values=current_sma_lines.get(600),
-        upper_range_values=current_ma_zone_ranges.upper_range_points,
-        lower_range_values=current_ma_zone_ranges.lower_range_points,
+        upper_range_values=current_ma_zone_values.upper_range_points,
+        lower_range_values=current_ma_zone_values.lower_range_points,
         base_value=float(current_values[0]),
     )
 
@@ -654,8 +677,11 @@ def save_signal_candidate_plot(
         regression_rows.append(("sma 600       : regression=None", None))
 
     current_market_rows: list[tuple[str, str | None]] = [
-        (f"regime       : {current_regime_value}", get_regime_color(current_regime_value)),
-        (f"ma_zone      : {current_ma_zone_value}", None),
+        (
+            f"regime       : {format_regime_for_plot(current_regime_value)}",
+            get_regime_color(current_regime_value),
+        ),
+        (f"ma_zone      : {format_ma_zone_for_plot(current_ma_zone_value)}", None),
     ]
 
     relation_rows: list[tuple[str, str | None]] = []
