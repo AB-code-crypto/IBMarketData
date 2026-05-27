@@ -98,6 +98,9 @@ def create_trade_intents_table_sql() -> str:
         source_signal_id INTEGER NOT NULL,
         instrument_code TEXT NOT NULL,
         signal_bar_ts INTEGER NOT NULL,
+        signal_time_utc TEXT NOT NULL,
+        signal_time_ct TEXT NOT NULL,
+        signal_time_msk TEXT NOT NULL,
         intent_source TEXT NOT NULL,
 
         action TEXT NOT NULL,
@@ -495,6 +498,9 @@ def write_trade_intent(conn, draft: TradeIntentDraft) -> int:
     initialize_trade_db(conn)
 
     now_ts = int(time.time())
+    signal_time_utc, signal_time_ct, signal_time_msk = build_time_text_fields_from_ts(
+        int(draft.signal_bar_ts),
+    )
 
     conn.execute(
         f"""
@@ -502,6 +508,9 @@ def write_trade_intent(conn, draft: TradeIntentDraft) -> int:
             source_signal_id,
             instrument_code,
             signal_bar_ts,
+            signal_time_utc,
+            signal_time_ct,
+            signal_time_msk,
             intent_source,
 
             action,
@@ -523,7 +532,7 @@ def write_trade_intent(conn, draft: TradeIntentDraft) -> int:
             created_at_ts,
             updated_at_ts
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
         ON CONFLICT (
             instrument_code,
@@ -536,6 +545,9 @@ def write_trade_intent(conn, draft: TradeIntentDraft) -> int:
             int(draft.source_signal_id),
             draft.instrument_code,
             int(draft.signal_bar_ts),
+            signal_time_utc,
+            signal_time_ct,
+            signal_time_msk,
             draft.intent_source,
             draft.action.value,
             draft.reason,
