@@ -85,7 +85,7 @@ def _on_telegram_task_done(task):
     telegram_tasks.discard(task)
 
 
-def _send_to_telegram(message, to_telegram=True):
+def _send_to_telegram(message, to_telegram=True, message_thread_id=None):
     """Что делает: асинхронно отправляет сообщение в Telegram, если это разрешено. Зачем нужна: логирование не блокирует основной поток сервиса."""
     if not to_telegram:
         return
@@ -106,19 +106,19 @@ def _send_to_telegram(message, to_telegram=True):
         # Если активного event loop нет, просто пропускаем отправку.
         return
 
-    task = loop.create_task(telegram_sender.send_text(message))
+    task = loop.create_task(telegram_sender.send_text(message, message_thread_id=message_thread_id))
     telegram_tasks.add(task)
     task.add_done_callback(_on_telegram_task_done)
 
 
-def log_info(logger, message, to_telegram=True):
+def log_info(logger, message, to_telegram=True, message_thread_id=None):
     """Что делает: пишет info-сообщение в logger и при необходимости отправляет его в Telegram. Зачем нужна: единая точка для штатных информационных логов."""
     logger.info(message, stacklevel=2)
-    _send_to_telegram(message, to_telegram=to_telegram)
+    _send_to_telegram(message, to_telegram=to_telegram, message_thread_id=message_thread_id)
 
 
-def log_warning(logger, message, to_telegram=True):
+def log_warning(logger, message, to_telegram=True, message_thread_id=None):
     """Что делает: пишет warning-сообщение в logger и при необходимости отправляет его в Telegram. Зачем нужна: единая точка для предупреждений и проблемных состояний."""
     logger.warning(message, stacklevel=2)
-    _send_to_telegram(message, to_telegram=to_telegram)
+    _send_to_telegram(message, to_telegram=to_telegram, message_thread_id=message_thread_id)
 

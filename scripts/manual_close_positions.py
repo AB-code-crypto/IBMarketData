@@ -1,6 +1,7 @@
 import asyncio
 import time
 import traceback
+from dataclasses import dataclass
 
 from config import settings_live as app_settings
 from core.ib_connector import connect_ib, disconnect_ib
@@ -14,13 +15,17 @@ from ib_execution.execution_store import (
     write_trade_intent_execution_result,
 )
 from ib_execution.order_service import OrderService
-from ib_position_sync.position_store import sync_broker_positions_once
+from ib_position_sync.position_store import (
+    find_position_for_instrument,
+    get_trading_enabled_instrument_codes,
+    request_broker_positions,
+    sync_broker_positions_once,
+)
 from ib_trader.trade_models import PositionSide, TradeDecisionAction
 from ib_trader.trade_store import (
     TradeIntentDraft,
     get_trade_db_connection,
     initialize_trade_db,
-    read_open_position_snapshots,
     write_trade_intent,
 )
 
@@ -31,7 +36,7 @@ REQUIRE_CONFIRMATION = True
 CONFIRMATION_TEXT = "CLOSE"
 
 MANUAL_FLAT_INTENT_SOURCE = "MANUAL_FLAT"
-MANUAL_FLAT_REASON = "manual_flat_helper_close_db_open_position"
+MANUAL_FLAT_REASON = "manual_flat_helper_close_broker_open_position"
 
 
 class ManualFlatIbSettings:
@@ -40,6 +45,15 @@ class ManualFlatIbSettings:
     ib_host = app_settings.ib_host
     ib_port = app_settings.ib_port
     ib_client_id = app_settings.ib_client_id + 80
+
+
+@dataclass(frozen=True)
+class ManualFlatPosition:
+    instrument_code: str
+    side: PositionSide
+    quantity: float
+    broker_contract: str | None = None
+    broker_account: str | None = None
 
 
 def now_ts() -> int:
@@ -52,8 +66,49 @@ def build_manual_source_signal_id(position_index: int) -> int:
     return -9000000000000 - int(time.time() * 1000) - int(position_index)
 
 
+def normalize_position_side(value) -> PositionSide:
+    if isinstance(value, PositionSide):
+        return value
+
+    return PositionSide(str(value).upper())
+
+
 def format_position(position) -> str:
-    return f"{position.instrument_code} {position.side.value}/{float(position.quantity):g}"
+    extra_parts = []
+
+    broker_contract = getattr(position, "broker_contract", None)
+    broker_account = getattr(position, "broker_account", None)
+
+    if broker_contract:
+        extra_parts.append(f"contract={broker_contract}")
+
+    if broker_account:
+        extra_parts.append(f"account={broker_account}")
+
+    extra_text = f" ({', '.join(extra_parts)})" if extra_parts else ""
+
+    return (
+        f"{position.instrument_code} "
+        f"{position.side.value}/{float(position.quantity):g}"
+        f"{extra_text}"
+    )
+
+
+def format_broker_snapshot(snapshot) -> str:
+    side = normalize_position_side(getattr(snapshot, "side"))
+    quantity = float(getattr(snapshot, "quantity", 0.0) or 0.0)
+    broker_contract = getattr(snapshot, "broker_contract", None)
+    broker_account = getattr(snapshot, "broker_account", None)
+
+    extra_parts = []
+    if broker_contract:
+        extra_parts.append(f"contract={broker_contract}")
+    if broker_account:
+        extra_parts.append(f"account={broker_account}")
+
+    extra_text = f" ({', '.join(extra_parts)})" if extra_parts else ""
+
+    return f"{snapshot.instrument_code} {side.value}/{quantity:g}{extra_text}"
 
 
 def format_execution_result(intent: TradeIntent, result: ExecutionResult) -> str:
@@ -129,20 +184,56 @@ async def send_deal_message(telegram_sender: TelegramSender, text: str) -> None:
         pass
 
 
-def read_db_open_positions():
-    conn = get_trade_db_connection()
-    try:
-        initialize_trade_db(conn)
-        return read_open_position_snapshots(conn)
-    finally:
-        conn.close()
+async def read_broker_open_positions(ib) -> tuple[list[ManualFlatPosition], list]:
+    """Читает позиции напрямую у IB и выбирает только наши trading_enabled инструменты.
+
+    Важно: этот helper намеренно не смотрит в positions_latest.
+    Если position_sync умер или positions_latest устарел, manual_flat всё равно должен закрыть
+    фактическую брокерскую позицию по инструментам робота.
+    """
+    read_ts = now_ts()
+    broker_positions = await request_broker_positions(ib)
+    instrument_codes = get_trading_enabled_instrument_codes()
+
+    snapshots = [
+        find_position_for_instrument(
+            broker_positions=broker_positions,
+            instrument_code=instrument_code,
+            now_ts=read_ts,
+        )
+        for instrument_code in instrument_codes
+    ]
+
+    open_positions: list[ManualFlatPosition] = []
+
+    for snapshot in snapshots:
+        side = normalize_position_side(snapshot.side)
+        quantity = float(snapshot.quantity)
+
+        if side not in {PositionSide.LONG, PositionSide.SHORT}:
+            continue
+
+        if quantity <= 0.0:
+            continue
+
+        open_positions.append(
+            ManualFlatPosition(
+                instrument_code=str(snapshot.instrument_code),
+                side=side,
+                quantity=quantity,
+                broker_contract=snapshot.broker_contract,
+                broker_account=snapshot.broker_account,
+            )
+        )
+
+    return open_positions, snapshots
 
 
-def require_user_confirmation(positions) -> None:
+def require_user_confirmation(positions, *, source_text: str) -> None:
     if not REQUIRE_CONFIRMATION:
         return
 
-    print("\nБудут закрыты позиции из positions_latest:")
+    print(f"\nБудут закрыты позиции из {source_text}:")
     for position in positions:
         print(f"  {format_position(position)}")
 
@@ -294,28 +385,42 @@ async def main() -> None:
     ib = None
 
     try:
-        positions = read_db_open_positions()
+        ib, _ = await connect_ib(ManualFlatIbSettings)
+
+        positions, snapshots = await read_broker_open_positions(ib)
 
         if not positions:
+            snapshots_text = "\n".join(
+                f"- {format_broker_snapshot(snapshot)}"
+                for snapshot in snapshots
+            ) or "- нет trading_enabled instruments"
+
             await send_message(
                 telegram_sender,
-                "MANUAL_FLAT: в positions_latest нет открытых позиций. Нечего закрывать.",
+                (
+                    "MANUAL_FLAT: у брокера нет открытых позиций по trading_enabled инструментам. "
+                    "Нечего закрывать.\n"
+                    "Broker snapshots:\n"
+                    f"{snapshots_text}"
+                ),
             )
             return
 
-        require_user_confirmation(positions)
+        require_user_confirmation(
+            positions,
+            source_text="IB broker positions / trading_enabled instruments",
+        )
 
         positions_text = "\n".join(f"- {format_position(position)}" for position in positions)
         await send_message(
             telegram_sender,
             (
                 "🚨 MANUAL_FLAT started\n"
-                "Источник позиций: trade.sqlite3 / positions_latest\n"
+                "Источник позиций: IB broker positions / trading_enabled instruments\n"
                 f"Будут закрыты позиции:\n{positions_text}"
             ),
         )
 
-        ib, _ = await connect_ib(ManualFlatIbSettings)
         order_service = OrderService(ib)
 
         results = []

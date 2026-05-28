@@ -15,6 +15,7 @@ load_dotenv(ENV_PATH, encoding="utf-8-sig")
 telegram_thread_id_connect_env = os.getenv("TELEGRAM_THREAD_ID_CONNECT")
 telegram_thread_id_deal_env = os.getenv("TELEGRAM_THREAD_ID_DEAL")
 telegram_thread_id_deal_status_env = os.getenv("TELEGRAM_THREAD_ID_DEAL_STATUS")
+telegram_thread_id_error_env = os.getenv("TELEGRAM_THREAD_ID_ERROR")
 
 
 @dataclass
@@ -49,6 +50,12 @@ class Settings:
     telegram_message_thread_id_deal_status: Optional[int] = (
         int(telegram_thread_id_deal_status_env)
         if telegram_thread_id_deal_status_env
+        else None
+    )
+    # Тема для ошибок, которые требуют ручного внимания.
+    telegram_message_thread_id_error: Optional[int] = (
+        int(telegram_thread_id_error_env)
+        if telegram_thread_id_error_env
         else None
     )
 
