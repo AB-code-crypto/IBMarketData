@@ -95,3 +95,42 @@ class TradeIntentCreated:
 
     position_after_side: PositionSide
     position_after_qty: float
+
+@dataclass(frozen=True)
+class PositionSnapshotFreshness:
+    instrument_code: str
+    updated_at_ts: int | None
+    updated_at_utc: str | None
+    age_seconds: int | None
+    max_age_seconds: int
+    is_stale: bool
+
+
+@dataclass(frozen=True)
+class TradeIntentRejected:
+    instrument_code: str
+    source_signal_id: int
+    signal_bar_ts: int
+    signal_time_utc: str
+    signal_time_ct: str | None
+    signal_time_msk: str
+
+    reason: str
+    action: TradeDecisionAction
+    signal_direction: str
+    order_type: str
+
+    position_before_side: PositionSide
+    position_before_qty: float
+
+    positions_latest_updated_at_ts: int | None
+    positions_latest_updated_at_utc: str | None
+    positions_latest_age_seconds: int | None
+    max_allowed_age_seconds: int
+
+
+@dataclass(frozen=True)
+class TradeProcessResult:
+    created: list[TradeIntentCreated]
+    rejected: list[TradeIntentRejected]
+

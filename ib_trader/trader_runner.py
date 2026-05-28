@@ -2,6 +2,7 @@ import asyncio
 import time
 import traceback
 
+from config import settings_live as app_settings
 from core.logger import get_logger, log_info, log_warning, setup_logging
 from ib_trader.trade_store import process_signal_events_once
 
@@ -11,6 +12,54 @@ logger = get_logger(__name__)
 TRADER_LOOP_SLEEP_SECONDS = 1
 TRADER_MAX_SIGNAL_AGE_SECONDS = 10
 TRADER_HEARTBEAT_INTERVAL_SECONDS = 60
+REPORTED_REJECTED_TRADE_INTENTS: set[tuple[str, int, str]] = set()
+
+
+def format_rejected_trade_intent(rejected) -> str:
+    age_text = (
+        "missing"
+        if rejected.positions_latest_age_seconds is None
+        else str(rejected.positions_latest_age_seconds)
+    )
+    updated_at_ts_text = (
+        "missing"
+        if rejected.positions_latest_updated_at_ts is None
+        else str(rejected.positions_latest_updated_at_ts)
+    )
+    updated_at_utc_text = rejected.positions_latest_updated_at_utc or "missing"
+
+    return (
+        "❌ POSITION SNAPSHOT STALE: сделка не будет открыта\n"
+        f"instrument: {rejected.instrument_code}\n"
+        f"source_signal_id: {rejected.source_signal_id}\n"
+        f"signal_time_utc: {rejected.signal_time_utc}\n"
+        f"signal_time_ct: {rejected.signal_time_ct}\n"
+        f"signal_time_msk: {rejected.signal_time_msk}\n"
+        f"direction: {rejected.signal_direction}\n"
+        f"order_type: {rejected.order_type}\n"
+        f"action: {rejected.action.value}\n"
+        f"reason: {rejected.reason}\n"
+        f"positions_latest.side: {rejected.position_before_side.value}\n"
+        f"positions_latest.qty: {float(rejected.position_before_qty):g}\n"
+        f"positions_latest.updated_at_ts: {updated_at_ts_text}\n"
+        f"positions_latest.updated_at_utc: {updated_at_utc_text}\n"
+        f"positions_latest.age_seconds: {age_text}\n"
+        f"max_allowed_age_seconds: {rejected.max_allowed_age_seconds}"
+    )
+
+
+def should_report_rejected_trade_intent(rejected) -> bool:
+    key = (
+        str(rejected.instrument_code),
+        int(rejected.source_signal_id),
+        str(rejected.reason),
+    )
+
+    if key in REPORTED_REJECTED_TRADE_INTENTS:
+        return False
+
+    REPORTED_REJECTED_TRADE_INTENTS.add(key)
+    return True
 
 
 async def run_trader_loop() -> None:
@@ -28,11 +77,22 @@ async def run_trader_loop() -> None:
 
     while True:
         try:
-            created_intents = process_signal_events_once(
+            result = process_signal_events_once(
                 max_signal_age_seconds=TRADER_MAX_SIGNAL_AGE_SECONDS,
             )
 
-            for intent in created_intents:
+            for rejected in result.rejected:
+                if not should_report_rejected_trade_intent(rejected):
+                    continue
+
+                log_warning(
+                    logger,
+                    format_rejected_trade_intent(rejected),
+                    to_telegram=True,
+                    message_thread_id=getattr(app_settings, "telegram_message_thread_id_error", None),
+                )
+
+            for intent in result.created:
                 log_info(
                     logger,
                     (

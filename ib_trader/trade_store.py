@@ -4,9 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from config import settings_live as app_settings
 from contracts import Instrument
-from core.logger import get_logger, log_warning
 from core.sqlite_utils import open_sqlite_connection
 from core.state_db import STATE_DB_PATH, initialize_state_db
 from core.time_utils import CT_TIMEZONE, MSK_TIMEZONE, SQLITE_DATETIME_FORMAT
@@ -16,8 +14,11 @@ from ib_signal.signal_schedule import get_slot_start_ts
 from ib_trader.trade_models import (
     PositionSide,
     PositionSnapshot,
+    PositionSnapshotFreshness,
     TradeDecisionAction,
     TradeIntentCreated,
+    TradeIntentRejected,
+    TradeProcessResult,
     TraderSignalEvent,
 )
 
@@ -40,18 +41,7 @@ FUTURES_CLEARING_HOUR_CT = 16
 TRADER_MAX_NEW_INTENT_AGE_SECONDS = 10
 STALE_NEW_INTENT_ERROR_TEXT = "stale trade_intent before trader decision"
 POSITION_SNAPSHOT_MAX_AGE_SECONDS = 5
-STALE_POSITION_OPEN_WARNING_KEYS: set[tuple[str, int]] = set()
-logger = get_logger(__name__)
 
-
-@dataclass(frozen=True)
-class PositionSnapshotFreshness:
-    instrument_code: str
-    updated_at_ts: int | None
-    updated_at_utc: str | None
-    age_seconds: int | None
-    max_age_seconds: int
-    is_stale: bool
 
 
 @dataclass(frozen=True)
@@ -414,61 +404,30 @@ def read_position_snapshot_freshness(
     )
 
 
-def format_position_snapshot_freshness_error(
+def build_stale_position_open_rejected_event(
         *,
         signal: TraderSignalEvent,
         position: PositionSnapshot,
         freshness: PositionSnapshotFreshness,
         draft: TradeIntentDraft,
-) -> str:
-    age_text = "missing" if freshness.age_seconds is None else str(freshness.age_seconds)
-    updated_at_ts_text = "missing" if freshness.updated_at_ts is None else str(freshness.updated_at_ts)
-    updated_at_utc_text = freshness.updated_at_utc or "missing"
-
-    return (
-        "❌ POSITION SNAPSHOT STALE: сделка не будет открыта\n"
-        f"instrument: {signal.instrument_code}\n"
-        f"source_signal_id: {signal.source_signal_id}\n"
-        f"signal_time_utc: {signal.signal_time_utc}\n"
-        f"signal_time_ct: {signal.signal_time_ct}\n"
-        f"signal_time_msk: {signal.signal_time_msk}\n"
-        f"direction: {signal.direction}\n"
-        f"order_type: {draft.order_type}\n"
-        f"action: {draft.action.value}\n"
-        f"reason: positions_latest is stale\n"
-        f"positions_latest.side: {position.side.value}\n"
-        f"positions_latest.qty: {float(position.quantity):g}\n"
-        f"positions_latest.updated_at_ts: {updated_at_ts_text}\n"
-        f"positions_latest.updated_at_utc: {updated_at_utc_text}\n"
-        f"positions_latest.age_seconds: {age_text}\n"
-        f"max_allowed_age_seconds: {freshness.max_age_seconds}"
-    )
-
-
-def notify_stale_position_open_rejected_once(
-        *,
-        signal: TraderSignalEvent,
-        position: PositionSnapshot,
-        freshness: PositionSnapshotFreshness,
-        draft: TradeIntentDraft,
-) -> None:
-    key = (str(signal.instrument_code), int(signal.source_signal_id))
-
-    if key in STALE_POSITION_OPEN_WARNING_KEYS:
-        return
-
-    STALE_POSITION_OPEN_WARNING_KEYS.add(key)
-
-    log_warning(
-        logger,
-        format_position_snapshot_freshness_error(
-            signal=signal,
-            position=position,
-            freshness=freshness,
-            draft=draft,
-        ),
-        to_telegram=True,
-        message_thread_id=getattr(app_settings, "telegram_message_thread_id_error", None),
+) -> TradeIntentRejected:
+    return TradeIntentRejected(
+        instrument_code=signal.instrument_code,
+        source_signal_id=int(signal.source_signal_id),
+        signal_bar_ts=int(signal.signal_bar_ts),
+        signal_time_utc=signal.signal_time_utc,
+        signal_time_ct=signal.signal_time_ct,
+        signal_time_msk=signal.signal_time_msk,
+        reason="positions_latest_stale_open_rejected",
+        action=draft.action,
+        signal_direction=draft.signal_direction,
+        order_type=draft.order_type,
+        position_before_side=position.side,
+        position_before_qty=float(position.quantity),
+        positions_latest_updated_at_ts=freshness.updated_at_ts,
+        positions_latest_updated_at_utc=freshness.updated_at_utc,
+        positions_latest_age_seconds=freshness.age_seconds,
+        max_allowed_age_seconds=freshness.max_age_seconds,
     )
 
 
@@ -1029,7 +988,7 @@ def process_futures_daily_flat_once(conn, *, now_ts: int | None = None) -> list[
     return created
 
 
-def process_signal_events_once(*, max_signal_age_seconds: int) -> list[TradeIntentCreated]:
+def process_signal_events_once(*, max_signal_age_seconds: int) -> TradeProcessResult:
     signals = read_latest_signal_events(max_signal_age_seconds=max_signal_age_seconds)
 
     conn = get_trade_db_connection()
@@ -1043,6 +1002,7 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> list[TradeInte
         )
 
         created: list[TradeIntentCreated] = []
+        rejected: list[TradeIntentRejected] = []
         created.extend(process_futures_daily_flat_once(conn))
         created.extend(process_slot_close_once(conn))
 
@@ -1079,18 +1039,20 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> list[TradeInte
                 )
 
                 if freshness.is_stale:
-                    notify_stale_position_open_rejected_once(
-                        signal=signal,
-                        position=position,
-                        freshness=freshness,
-                        draft=draft,
+                    rejected.append(
+                        build_stale_position_open_rejected_event(
+                            signal=signal,
+                            position=position,
+                            freshness=freshness,
+                            draft=draft,
+                        )
                     )
                     continue
 
             created.append(write_trade_intent_and_event(conn, draft))
 
         conn.commit()
-        return created
+        return TradeProcessResult(created=created, rejected=rejected)
 
     finally:
         conn.close()
