@@ -14,6 +14,11 @@ SIGNAL_RULES = {
     # В этих зонах вход только лимитным ордером.
     "limit_order_ma_zones": [-4, 4],
 
+    # Экстремальные зоны для закрытия уже открытой позиции.
+    # LONG закрываем, если ma_zone >= +4; SHORT закрываем, если ma_zone <= -4.
+    "long_position_extreme_close_ma_zone": 4,
+    "short_position_extreme_close_ma_zone": -4,
+
     # В эти окна Chicago Time вход только лимитным ордером.
     "limit_order_time_windows_ct": [
         ("07:00", "08:00"),
@@ -39,6 +44,9 @@ SIGNAL_RULE_SETTINGS = {
     # ALLOW — не запрещать сигналы против текущего regime.
     # REJECT — LONG разрешён только при regime=+1 или 0, SHORT только при regime=-1 или 0.
     "regime_direction_policy": "REJECT",
+
+    # Если True, открытая позиция закрывается при попадании цены в экстремальную MA-зону.
+    "close_position_on_extreme_ma_zone_enabled": True,
 
     "default_order_type": "MARKET",
     "limit_order_type": "LIMIT",

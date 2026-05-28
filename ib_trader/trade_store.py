@@ -10,6 +10,8 @@ from core.state_db import STATE_DB_PATH, initialize_state_db
 from core.time_utils import CT_TIMEZONE, MSK_TIMEZONE, SQLITE_DATETIME_FORMAT
 from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG, SignalWindowMode
 from ib_signal.signal_event_store import SIGNAL_EVENTS_TABLE_NAME, initialize_signal_events_table
+from ib_signal.signal_interpretation import MarketSnapshot, read_market_snapshot
+from ib_signal.signal_rules_config import SIGNAL_RULES, SIGNAL_RULE_SETTINGS
 from ib_signal.signal_schedule import get_slot_start_ts
 from ib_trader.trade_models import (
     PositionSide,
@@ -35,6 +37,10 @@ SLOT_CLOSE_REASON = "slot_close_before_slot_end"
 FUTURES_DAILY_FLAT_SOURCE_SIGNAL_ID = -2
 FUTURES_DAILY_FLAT_INTENT_SOURCE = "FUTURES_DAILY_FLAT"
 FUTURES_DAILY_FLAT_REASON = "futures_daily_flat_before_no_trade_hour"
+
+EXTREME_MA_ZONE_CLOSE_SOURCE_SIGNAL_ID = -3
+EXTREME_MA_ZONE_CLOSE_INTENT_SOURCE = "EXTREME_MA_ZONE_CLOSE"
+EXTREME_MA_ZONE_CLOSE_REASON = "extreme_ma_zone_close_position"
 FUTURES_NO_NEW_TRADES_HOUR_CT = 15
 FUTURES_CLEARING_HOUR_CT = 16
 
@@ -933,6 +939,106 @@ def build_futures_daily_flat_trade_intent_draft(
     )
 
 
+def is_extreme_ma_zone_close_enabled() -> bool:
+    return bool(SIGNAL_RULE_SETTINGS.get("close_position_on_extreme_ma_zone_enabled", True))
+
+
+def get_long_position_extreme_close_ma_zone() -> int:
+    return int(SIGNAL_RULES["long_position_extreme_close_ma_zone"])
+
+
+def get_short_position_extreme_close_ma_zone() -> int:
+    return int(SIGNAL_RULES["short_position_extreme_close_ma_zone"])
+
+
+def should_close_position_on_extreme_ma_zone(
+        *,
+        position: PositionSnapshot,
+        ma_zone: int | None,
+) -> bool:
+    if ma_zone is None:
+        return False
+
+    ma_zone_value = int(ma_zone)
+
+    if position.side == PositionSide.LONG:
+        return ma_zone_value >= get_long_position_extreme_close_ma_zone()
+
+    if position.side == PositionSide.SHORT:
+        return ma_zone_value <= get_short_position_extreme_close_ma_zone()
+
+    return False
+
+
+def build_extreme_ma_zone_close_trade_intent_draft(
+        *,
+        position: PositionSnapshot,
+        market: MarketSnapshot,
+        now_ts: int,
+) -> TradeIntentDraft:
+    _, signal_time_ct, _ = build_time_text_fields_from_ts(now_ts)
+
+    return TradeIntentDraft(
+        source_signal_id=EXTREME_MA_ZONE_CLOSE_SOURCE_SIGNAL_ID,
+        instrument_code=position.instrument_code,
+        signal_bar_ts=int(now_ts),
+        signal_time_ct=signal_time_ct,
+        intent_source=EXTREME_MA_ZONE_CLOSE_INTENT_SOURCE,
+        action=TradeDecisionAction.CLOSE_POSITION,
+        reason=EXTREME_MA_ZONE_CLOSE_REASON,
+        signal_direction="CLOSE",
+        entry_price=0.0,
+        potential_end_delta_points=0.0,
+        regime=market.regime,
+        ma_zone=market.ma_zone,
+        signal_strength="EXTREME_MA_ZONE_CLOSE",
+        order_type="MARKET",
+        limit_price=None,
+        limit_offset_points=None,
+        ttl_seconds=None,
+        position_before_side=position.side,
+        position_before_qty=float(position.quantity),
+        position_after_side=PositionSide.FLAT,
+        position_after_qty=0.0,
+    )
+
+
+def process_extreme_ma_zone_close_once(conn, *, now_ts: int | None = None) -> list[TradeIntentCreated]:
+    if not is_extreme_ma_zone_close_enabled():
+        return []
+
+    now_ts = int(time.time() if now_ts is None else now_ts)
+
+    created: list[TradeIntentCreated] = []
+
+    for position in read_open_position_snapshots(conn):
+        if has_unresolved_trade_intent_for_instrument(
+                conn,
+                instrument_code=position.instrument_code,
+        ):
+            continue
+
+        market = read_market_snapshot(
+            instrument_code=position.instrument_code,
+            signal_bar_ts=now_ts,
+        )
+
+        if not should_close_position_on_extreme_ma_zone(
+                position=position,
+                ma_zone=market.ma_zone,
+        ):
+            continue
+
+        draft = build_extreme_ma_zone_close_trade_intent_draft(
+            position=position,
+            market=market,
+            now_ts=now_ts,
+        )
+        created.append(write_trade_intent_and_event(conn, draft))
+
+    return created
+
+
 def process_slot_close_once(conn, *, now_ts: int | None = None) -> list[TradeIntentCreated]:
     now_ts = int(time.time() if now_ts is None else now_ts)
     close_context = get_slot_close_context(now_ts=now_ts)
@@ -1005,6 +1111,7 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> TradeProcessRe
         rejected: list[TradeIntentRejected] = []
         created.extend(process_futures_daily_flat_once(conn))
         created.extend(process_slot_close_once(conn))
+        created.extend(process_extreme_ma_zone_close_once(conn))
 
         for signal in signals:
             if has_trade_intent_for_signal(
