@@ -2,6 +2,7 @@ import asyncio
 import sqlite3
 import time
 import traceback
+from pathlib import Path
 
 from core.logger import get_logger, log_info, log_warning, setup_logging
 from core.state_db import STATE_DB_PATH
@@ -71,6 +72,26 @@ def read_signal_event_snapshot(*, source_signal_id: int) -> dict | None:
         return None
 
 
+def find_signal_plot_path(
+        *,
+        instrument_code: str,
+        signal_bar_time_ct: str,
+):
+    current_path = build_plot_path(
+        instrument_code=instrument_code,
+        signal_bar_time_ct=signal_bar_time_ct,
+    )
+
+    if current_path.is_file():
+        return current_path
+
+    legacy_path = Path(__file__).resolve().parent.parent / "png" / current_path.name
+    if legacy_path.is_file():
+        return legacy_path
+
+    return current_path
+
+
 def build_executed_deal_caption(*, intent, result, signal_event: dict | None) -> str:
     signal_time_ct = signal_event.get("signal_time_ct") if signal_event else "n/a"
     signal_direction = signal_event.get("direction") if signal_event else "n/a"
@@ -133,7 +154,7 @@ async def send_executed_deal_notification(
 
     plot_path = None
     if signal_event is not None:
-        plot_path = build_plot_path(
+        plot_path = find_signal_plot_path(
             instrument_code=str(signal_event["instrument_code"]),
             signal_bar_time_ct=str(signal_event["signal_time_ct"]),
         )
