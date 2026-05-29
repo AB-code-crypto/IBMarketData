@@ -117,6 +117,7 @@ Instrument: Registry = {
         "history_enabled": True,
         "realtime_enabled": True,
         "trading_enabled": True,
+        "regime_flat_delta_threshold_points": 0.5,
         "contracts": [
             {"conId": 620731036, "localSymbol": "MESM4", "lastTradeDateOrContractMonth": "20240621",
              "active_from_utc": "2024-03-13T22:00:00Z", "active_to_utc": "2024-06-19T17:00:00Z"},
