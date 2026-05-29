@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from decimal import Decimal, ROUND_FLOOR
 from datetime import time
 import json
 import sqlite3
@@ -235,24 +236,34 @@ def calculate_limit_price(
         entry_price: float,
         order_type: str,
         limit_offset_points: float | None,
+        price_tick: float,
 ) -> float | None:
     if str(order_type).upper() != "LIMIT":
         return None
 
-    offset = float(limit_offset_points or 0.0)
-
-    if offset <= 0.0:
-        return float(entry_price)
+    entry_price_decimal = Decimal(str(entry_price))
+    offset = Decimal(str(limit_offset_points or 0.0))
 
     direction = str(direction).upper()
 
-    if direction == "LONG":
-        return float(entry_price) - offset
+    if offset <= Decimal("0"):
+        raw_limit_price = entry_price_decimal
+    elif direction == "LONG":
+        raw_limit_price = entry_price_decimal - offset
+    elif direction == "SHORT":
+        raw_limit_price = entry_price_decimal + offset
+    else:
+        raw_limit_price = entry_price_decimal
 
-    if direction == "SHORT":
-        return float(entry_price) + offset
+    tick = Decimal(str(price_tick))
 
-    return float(entry_price)
+    if tick <= Decimal("0"):
+        raise ValueError(f"price_tick must be positive: {price_tick!r}")
+
+    # Приводим торговую цену LIMIT к биржевой сетке.
+    # Логика намеренно простая: int(price / tick) * tick, без учёта направления.
+    steps = (raw_limit_price / tick).to_integral_value(rounding=ROUND_FLOOR)
+    return float(steps * tick)
 
 
 def build_interpretation_result(
@@ -438,11 +449,13 @@ def interpret_signal_event(
         signal_time_ct=signal_time_ct,
         ma_zone=int(ma_zone),
     )
+    price_tick = float(Instrument[str(instrument_code)]["price_tick"])
     limit_price = calculate_limit_price(
         direction=direction,
         entry_price=float(entry_price),
         order_type=order_type,
         limit_offset_points=limit_offset_points,
+        price_tick=price_tick,
     )
 
     records.append({
@@ -455,6 +468,7 @@ def interpret_signal_event(
             "limit_offset_points": limit_offset_points,
             "limit_price": limit_price,
             "ttl_seconds": ttl_seconds,
+            "price_tick": price_tick,
         },
     })
 
