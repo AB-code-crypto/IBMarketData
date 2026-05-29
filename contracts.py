@@ -114,8 +114,9 @@ Instrument: Registry = {
         "tradingClass": "MES",
         "multiplier": 5.0,
         "db_filename": "MES.sqlite3",
-        # Для нового инструмента ограничиваем начальную загрузку двумя неделями.
-        # Если нужна более длинная история, увеличь history_lookback_days вручную.
+        "history_enabled": True,
+        "realtime_enabled": True,
+        "trading_enabled": True,
         "contracts": [
             {"conId": 620731036, "localSymbol": "MESM4", "lastTradeDateOrContractMonth": "20240621",
              "active_from_utc": "2024-03-13T22:00:00Z", "active_to_utc": "2024-06-19T17:00:00Z"},
