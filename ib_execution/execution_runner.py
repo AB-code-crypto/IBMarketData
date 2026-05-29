@@ -139,6 +139,23 @@ def build_executed_deal_title(intent) -> str:
 
     return "✅ Сделка исполнена"
 
+def resolve_deal_plot_path(intent, signal_event: dict | None):
+    action = str(intent.action).upper()
+
+    if action == "CLOSE_POSITION":
+        return build_plot_path(
+            instrument_code=str(intent.instrument_code),
+            signal_bar_time_ct=str(intent.signal_time_ct),
+        )
+
+    if signal_event is None:
+        return None
+
+    return build_plot_path(
+        instrument_code=str(signal_event["instrument_code"]),
+        signal_bar_time_ct=str(signal_event["signal_time_ct"]),
+    )
+
 def build_executed_deal_caption(*, intent, result, signal_event: dict | None) -> str:
     signal_time_ct = signal_event.get("signal_time_ct") if signal_event else "n/a"
     signal_direction = signal_event.get("direction") if signal_event else "n/a"
@@ -197,12 +214,7 @@ async def send_executed_deal_notification(
         signal_event=signal_event,
     )
 
-    plot_path = None
-    if signal_event is not None:
-        plot_path = build_plot_path(
-            instrument_code=str(signal_event["instrument_code"]),
-            signal_bar_time_ct=str(signal_event["signal_time_ct"]),
-        )
+    plot_path = resolve_deal_plot_path(intent, signal_event)
 
     ok = False
 
