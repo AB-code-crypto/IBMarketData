@@ -140,14 +140,9 @@ def build_executed_deal_title(intent) -> str:
     return "✅ Сделка исполнена"
 
 def resolve_deal_plot_path(intent, signal_event: dict | None):
-    action = str(intent.action).upper()
-
-    if action == "CLOSE_POSITION":
-        return build_plot_path(
-            instrument_code=str(intent.instrument_code),
-            signal_bar_time_ct=str(intent.signal_time_ct),
-        )
-
+    # PNG строится по signal_event. Для CLOSE_POSITION resolve_deal_signal_event()
+    # уже пытается вернуть signal_event исходного OPEN_POSITION.
+    # TradeIntent не обязан иметь signal_time_ct.
     if signal_event is None:
         return None
 
@@ -371,19 +366,41 @@ async def run_execution_loop(
                     to_telegram=False,
                 )
 
-                await send_executed_deal_notification(
-                    telegram_sender=deal_telegram_sender,
-                    message_thread_id=deal_message_thread_id,
-                    intent=intent,
-                    result=result,
-                )
+                try:
+                    await send_executed_deal_notification(
+                        telegram_sender=deal_telegram_sender,
+                        message_thread_id=deal_message_thread_id,
+                        intent=intent,
+                        result=result,
+                    )
+                except Exception as notification_exc:
+                    log_warning(
+                        logger,
+                        (
+                            f"deal notification failed "
+                            f"trade_intent={intent.trade_intent_id}: "
+                            f"{type(notification_exc).__name__}: {notification_exc}"
+                        ),
+                        to_telegram=True,
+                    )
 
-                await send_deal_status_notification(
-                    telegram_sender=deal_telegram_sender,
-                    message_thread_id=deal_status_message_thread_id,
-                    intent=intent,
-                    result=result,
-                )
+                try:
+                    await send_deal_status_notification(
+                        telegram_sender=deal_telegram_sender,
+                        message_thread_id=deal_status_message_thread_id,
+                        intent=intent,
+                        result=result,
+                    )
+                except Exception as notification_exc:
+                    log_warning(
+                        logger,
+                        (
+                            f"deal status notification failed "
+                            f"trade_intent={intent.trade_intent_id}: "
+                            f"{type(notification_exc).__name__}: {notification_exc}"
+                        ),
+                        to_telegram=True,
+                    )
 
             except Exception as exc:
                 error_text = f"{type(exc).__name__}: {exc}"
