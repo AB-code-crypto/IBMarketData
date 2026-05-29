@@ -54,13 +54,13 @@ def rebuild_job_db(instrument_code: str) -> None:
     if job_db_path.is_file():
         log_info(
             logger,
-            f"{instrument_code}: пересоздаю Job DB: {job_db_path}",
+            f"{instrument_code}: пересоздаю Job DB",
             to_telegram=True,
         )
     else:
         log_info(
             logger,
-            f"{instrument_code}: создаю Job DB: {job_db_path}",
+            f"{instrument_code}: создаю Job DB",
             to_telegram=True,
         )
 
