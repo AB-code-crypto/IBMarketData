@@ -60,19 +60,29 @@ def extract_ib_farm_name(error_string):
 def build_farms_text(farms):
     """Что делает: форматирует набор farm в строку для логов. Зачем нужна: health-сообщения должны быть компактными и читаемыми."""
     if not farms:
-        return "-"
+        return "нет"
 
     return ", ".join(sorted(farms))
 
 
+def build_bool_health_text(is_ok: bool, *, ok_text: str, bad_text: str) -> str:
+    return ok_text if bool(is_ok) else bad_text
+
+
+def build_farms_health_text(is_ok: bool, farms) -> str:
+    if bool(is_ok):
+        return "✅ все доступны"
+
+    return f"❌ недоступны: {build_farms_text(farms)}"
+
+
 def build_ib_health_text(ib_health):
-    """Что делает: собирает сводку health-флагов IB. Зачем нужна: используется в heartbeat и Telegram-status сообщениях."""
+    """Что делает: собирает человекочитаемую сводку health-флагов IB. Зачем нужна: используется в heartbeat и Telegram-status сообщениях."""
     return (
-        f"ib_backend_ok={ib_health.ib_backend_ok}, "
-        f"market_data_ok={ib_health.market_data_ok}, "
-        f"market_data_down_farms={build_farms_text(ib_health.market_data_down_farms)}, "
-        f"hmds_ok={ib_health.hmds_ok}, "
-        f"hmds_down_farms={build_farms_text(ib_health.hmds_down_farms)}"
+        "IB backend: "
+        f"{build_bool_health_text(ib_health.ib_backend_ok, ok_text='✅ доступен', bad_text='❌ недоступен')}\n"
+        f"Market data farms: {build_farms_health_text(ib_health.market_data_ok, ib_health.market_data_down_farms)}\n"
+        f"HMDS farms: {build_farms_health_text(ib_health.hmds_ok, ib_health.hmds_down_farms)}"
     )
 
 
