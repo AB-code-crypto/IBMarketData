@@ -71,6 +71,74 @@ def read_signal_event_snapshot(*, source_signal_id: int) -> dict | None:
         return None
 
 
+def read_latest_open_signal_event_for_close_intent(intent) -> dict | None:
+    # CLOSE_POSITION может иметь служебный source_signal_id=-1/-2/-3.
+    # Для PNG на закрытии берём signal_event исходного OPEN_POSITION.
+    if str(intent.action).upper() != "CLOSE_POSITION":
+        return None
+
+    try:
+        conn = get_trade_db_connection()
+        try:
+            row = conn.execute(
+                """
+                SELECT source_signal_id
+                FROM trade_intents
+                WHERE instrument_code = ?
+                  AND action = 'OPEN_POSITION'
+                  AND status = 'EXECUTED'
+                  AND trade_intent_id < ?
+                ORDER BY trade_intent_id DESC
+                LIMIT 1
+                """,
+                (
+                    str(intent.instrument_code),
+                    int(intent.trade_intent_id),
+                ),
+            ).fetchone()
+        finally:
+            conn.close()
+
+    except Exception:
+        return None
+
+    if row is None or row[0] is None:
+        return None
+
+    source_signal_id = int(row[0])
+
+    if source_signal_id <= 0:
+        return None
+
+    return read_signal_event_snapshot(source_signal_id=source_signal_id)
+
+
+def resolve_deal_signal_event(intent) -> dict | None:
+    if str(intent.action).upper() == "CLOSE_POSITION":
+        open_signal_event = read_latest_open_signal_event_for_close_intent(intent)
+
+        if open_signal_event is not None:
+            return open_signal_event
+
+    return read_signal_event_snapshot(
+        source_signal_id=int(intent.source_signal_id),
+    )
+
+
+def build_executed_deal_title(intent) -> str:
+    action = str(intent.action).upper()
+
+    if action == "OPEN_POSITION":
+        return "✅ Сделка открыта"
+
+    if action == "CLOSE_POSITION":
+        return "✅ Сделка закрыта"
+
+    if action == "REVERSE_POSITION":
+        return "✅ Реверс исполнен"
+
+    return "✅ Сделка исполнена"
+
 def build_executed_deal_caption(*, intent, result, signal_event: dict | None) -> str:
     signal_time_ct = signal_event.get("signal_time_ct") if signal_event else "n/a"
     signal_direction = signal_event.get("direction") if signal_event else "n/a"
@@ -87,7 +155,7 @@ def build_executed_deal_caption(*, intent, result, signal_event: dict | None) ->
     )
 
     return (
-        "✅ Сделка исполнена\n"
+        f"{build_executed_deal_title(intent)}\n"
         f"instrument: {intent.instrument_code}\n"
         f"trade_intent_id: {intent.trade_intent_id}\n"
         f"source_signal_id: {intent.source_signal_id}\n"
@@ -122,9 +190,7 @@ async def send_executed_deal_notification(
     if result.status != ExecutionStatus.EXECUTED:
         return
 
-    signal_event = read_signal_event_snapshot(
-        source_signal_id=intent.source_signal_id,
-    )
+    signal_event = resolve_deal_signal_event(intent)
     caption = build_executed_deal_caption(
         intent=intent,
         result=result,
