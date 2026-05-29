@@ -32,7 +32,6 @@ SIGNAL_RULES = {
     "neutral_regimes": [0],
 }
 
-
 SIGNAL_RULE_SETTINGS = {
     # Если True, без regime/ma_zone сигнал запрещается.
     "require_market_features": True,
@@ -51,10 +50,4 @@ SIGNAL_RULE_SETTINGS = {
     "default_order_type": "MARKET",
     "limit_order_type": "LIMIT",
 
-    # LONG  LIMIT = entry_price - offset
-    # SHORT LIMIT = entry_price + offset
-    "limit_offset_points": 30.0,
-
-    # Жизнь лимитника. Для futures execution дополнительно обрежет TTL перед 14:59:50 CT.
-    "limit_ttl_seconds": 600,
 }
