@@ -828,6 +828,71 @@ def get_slot_close_context(*, now_ts: int) -> dict | None:
     return None
 
 
+def get_slot_entry_context(*, now_ts: int) -> dict | None:
+    settings = DEFAULT_SIGNAL_CONFIG
+
+    if settings.signal_window_mode != SignalWindowMode.SLOT:
+        return None
+
+    slot_step_seconds = int(settings.slot_step_minutes) * 60
+    slot_back_seconds = int(settings.slot_back_minutes) * 60
+    slot_entry_seconds = int(settings.slot_entry_minutes) * 60
+    close_before_seconds = int(settings.slot_close_before_end_seconds)
+
+    if slot_step_seconds <= 0:
+        return None
+
+    if slot_back_seconds < 0 or slot_entry_seconds < 0:
+        return None
+
+    if close_before_seconds < 0 or close_before_seconds >= slot_step_seconds:
+        return None
+
+    if slot_back_seconds + slot_entry_seconds > slot_step_seconds:
+        return None
+
+    slot_start_ts = get_slot_start_ts(
+        current_bar_ts=int(now_ts),
+        slot_step_minutes=int(settings.slot_step_minutes),
+        slot_start_minute_of_day=int(settings.slot_start_minute_of_day),
+    )
+    slot_end_ts = int(slot_start_ts) + slot_step_seconds
+    entry_start_ts = int(slot_start_ts) + slot_back_seconds
+    entry_end_ts = entry_start_ts + slot_entry_seconds
+    close_at_ts = int(slot_end_ts) - close_before_seconds
+    entry_end_ts = min(entry_end_ts, close_at_ts)
+
+    if entry_start_ts <= int(now_ts) < entry_end_ts:
+        return {
+            "slot_start_ts": int(slot_start_ts),
+            "slot_end_ts": int(slot_end_ts),
+            "entry_start_ts": int(entry_start_ts),
+            "entry_end_ts": int(entry_end_ts),
+            "close_at_ts": int(close_at_ts),
+            "slot_back_seconds": int(slot_back_seconds),
+            "slot_entry_seconds": int(slot_entry_seconds),
+            "close_before_seconds": int(close_before_seconds),
+        }
+
+    return None
+
+
+def is_slot_entry_allowed_now(*, now_ts: int) -> bool:
+    settings = DEFAULT_SIGNAL_CONFIG
+
+    if settings.signal_window_mode != SignalWindowMode.SLOT:
+        return True
+
+    return get_slot_entry_context(now_ts=now_ts) is not None
+
+
+def is_risk_increasing_trade_action(action: TradeDecisionAction) -> bool:
+    return action in {
+        TradeDecisionAction.OPEN_POSITION,
+        TradeDecisionAction.REVERSE_POSITION,
+    }
+
+
 def build_slot_close_trade_intent_draft(
         *,
         position: PositionSnapshot,
@@ -1107,11 +1172,12 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> TradeProcessRe
             max_age_seconds=TRADER_MAX_NEW_INTENT_AGE_SECONDS,
         )
 
+        now_ts = int(time.time())
         created: list[TradeIntentCreated] = []
         rejected: list[TradeIntentRejected] = []
-        created.extend(process_futures_daily_flat_once(conn))
-        created.extend(process_slot_close_once(conn))
-        created.extend(process_extreme_ma_zone_close_once(conn))
+        created.extend(process_futures_daily_flat_once(conn, now_ts=now_ts))
+        created.extend(process_slot_close_once(conn, now_ts=now_ts))
+        created.extend(process_extreme_ma_zone_close_once(conn, now_ts=now_ts))
 
         for signal in signals:
             if has_trade_intent_for_signal(
@@ -1138,11 +1204,14 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> TradeProcessRe
             if draft is None:
                 continue
 
+            if is_risk_increasing_trade_action(draft.action) and not is_slot_entry_allowed_now(now_ts=now_ts):
+                continue
+
             if draft.action == TradeDecisionAction.OPEN_POSITION:
                 freshness = read_position_snapshot_freshness(
                     conn,
                     instrument_code=signal.instrument_code,
-                    now_ts=int(time.time()),
+                    now_ts=now_ts,
                 )
 
                 if freshness.is_stale:

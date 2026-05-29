@@ -77,6 +77,7 @@ def get_slot_due_bar_ts(
     slot_step_minutes: int,
     slot_start_minute_of_day: int,
     slot_back_minutes: int,
+    slot_entry_minutes: int,
     slot_close_before_end_seconds: int,
 ) -> int | None:
     """Что делает: возвращает последнюю допустимую SLOT-точку расчёта, покрытую job DB.
@@ -92,6 +93,11 @@ def get_slot_due_bar_ts(
             f"slot_back_minutes должен быть >= 0, получено: {slot_back_minutes}"
         )
 
+    if slot_entry_minutes < 0:
+        raise ValueError(
+            f"slot_entry_minutes должен быть >= 0, получено: {slot_entry_minutes}"
+        )
+
     if slot_close_before_end_seconds < 0:
         raise ValueError(
             "slot_close_before_end_seconds должен быть >= 0, "
@@ -99,10 +105,19 @@ def get_slot_due_bar_ts(
         )
 
     slot_step_seconds = slot_step_minutes * SECONDS_PER_MINUTE
+    slot_back_seconds = slot_back_minutes * SECONDS_PER_MINUTE
+    slot_entry_seconds = slot_entry_minutes * SECONDS_PER_MINUTE
+
     if slot_close_before_end_seconds >= slot_step_seconds:
         raise ValueError(
             "slot_close_before_end_seconds должен быть меньше длины слота: "
             f"close_before={slot_close_before_end_seconds}, slot_seconds={slot_step_seconds}"
+        )
+
+    if slot_back_seconds + slot_entry_seconds > slot_step_seconds:
+        raise ValueError(
+            "slot_back_minutes + slot_entry_minutes не должны превышать длину слота: "
+            f"back={slot_back_minutes}, entry={slot_entry_minutes}, slot={slot_step_minutes}"
         )
 
     slot_start_ts = get_slot_start_ts(
@@ -111,8 +126,10 @@ def get_slot_due_bar_ts(
         slot_start_minute_of_day=slot_start_minute_of_day,
     )
 
-    signal_start_ts = slot_start_ts + slot_back_minutes * SECONDS_PER_MINUTE
-    signal_end_ts = slot_start_ts + slot_step_seconds - slot_close_before_end_seconds
+    signal_start_ts = slot_start_ts + slot_back_seconds
+    signal_entry_end_ts = signal_start_ts + slot_entry_seconds
+    signal_close_end_ts = slot_start_ts + slot_step_seconds - slot_close_before_end_seconds
+    signal_end_ts = min(signal_entry_end_ts, signal_close_end_ts)
 
     if current_bar_ts < signal_start_ts:
         return None
@@ -153,6 +170,7 @@ def get_due_signal_bar_ts(
             slot_step_minutes=settings.slot_step_minutes,
             slot_start_minute_of_day=settings.slot_start_minute_of_day,
             slot_back_minutes=settings.slot_back_minutes,
+            slot_entry_minutes=settings.slot_entry_minutes,
             slot_close_before_end_seconds=settings.slot_close_before_end_seconds,
         )
 
