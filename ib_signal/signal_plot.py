@@ -112,7 +112,8 @@ def build_plot_path(
         f"{sanitize_filename_part(signal_bar_time_ct)}_CT.png"
     )
 
-    png_dir = output_dir or get_signal_png_dir()
+    base_dir = output_dir or get_signal_png_dir()
+    png_dir = Path(base_dir) / instrument_code.lower()
     png_dir.mkdir(parents=True, exist_ok=True)
 
     return png_dir / filename

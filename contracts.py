@@ -107,6 +107,7 @@ Instrument: Registry = {
         "db_filename": "EURUSD.sqlite3",
         "history_start_utc": "2025-09-22T01:00:00Z",
         "regression_flat_delta_threshold_bps": 2.0,
+        "regime_flat_delta_threshold_points": 0.00008,
     },
 
     "MES": {
@@ -246,5 +247,6 @@ Instrument: Registry = {
         "db_filename": "BTCUSD.sqlite3",
         "history_start_utc": "2025-09-15T01:00:00Z",
         "regression_flat_delta_threshold_bps": 10.0,
+        "regime_flat_delta_threshold_points": 10.0,
     },
 }
