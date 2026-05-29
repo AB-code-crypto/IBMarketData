@@ -23,7 +23,7 @@ DEFAULTS_DATA: InstrumentRow = {
     "mid_price_digits": 3,
     "regression_flat_delta_threshold_bps": 1.0,
     "regime_flat_delta_threshold_points": 1.0,
-    "order_price_tick": 0.25,
+    "price_tick": 0.25,
     "limit_offset_points": 30.0,
     "limit_ttl_seconds": 600,
 }
