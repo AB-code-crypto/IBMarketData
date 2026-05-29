@@ -196,10 +196,12 @@ def is_direction_allowed_by_regime(*, direction: str, regime: int | None) -> boo
 
 def choose_order_policy(
         *,
+        instrument_code: str,
         signal_time_ct: str | None,
         ma_zone: int | None,
 ) -> tuple[str, str, float | None, int | None]:
     settings = SIGNAL_RULE_SETTINGS
+    instrument_row = Instrument[str(instrument_code)]
     order_type = str(settings["default_order_type"]).upper()
     reasons: list[str] = []
 
@@ -220,8 +222,8 @@ def choose_order_policy(
         return (
             order_type,
             ",".join(reasons) if reasons else "limit_rule",
-            float(settings["limit_offset_points"]),
-            int(settings["limit_ttl_seconds"]),
+            float(instrument_row["limit_offset_points"]),
+            int(instrument_row["limit_ttl_seconds"]),
         )
 
     return order_type, "default_market", None, None
@@ -432,6 +434,7 @@ def interpret_signal_event(
     })
 
     order_type, order_policy_reason, limit_offset_points, ttl_seconds = choose_order_policy(
+        instrument_code=instrument_code,
         signal_time_ct=signal_time_ct,
         ma_zone=int(ma_zone),
     )
