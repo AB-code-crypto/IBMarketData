@@ -140,11 +140,11 @@ def build_executed_deal_title(intent) -> str:
     return "✅ Сделка исполнена"
 
 def resolve_deal_plot_path(intent, signal_event: dict | None):
-    # PNG отправляем только при открытии сделки.
+    # PNG отправляем при открытии и при реверсе сделки.
     # CLOSE_POSITION и прочие post-trade события идут текстом.
     action = str(intent.action).upper()
 
-    if action != "OPEN_POSITION":
+    if action not in {"OPEN_POSITION", "REVERSE_POSITION"}:
         return None
 
     if signal_event is None:
