@@ -2,9 +2,12 @@ import asyncio
 import sqlite3
 import time
 import traceback
+from decimal import Decimal, ROUND_FLOOR
 
 from core.logger import get_logger, log_info, log_warning, setup_logging
+from contracts import Instrument
 from core.state_db import STATE_DB_PATH
+from ib_execution.contract_resolver import build_execution_contract
 from ib_execution.execution_logic import execute_trade_intent
 from ib_execution.execution_models import ExecutionResult, ExecutionStatus
 from ib_execution.execution_store import (
@@ -14,6 +17,9 @@ from ib_execution.execution_store import (
     mark_trade_intent_sending,
     read_new_trade_intents,
     write_trade_intent_execution_result,
+    record_take_profit_order,
+    read_active_take_profit_orders,
+    mark_take_profit_order_status,
 )
 from ib_execution.order_service import OrderService
 from ib_signal.signal_event_store import SIGNAL_EVENTS_TABLE_NAME
@@ -26,6 +32,238 @@ EXECUTION_LOOP_SLEEP_SECONDS = 1
 NEW_INTENTS_LIMIT = 20
 MAX_NEW_INTENT_AGE_SECONDS = 10
 EXECUTION_HEARTBEAT_INTERVAL_SECONDS = 60
+
+TAKE_PROFIT_ORDER_REF_SUFFIX = "_TP"
+
+
+def get_take_profit_points(instrument_code: str) -> float:
+    instrument_row = Instrument.get(str(instrument_code))
+
+    if instrument_row is None:
+        return 0.0
+
+    return float(instrument_row.get("take_profit_points", 0.0) or 0.0)
+
+
+def normalize_price_to_tick_floor(*, price: Decimal, price_tick: Decimal) -> float:
+    if price_tick <= Decimal("0"):
+        raise ValueError(f"price_tick must be positive: {price_tick!r}")
+
+    steps = (price / price_tick).to_integral_value(rounding=ROUND_FLOOR)
+    return float(steps * price_tick)
+
+
+def calculate_take_profit_price(*, instrument_code: str, position_side: str, avg_fill_price: float) -> float | None:
+    instrument_row = Instrument.get(str(instrument_code))
+
+    if instrument_row is None:
+        return None
+
+    take_profit_points = Decimal(str(instrument_row.get("take_profit_points", 0.0) or 0.0))
+
+    if take_profit_points <= Decimal("0"):
+        return None
+
+    avg_fill_price_decimal = Decimal(str(avg_fill_price))
+    position_side = str(position_side).upper()
+
+    if position_side == "LONG":
+        raw_take_profit_price = avg_fill_price_decimal + take_profit_points
+
+    elif position_side == "SHORT":
+        raw_take_profit_price = avg_fill_price_decimal - take_profit_points
+
+    else:
+        return None
+
+    price_tick = Decimal(str(instrument_row.get("price_tick", 0.0) or 0.0))
+    return normalize_price_to_tick_floor(
+        price=raw_take_profit_price,
+        price_tick=price_tick,
+    )
+
+
+def get_take_profit_order_action(position_side: str) -> str | None:
+    position_side = str(position_side).upper()
+
+    if position_side == "LONG":
+        return "SELL"
+
+    if position_side == "SHORT":
+        return "BUY"
+
+    return None
+
+
+def get_take_profit_order_quantity(intent) -> int | None:
+    target_qty = float(intent.target_qty)
+
+    if target_qty <= 0.0:
+        return None
+
+    if target_qty != int(target_qty):
+        return None
+
+    return int(target_qty)
+
+
+def build_take_profit_order_ref(intent) -> str:
+    return f"{intent.order_ref}{TAKE_PROFIT_ORDER_REF_SUFFIX}"
+
+
+async def cancel_take_profit_orders_before_position_change(*, conn, order_service: OrderService, intent) -> None:
+    action = str(intent.action).upper()
+
+    # Перед OPEN_POSITION тоже чистим старые ACTIVE TP из прошлых запусков/сессий.
+    if action not in {"OPEN_POSITION", "CLOSE_POSITION", "REVERSE_POSITION"}:
+        return
+
+    instrument_code = str(intent.instrument_code)
+    active_orders = read_active_take_profit_orders(
+        conn,
+        instrument_code=instrument_code,
+    )
+
+    if not active_orders:
+        return
+
+    for active_order in active_orders:
+        order_id = int(active_order["order_id"])
+
+        try:
+            await order_service.cancel_order_id(order_id)
+            mark_take_profit_order_status(
+                conn,
+                order_id=order_id,
+                status="CANCELLED",
+                error_text=f"cancelled before {action}",
+            )
+            log_info(
+                logger,
+                f"{instrument_code}: take-profit order cancelled before {action}: order_id={order_id}",
+                to_telegram=False,
+            )
+
+        except Exception as exc:
+            mark_take_profit_order_status(
+                conn,
+                order_id=order_id,
+                status="ACTIVE",
+                error_text=f"cancel failed before {action}: {type(exc).__name__}: {exc}",
+            )
+            log_warning(
+                logger,
+                (
+                    f"{instrument_code}: take-profit cancel failed before {action}: "
+                    f"order_id={order_id}, {type(exc).__name__}: {exc}"
+                ),
+                to_telegram=False,
+            )
+
+
+async def place_take_profit_after_entry(*, conn, order_service: OrderService, intent, result) -> None:
+    if result.status != ExecutionStatus.EXECUTED:
+        return
+
+    action = str(intent.action).upper()
+
+    if action not in {"OPEN_POSITION", "REVERSE_POSITION"}:
+        return
+
+    if result.avg_fill_price is None:
+        return
+
+    instrument_code = str(intent.instrument_code)
+
+    if get_take_profit_points(instrument_code) <= 0.0:
+        return
+
+    target_side = str(intent.target_side).upper()
+    order_action = get_take_profit_order_action(target_side)
+
+    if order_action is None:
+        return
+
+    quantity = get_take_profit_order_quantity(intent)
+
+    if quantity is None:
+        log_warning(
+            logger,
+            (
+                f"{instrument_code}: take-profit skipped: unsupported target_qty={intent.target_qty!r} "
+                f"for trade_intent={intent.trade_intent_id}"
+            ),
+            to_telegram=False,
+        )
+        return
+
+    try:
+        take_profit_price = calculate_take_profit_price(
+            instrument_code=instrument_code,
+            position_side=target_side,
+            avg_fill_price=float(result.avg_fill_price),
+        )
+
+        if take_profit_price is None:
+            return
+
+        contract = build_execution_contract(instrument_code=instrument_code)
+        order_ref = build_take_profit_order_ref(intent)
+
+        if order_action == "BUY":
+            placement = await order_service.buy_limit(
+                contract=contract,
+                quantity=quantity,
+                limit_price=float(take_profit_price),
+                order_ref=order_ref,
+                ttl_seconds=None,
+                wait="none",
+            )
+
+        else:
+            placement = await order_service.sell_limit(
+                contract=contract,
+                quantity=quantity,
+                limit_price=float(take_profit_price),
+                order_ref=order_ref,
+                ttl_seconds=None,
+                wait="none",
+            )
+
+        order_id = int(placement.receipt.order_id)
+        record_take_profit_order(
+            conn,
+            instrument_code=instrument_code,
+            parent_trade_intent_id=int(intent.trade_intent_id),
+            order_ref=order_ref,
+            order_id=order_id,
+            order_action=order_action,
+            order_quantity=quantity,
+            take_profit_price=float(take_profit_price),
+        )
+
+        log_info(
+            logger,
+            (
+                f"{instrument_code}: take-profit order submitted: "
+                f"parent_trade_intent={intent.trade_intent_id}, "
+                f"order_id={order_id}, action={order_action}, qty={quantity}, "
+                f"price={take_profit_price}, order_ref={order_ref}"
+            ),
+            to_telegram=False,
+        )
+
+    except Exception as exc:
+        log_warning(
+            logger,
+            (
+                f"{instrument_code}: take-profit order submit failed: "
+                f"trade_intent={intent.trade_intent_id}, "
+                f"{type(exc).__name__}: {exc}"
+            ),
+            to_telegram=False,
+        )
+
 
 
 
@@ -349,6 +587,13 @@ async def run_execution_loop(
                     )
                     conn.commit()
 
+                await cancel_take_profit_orders_before_position_change(
+                    conn=conn,
+                    order_service=order_service,
+                    intent=intent,
+                )
+                conn.commit()
+
                 result = await execute_trade_intent(
                     order_service=order_service,
                     intent=intent,
@@ -356,6 +601,14 @@ async def run_execution_loop(
                 )
 
                 write_trade_intent_execution_result(conn, result=result)
+                conn.commit()
+
+                await place_take_profit_after_entry(
+                    conn=conn,
+                    order_service=order_service,
+                    intent=intent,
+                    result=result,
+                )
                 conn.commit()
 
                 log_info(

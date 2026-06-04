@@ -26,6 +26,7 @@ DEFAULTS_DATA: InstrumentRow = {
     "price_tick": 0.25,
     "limit_offset_points": 30.0,
     "limit_ttl_seconds": 600,
+    "take_profit_points": 100.0,
 }
 
 FUT_DEFAULTS: InstrumentRow = {
