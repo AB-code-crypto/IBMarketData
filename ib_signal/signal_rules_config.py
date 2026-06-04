@@ -6,10 +6,10 @@
 
 SIGNAL_RULES = {
     # LONG разрешён, если цена в зоне +1 или ниже.
-    "long_allowed_ma_zones": [-4, -3, -2, -1, 0, 1, 2, 3, 4],
+    "long_allowed_ma_zones": [-4, -3, -2, -1, 0, 1],
 
     # SHORT разрешён, если цена в зоне -1 или выше.
-    "short_allowed_ma_zones": [-4, -3, -2, -1, 0, 1, 2, 3, 4],
+    "short_allowed_ma_zones": [-1, 0, 1, 2, 3, 4],
 
     # В этих зонах вход только лимитным ордером.
     "limit_order_ma_zones": [-4, 4],
@@ -42,7 +42,7 @@ SIGNAL_RULE_SETTINGS = {
 
     # ALLOW — не запрещать сигналы против текущего regime.
     # REJECT — LONG разрешён только при regime=+1 или 0, SHORT только при regime=-1 или 0.
-    "regime_direction_policy": "ALLOW",
+    "regime_direction_policy": "REJECT",
 
     # Если True, открытая позиция закрывается при попадании цены в экстремальную MA-зону.
     "close_position_on_extreme_ma_zone_enabled": True,
