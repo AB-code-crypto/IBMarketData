@@ -42,10 +42,10 @@ SIGNAL_RULE_SETTINGS = {
 
     # ALLOW — не запрещать сигналы против текущего regime.
     # REJECT — LONG разрешён только при regime=+1 или 0, SHORT только при regime=-1 или 0.
-    "regime_direction_policy": "REJECT",
+    "regime_direction_policy": "ALLOW",
 
     # Если True, открытая позиция закрывается при попадании цены в экстремальную MA-зону.
-    "close_position_on_extreme_ma_zone_enabled": True,
+    "close_position_on_extreme_ma_zone_enabled": False,
 
     "default_order_type": "MARKET",
     "limit_order_type": "LIMIT",
