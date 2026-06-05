@@ -23,25 +23,22 @@ REGIME_FLAT_DELTA_THRESHOLD_POINTS_KEY = "regime_flat_delta_threshold_points"
 
 
 # MA-zone строится вокруг рабочей SMA600.
-# Логика адаптирована из IBP_MA_Zones.mq5:
-# rolling percentile отклонений high/low от SMA, затем деление диапазона на 3 зоны.
+# Диапазон зон симметричный: один общий rolling percentile положительных отклонений
+# high/low от SMA, затем этот диапазон зеркально откладывается вверх и вниз от SMA.
+# Это убирает слипание одной стороны зон в затяжном тренде.
 
 # Аналог InpRangeLookbackBars=200 на M1:
 # 200 минут * 60 секунд / 5 секунд = 2400 5-секундных баров.
 MA_ZONE_RANGE_LOOKBACK_BARS = 2400
 
 # Аналог InpRangePercentile.
-# 95.0 означает: игнорируем редкие экстремальные выносы.
+# 95.0 означает: ширина зон задаётся типичным диапазоном отклонений,
+# а редкие экстремальные выносы не раздувают шкалу.
 MA_ZONE_RANGE_PERCENTILE = 95.0
 
 # Аналог InpLevel1Percent / InpLevel2Percent.
 MA_ZONE_LEVEL1_PERCENT = 33.333333
 MA_ZONE_LEVEL2_PERCENT = 66.666667
-
-# Поддерживаются:
-#   "HIGH_LOW" — верхняя зона по mid_high, нижняя по mid_low;
-#   "CLOSE"    — обе стороны по mid_close.
-MA_ZONE_RANGE_SOURCE = "HIGH_LOW"
 
 # Значения:
 #   4  above upper_far boundary / повышенный вынос
@@ -55,6 +52,8 @@ MA_ZONE_RANGE_SOURCE = "HIGH_LOW"
 #  -4  below lower_far boundary / повышенный вынос
 MA_ZONE_COLUMN_NAME = "ma_zone"
 
-# Эти две колонки нужны только для отрисовки границ зон на PNG.
+# Эти две колонки исторически использовались для раздельных upper/lower диапазонов на PNG.
+# Сейчас диапазон один и симметричный, поэтому ma_zone_features пишет одинаковое значение в обе колонки.
+# Колонки оставлены, чтобы не ломать существующую схему job DB и signal_plot-reader.
 MA_ZONE_UPPER_RANGE_COLUMN_NAME = "ma_zone_upper_range_points"
 MA_ZONE_LOWER_RANGE_COLUMN_NAME = "ma_zone_lower_range_points"
