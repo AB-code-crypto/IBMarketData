@@ -68,7 +68,7 @@ Instrument: Registry = {
         "realtime_enabled": True,
         "trading_enabled": True,
         "regression_flat_delta_threshold_bps": 3.0,
-        "take_profit_points": 90.0,
+        "take_profit_points": 75.0,
         "contracts": [
             {"conId": 620730945, "localSymbol": "MNQM4", "lastTradeDateOrContractMonth": "20240621",
              "active_from_utc": "2024-03-13T22:00:00Z", "active_to_utc": "2024-06-19T17:00:00Z"},
@@ -125,6 +125,7 @@ Instrument: Registry = {
         "trading_enabled": True,
         "regime_flat_delta_threshold_points": 0.4,
         "take_profit_points": 35.0,
+        "limit_offset_points": 10.0,
         "contracts": [
             {"conId": 620731036, "localSymbol": "MESM4", "lastTradeDateOrContractMonth": "20240621",
              "active_from_utc": "2024-03-13T22:00:00Z", "active_to_utc": "2024-06-19T17:00:00Z"},
