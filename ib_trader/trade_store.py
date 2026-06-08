@@ -112,6 +112,10 @@ def create_trade_intents_table_sql() -> str:
         signal_time_utc TEXT NOT NULL,
         signal_time_ct TEXT NOT NULL,
         signal_time_msk TEXT NOT NULL,
+
+        entry_regime INTEGER,
+        entry_ma_zone INTEGER,
+
         intent_source TEXT NOT NULL,
 
         action TEXT NOT NULL,
@@ -579,6 +583,13 @@ def write_trade_intent(conn, draft: TradeIntentDraft) -> int:
         int(draft.signal_bar_ts),
     )
 
+    if draft.action in {TradeDecisionAction.OPEN_POSITION, TradeDecisionAction.REVERSE_POSITION}:
+        entry_regime = draft.regime
+        entry_ma_zone = draft.ma_zone
+    else:
+        entry_regime = None
+        entry_ma_zone = None
+
     conn.execute(
         f"""
         INSERT INTO {TRADE_INTENTS_TABLE_NAME} (
@@ -588,6 +599,10 @@ def write_trade_intent(conn, draft: TradeIntentDraft) -> int:
             signal_time_utc,
             signal_time_ct,
             signal_time_msk,
+
+            entry_regime,
+            entry_ma_zone,
+
             intent_source,
 
             action,
@@ -609,7 +624,7 @@ def write_trade_intent(conn, draft: TradeIntentDraft) -> int:
             created_at_ts,
             updated_at_ts
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
         ON CONFLICT (
             instrument_code,
@@ -625,6 +640,8 @@ def write_trade_intent(conn, draft: TradeIntentDraft) -> int:
             signal_time_utc,
             signal_time_ct,
             signal_time_msk,
+            entry_regime,
+            entry_ma_zone,
             draft.intent_source,
             draft.action.value,
             draft.reason,
