@@ -22,6 +22,7 @@ from ib_execution.execution_store import (
     mark_take_profit_order_status,
 )
 from ib_execution.order_service import OrderService
+from ib_execution.take_profit_reconciliation import reconcile_take_profit_orders_once
 from ib_signal.signal_event_store import SIGNAL_EVENTS_TABLE_NAME
 from ib_signal.signal_plot import build_plot_path
 
@@ -564,6 +565,34 @@ async def run_execution_loop(
     next_heartbeat_ts = int(time.time()) + EXECUTION_HEARTBEAT_INTERVAL_SECONDS
 
     while True:
+        try:
+            reconciled_take_profits = await reconcile_take_profit_orders_once(
+                order_service=order_service,
+            )
+
+            for reconciled_take_profit in reconciled_take_profits:
+                log_info(
+                    logger,
+                    (
+                        f"{reconciled_take_profit['instrument_code']}: "
+                        f"take-profit {reconciled_take_profit['event'].lower()}: "
+                        f"order_id={reconciled_take_profit['order_id']}, "
+                        f"parent_trade_intent_id={reconciled_take_profit['parent_trade_intent_id']}, "
+                        f"synthetic_trade_intent_id={reconciled_take_profit['synthetic_trade_intent_id']}, "
+                        f"filled_qty={reconciled_take_profit['filled_qty']}, "
+                        f"avg_fill={reconciled_take_profit['avg_fill_price']}, "
+                        f"realized_pnl={reconciled_take_profit['realized_pnl']}"
+                    ),
+                    to_telegram=False,
+                )
+
+        except Exception as exc:
+            log_warning(
+                logger,
+                f"take-profit reconciliation failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
+                to_telegram=True,
+            )
+
         intents = read_new_trade_intents(
             limit=NEW_INTENTS_LIMIT,
             max_age_seconds=MAX_NEW_INTENT_AGE_SECONDS,
