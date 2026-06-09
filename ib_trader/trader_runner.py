@@ -29,7 +29,7 @@ def format_rejected_trade_intent(rejected) -> str:
     updated_at_utc_text = rejected.positions_latest_updated_at_utc or "missing"
 
     return (
-        "❌ POSITION SNAPSHOT STALE: сделка не будет открыта\n"
+        "❌ POSITION SNAPSHOT STALE: trade_intent не будет создан\n"
         f"instrument: {rejected.instrument_code}\n"
         f"source_signal_id: {rejected.source_signal_id}\n"
         f"signal_time_utc: {rejected.signal_time_utc}\n"

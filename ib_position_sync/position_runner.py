@@ -11,6 +11,11 @@ logger = get_logger(__name__)
 POSITION_SYNC_LOOP_SLEEP_SECONDS = 1
 POSITION_SYNC_HEARTBEAT_INTERVAL_SECONDS = 60
 
+# reqPositionsAsync иногда зависает после IB reconnect без исключения.
+# Таймаут не даёт position_sync-loop умереть молча, пока IB heartbeat продолжает писать alive.
+POSITION_SYNC_REQUEST_TIMEOUT_SECONDS = 10
+POSITION_SYNC_ERROR_REPORT_INTERVAL_SECONDS = 60
+
 
 def format_snapshot_for_log(snapshot) -> str:
     return (
@@ -31,11 +36,17 @@ async def run_position_sync_loop(ib) -> None:
     )
 
     last_seen: dict[str, tuple[str, float]] = {}
+    last_success_ts: int | None = None
+    last_error_report_ts = 0
     next_heartbeat_ts = int(time.time()) + POSITION_SYNC_HEARTBEAT_INTERVAL_SECONDS
 
     while True:
         try:
-            snapshots = await sync_broker_positions_once(ib)
+            snapshots = await asyncio.wait_for(
+                sync_broker_positions_once(ib),
+                timeout=float(POSITION_SYNC_REQUEST_TIMEOUT_SECONDS),
+            )
+            last_success_ts = int(time.time())
 
             for snapshot in snapshots:
                 key = snapshot.instrument_code
@@ -50,12 +61,19 @@ async def run_position_sync_loop(ib) -> None:
                     last_seen[key] = value
 
         except Exception as exc:
-            log_warning(
-                logger,
-                f"ib_position_sync: ошибка синхронизации позиций: {exc}\n"
-                f"{traceback.format_exc()}",
-                to_telegram=True,
-            )
+            now_ts = int(time.time())
+
+            if now_ts - last_error_report_ts >= POSITION_SYNC_ERROR_REPORT_INTERVAL_SECONDS:
+                log_warning(
+                    logger,
+                    (
+                        f"ib_position_sync: ошибка/таймаут синхронизации позиций: "
+                        f"{type(exc).__name__}: {exc}\n"
+                        f"{traceback.format_exc()}"
+                    ),
+                    to_telegram=True,
+                )
+                last_error_report_ts = now_ts
 
         now_ts = int(time.time())
         if now_ts >= next_heartbeat_ts:
@@ -63,9 +81,19 @@ async def run_position_sync_loop(ib) -> None:
                 f"{instrument_code}={side}/{quantity:g}"
                 for instrument_code, (side, quantity) in sorted(last_seen.items())
             ) or "none"
+            last_success_age_text = (
+                "never"
+                if last_success_ts is None
+                else f"{max(0, now_ts - last_success_ts)}s"
+            )
             log_info(
                 logger,
-                f"ib_position_sync heartbeat: alive, positions={positions_text}",
+                (
+                    "ib_position_sync heartbeat: alive, "
+                    f"positions={positions_text}, "
+                    f"last_success_age={last_success_age_text}, "
+                    f"request_timeout={POSITION_SYNC_REQUEST_TIMEOUT_SECONDS}s"
+                ),
                 to_telegram=False,
             )
             next_heartbeat_ts = now_ts + POSITION_SYNC_HEARTBEAT_INTERVAL_SECONDS

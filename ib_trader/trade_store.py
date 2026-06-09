@@ -46,7 +46,7 @@ FUTURES_CLEARING_HOUR_CT = 16
 
 TRADER_MAX_NEW_INTENT_AGE_SECONDS = 10
 STALE_NEW_INTENT_ERROR_TEXT = "stale trade_intent before trader decision"
-POSITION_SNAPSHOT_MAX_AGE_SECONDS = 5
+POSITION_SNAPSHOT_MAX_AGE_SECONDS = 10
 
 
 
@@ -428,7 +428,7 @@ def build_stale_position_open_rejected_event(
         signal_time_utc=signal.signal_time_utc,
         signal_time_ct=signal.signal_time_ct,
         signal_time_msk=signal.signal_time_msk,
-        reason="positions_latest_stale_open_rejected",
+        reason="positions_latest_stale_trade_rejected",
         action=draft.action,
         signal_direction=draft.signal_direction,
         order_type=draft.order_type,
@@ -1206,6 +1206,11 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> TradeProcessRe
                 continue
 
             position = read_position_snapshot(conn, instrument_code=signal.instrument_code)
+            freshness = read_position_snapshot_freshness(
+                conn,
+                instrument_code=signal.instrument_code,
+                now_ts=now_ts,
+            )
 
             if has_unresolved_trade_intent_for_instrument(
                     conn,
@@ -1221,26 +1226,21 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> TradeProcessRe
             if draft is None:
                 continue
 
-            if is_risk_increasing_trade_action(draft.action) and not is_slot_entry_allowed_now(now_ts=now_ts):
+            # Нельзя доверять ни FLAT, ни LONG/SHORT, если positions_latest протухла.
+            # Иначе можно не только пропустить вход, но и открыть фантомный reverse по старой позиции.
+            if freshness.is_stale:
+                rejected.append(
+                    build_stale_position_open_rejected_event(
+                        signal=signal,
+                        position=position,
+                        freshness=freshness,
+                        draft=draft,
+                    )
+                )
                 continue
 
-            if draft.action == TradeDecisionAction.OPEN_POSITION:
-                freshness = read_position_snapshot_freshness(
-                    conn,
-                    instrument_code=signal.instrument_code,
-                    now_ts=now_ts,
-                )
-
-                if freshness.is_stale:
-                    rejected.append(
-                        build_stale_position_open_rejected_event(
-                            signal=signal,
-                            position=position,
-                            freshness=freshness,
-                            draft=draft,
-                        )
-                    )
-                    continue
+            if is_risk_increasing_trade_action(draft.action) and not is_slot_entry_allowed_now(now_ts=now_ts):
+                continue
 
             created.append(write_trade_intent_and_event(conn, draft))
 
