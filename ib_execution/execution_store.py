@@ -40,8 +40,48 @@ def create_take_profit_orders_table_sql() -> str:
     """
 
 
+def table_columns(conn, table_name: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {str(row[1]) for row in rows}
+
+
+def ensure_table_column(conn, *, table_name: str, column_name: str, column_sql: str) -> None:
+    if column_name in table_columns(conn, table_name):
+        return
+
+    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}")
+
+
+def ensure_trade_intents_cancel_request_columns(conn) -> None:
+    ensure_table_column(
+        conn,
+        table_name=TRADE_INTENTS_TABLE_NAME,
+        column_name="cancel_requested",
+        column_sql="cancel_requested INTEGER NOT NULL DEFAULT 0",
+    )
+    ensure_table_column(
+        conn,
+        table_name=TRADE_INTENTS_TABLE_NAME,
+        column_name="cancel_reason",
+        column_sql="cancel_reason TEXT",
+    )
+    ensure_table_column(
+        conn,
+        table_name=TRADE_INTENTS_TABLE_NAME,
+        column_name="cancel_source_signal_id",
+        column_sql="cancel_source_signal_id INTEGER",
+    )
+    ensure_table_column(
+        conn,
+        table_name=TRADE_INTENTS_TABLE_NAME,
+        column_name="cancel_requested_at_ts",
+        column_sql="cancel_requested_at_ts INTEGER",
+    )
+
+
 def initialize_execution_db(conn) -> None:
     initialize_trade_db(conn)
+    ensure_trade_intents_cancel_request_columns(conn)
     conn.execute(create_take_profit_orders_table_sql())
     conn.execute(
         f"""
@@ -290,6 +330,37 @@ def expire_stale_active_trade_intents(
     return int(conn.total_changes - changes_before)
 
 
+def read_trade_intent_cancel_request(conn, *, trade_intent_id: int) -> dict | None:
+    ensure_trade_intents_cancel_request_columns(conn)
+
+    row = conn.execute(
+        f"""
+        SELECT
+            trade_intent_id,
+            cancel_requested,
+            cancel_reason,
+            cancel_source_signal_id,
+            cancel_requested_at_ts
+        FROM {TRADE_INTENTS_TABLE_NAME}
+        WHERE trade_intent_id = ?
+          AND COALESCE(cancel_requested, 0) = 1
+        LIMIT 1
+        """,
+        (int(trade_intent_id),),
+    ).fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "trade_intent_id": int(row[0]),
+        "cancel_requested": bool(int(row[1] or 0)),
+        "cancel_reason": None if row[2] is None else str(row[2]),
+        "cancel_source_signal_id": None if row[3] is None else int(row[3]),
+        "cancel_requested_at_ts": None if row[4] is None else int(row[4]),
+    }
+
+
 def read_new_trade_intents(*, limit: int = 20, max_age_seconds: int = 10) -> list[TradeIntent]:
     conn = get_trade_db_connection()
 
@@ -336,6 +407,7 @@ def read_new_trade_intents(*, limit: int = 20, max_age_seconds: int = 10) -> lis
                 created_at_ts
             FROM {TRADE_INTENTS_TABLE_NAME}
             WHERE status = 'NEW'
+              AND COALESCE(cancel_requested, 0) = 0
               AND created_at_ts >= ?
             ORDER BY created_at_ts ASC, trade_intent_id ASC
             LIMIT ?

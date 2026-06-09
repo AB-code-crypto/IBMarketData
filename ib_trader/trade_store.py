@@ -134,6 +134,11 @@ def create_trade_intents_table_sql() -> str:
 
         status TEXT NOT NULL,
 
+        cancel_requested INTEGER NOT NULL DEFAULT 0,
+        cancel_reason TEXT,
+        cancel_source_signal_id INTEGER,
+        cancel_requested_at_ts INTEGER,
+
         order_ref TEXT,
         order_id INTEGER,
         order_action TEXT,
@@ -158,9 +163,61 @@ def create_trade_intents_table_sql() -> str:
     """
 
 
+def table_columns(conn, table_name: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {str(row[1]) for row in rows}
+
+
+def ensure_table_column(conn, *, table_name: str, column_name: str, column_sql: str) -> None:
+    if column_name in table_columns(conn, table_name):
+        return
+
+    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}")
+
+
+def ensure_trade_intents_runtime_columns(conn) -> None:
+    ensure_table_column(
+        conn,
+        table_name=TRADE_INTENTS_TABLE_NAME,
+        column_name="entry_regime",
+        column_sql="entry_regime INTEGER",
+    )
+    ensure_table_column(
+        conn,
+        table_name=TRADE_INTENTS_TABLE_NAME,
+        column_name="entry_ma_zone",
+        column_sql="entry_ma_zone INTEGER",
+    )
+    ensure_table_column(
+        conn,
+        table_name=TRADE_INTENTS_TABLE_NAME,
+        column_name="cancel_requested",
+        column_sql="cancel_requested INTEGER NOT NULL DEFAULT 0",
+    )
+    ensure_table_column(
+        conn,
+        table_name=TRADE_INTENTS_TABLE_NAME,
+        column_name="cancel_reason",
+        column_sql="cancel_reason TEXT",
+    )
+    ensure_table_column(
+        conn,
+        table_name=TRADE_INTENTS_TABLE_NAME,
+        column_name="cancel_source_signal_id",
+        column_sql="cancel_source_signal_id INTEGER",
+    )
+    ensure_table_column(
+        conn,
+        table_name=TRADE_INTENTS_TABLE_NAME,
+        column_name="cancel_requested_at_ts",
+        column_sql="cancel_requested_at_ts INTEGER",
+    )
+
+
 def initialize_trade_db(conn) -> None:
     conn.execute(create_positions_latest_table_sql())
     conn.execute(create_trade_intents_table_sql())
+    ensure_trade_intents_runtime_columns(conn)
 
     conn.execute(
         f"""
@@ -569,6 +626,133 @@ def has_trade_intent_for_signal(
 
     return row is not None
 
+
+
+def read_pending_entry_limit_intent_for_opposite_signal(conn, *, signal: TraderSignalEvent) -> dict | None:
+    signal_direction = str(signal.direction).upper()
+
+    if signal_direction not in {"LONG", "SHORT"}:
+        return None
+
+    row = conn.execute(
+        f"""
+        SELECT
+            trade_intent_id,
+            instrument_code,
+            source_signal_id,
+            signal_bar_ts,
+            action,
+            target_side,
+            target_qty,
+            order_type,
+            status,
+            order_id,
+            order_action,
+            order_quantity,
+            cancel_requested
+        FROM {TRADE_INTENTS_TABLE_NAME}
+        WHERE instrument_code = ?
+          AND action = 'OPEN_POSITION'
+          AND order_type = 'LIMIT'
+          AND status IN ('NEW', 'SENDING', 'ACCEPTED')
+          AND target_side != ?
+        ORDER BY trade_intent_id DESC
+        LIMIT 1
+        """,
+        (
+            str(signal.instrument_code),
+            signal_direction,
+        ),
+    ).fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "trade_intent_id": int(row[0]),
+        "instrument_code": str(row[1]),
+        "source_signal_id": int(row[2]),
+        "signal_bar_ts": int(row[3]),
+        "action": str(row[4]),
+        "target_side": str(row[5]),
+        "target_qty": float(row[6]),
+        "order_type": str(row[7]),
+        "status": str(row[8]),
+        "order_id": None if row[9] is None else int(row[9]),
+        "order_action": None if row[10] is None else str(row[10]),
+        "order_quantity": None if row[11] is None else int(row[11]),
+        "cancel_requested": bool(int(row[12] or 0)),
+    }
+
+
+def request_cancel_pending_entry_limit_for_opposite_signal(conn, *, signal: TraderSignalEvent) -> dict | None:
+    pending_intent = read_pending_entry_limit_intent_for_opposite_signal(
+        conn,
+        signal=signal,
+    )
+
+    if pending_intent is None:
+        return None
+
+    now_ts = int(time.time())
+    reason = (
+        f"cancel pending LIMIT entry by opposite signal: "
+        f"source_signal_id={signal.source_signal_id}, "
+        f"direction={signal.direction}"
+    )
+
+    if pending_intent["status"] == "NEW":
+        conn.execute(
+            f"""
+            UPDATE {TRADE_INTENTS_TABLE_NAME}
+            SET
+                status = 'CANCELLED',
+                cancel_requested = 1,
+                cancel_reason = ?,
+                cancel_source_signal_id = ?,
+                cancel_requested_at_ts = ?,
+                error_text = ?,
+                updated_at_ts = ?,
+                finished_at_ts = ?
+            WHERE trade_intent_id = ?
+              AND status = 'NEW'
+            """,
+            (
+                reason,
+                int(signal.source_signal_id),
+                now_ts,
+                reason,
+                now_ts,
+                now_ts,
+                int(pending_intent["trade_intent_id"]),
+            ),
+        )
+
+    else:
+        conn.execute(
+            f"""
+            UPDATE {TRADE_INTENTS_TABLE_NAME}
+            SET
+                cancel_requested = 1,
+                cancel_reason = ?,
+                cancel_source_signal_id = ?,
+                cancel_requested_at_ts = ?,
+                updated_at_ts = ?
+            WHERE trade_intent_id = ?
+              AND status IN ('SENDING', 'ACCEPTED')
+            """,
+            (
+                reason,
+                int(signal.source_signal_id),
+                now_ts,
+                now_ts,
+                int(pending_intent["trade_intent_id"]),
+            ),
+        )
+
+    pending_intent["cancel_reason"] = reason
+    pending_intent["cancel_source_signal_id"] = int(signal.source_signal_id)
+    return pending_intent
 
 
 def build_trade_order_ref(*, trade_intent_id: int, instrument_code: str) -> str:
@@ -1211,6 +1395,15 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> TradeProcessRe
                 instrument_code=signal.instrument_code,
                 now_ts=now_ts,
             )
+
+            # Если позиции ещё нет, но висит LIMIT-вход в противоположную сторону,
+            # новый сигнал важнее старого лимитника: просим execution отменить pending order.
+            cancelled_pending_limit = request_cancel_pending_entry_limit_for_opposite_signal(
+                conn,
+                signal=signal,
+            )
+            if cancelled_pending_limit is not None:
+                continue
 
             if has_unresolved_trade_intent_for_instrument(
                     conn,
