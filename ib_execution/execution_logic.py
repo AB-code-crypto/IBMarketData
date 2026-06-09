@@ -356,9 +356,6 @@ async def wait_for_limit_done_or_cancel(
         )
         return done, cancel_request
 
-        if loop_time() >= deadline:
-            return last_done, cancel_request
-
 
 async def execute_limit_intent(
         *,

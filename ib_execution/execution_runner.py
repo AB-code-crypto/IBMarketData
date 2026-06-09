@@ -9,7 +9,7 @@ from contracts import Instrument
 from core.state_db import STATE_DB_PATH
 from ib_execution.contract_resolver import build_execution_contract
 from ib_execution.execution_logic import execute_trade_intent
-from ib_execution.execution_models import ExecutionResult, ExecutionStatus
+from ib_execution.execution_models import ExecutionResult, ExecutionStatus, TradeIntent
 from ib_execution.execution_store import (
     get_trade_db_connection,
     initialize_execution_db,
@@ -545,6 +545,93 @@ async def send_deal_status_notification(
     )
 
 
+def read_executed_trade_intent_and_result_for_notification(*, trade_intent_id: int):
+    conn = get_trade_db_connection()
+
+    try:
+        initialize_execution_db(conn)
+
+        row = conn.execute(
+            """
+            SELECT
+                trade_intent_id,
+                source_signal_id,
+                instrument_code,
+                order_ref,
+
+                action,
+                target_side,
+                target_qty,
+
+                position_before_side,
+                position_before_qty,
+
+                order_type,
+                limit_price,
+                limit_offset_points,
+                ttl_seconds,
+
+                status,
+                created_at_ts,
+
+                order_id,
+                order_action,
+                order_quantity,
+                avg_fill_price,
+                total_commission,
+                realized_pnl,
+                error_text
+            FROM trade_intents
+            WHERE trade_intent_id = ?
+            LIMIT 1
+            """,
+            (int(trade_intent_id),),
+        ).fetchone()
+
+        if row is None:
+            return None, None
+
+        status_value = str(row[13]).upper()
+
+        if status_value != ExecutionStatus.EXECUTED.value:
+            return None, None
+
+        intent = TradeIntent(
+            trade_intent_id=int(row[0]),
+            source_signal_id=int(row[1]),
+            instrument_code=str(row[2]),
+            order_ref=str(row[3] or ""),
+            action=str(row[4]),
+            target_side=str(row[5]),
+            target_qty=float(row[6]),
+            position_before_side=str(row[7]),
+            position_before_qty=float(row[8]),
+            order_type=str(row[9]).upper(),
+            limit_price=None if row[10] is None else float(row[10]),
+            limit_offset_points=None if row[11] is None else float(row[11]),
+            ttl_seconds=None if row[12] is None else int(row[12]),
+            status=status_value,
+            created_at_ts=int(row[14]),
+        )
+
+        result = ExecutionResult(
+            trade_intent_id=int(row[0]),
+            order_id=None if row[15] is None else int(row[15]),
+            order_action=None if row[16] is None else str(row[16]),
+            order_quantity=None if row[17] is None else int(row[17]),
+            status=ExecutionStatus.EXECUTED,
+            avg_fill_price=None if row[18] is None else float(row[18]),
+            total_commission=None if row[19] is None else float(row[19]),
+            realized_pnl=None if row[20] is None else float(row[20]),
+            error_text=None if row[21] is None else str(row[21]),
+        )
+
+        return intent, result
+
+    finally:
+        conn.close()
+
+
 async def run_execution_loop(
         order_service: OrderService,
         *,
@@ -585,6 +672,40 @@ async def run_execution_loop(
                     ),
                     to_telegram=False,
                 )
+
+                if str(reconciled_take_profit.get("event", "")).upper() != "FILLED":
+                    continue
+
+                synthetic_trade_intent_id = reconciled_take_profit.get("synthetic_trade_intent_id")
+
+                if synthetic_trade_intent_id is None:
+                    continue
+
+                try:
+                    synthetic_intent, synthetic_result = read_executed_trade_intent_and_result_for_notification(
+                        trade_intent_id=int(synthetic_trade_intent_id),
+                    )
+
+                    if synthetic_intent is None or synthetic_result is None:
+                        continue
+
+                    await send_executed_deal_notification(
+                        telegram_sender=deal_telegram_sender,
+                        message_thread_id=deal_message_thread_id,
+                        intent=synthetic_intent,
+                        result=synthetic_result,
+                    )
+
+                except Exception as notification_exc:
+                    log_warning(
+                        logger,
+                        (
+                            f"take-profit deal notification failed "
+                            f"synthetic_trade_intent_id={synthetic_trade_intent_id}: "
+                            f"{type(notification_exc).__name__}: {notification_exc}"
+                        ),
+                        to_telegram=True,
+                    )
 
         except Exception as exc:
             log_warning(
