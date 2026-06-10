@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -43,8 +45,14 @@ SLOT_CLOSE_RECOVERY_INTENT_SOURCE = "SLOT_CLOSE_RECOVERY"
 SLOT_CLOSE_RECOVERY_REASON = "slot_close_recovery_after_execution_restart"
 SLOT_CLOSE_RECOVERY_SIGNAL_STRENGTH = "SLOT_CLOSE_RECOVERY"
 
+# Важно: sync_broker_positions_once() возвращает только trading_enabled instruments из contracts.
+# Поэтому открытая broker-position из этого списка считается позицией нашего робота/счёта.
+CLOSE_CONFIGURED_BROKER_POSITIONS_WITHOUT_DB_ENTRY = True
+CLOSE_CONFIGURED_BROKER_POSITIONS_ON_DB_MISMATCH = True
+
 TAKE_PROFIT_ORDER_REF_SUFFIX = "_TP"
 EXECUTION_NEW_INTENT_MAX_AGE_SECONDS = 10
+OPEN_ORDER_REFRESH_SETTLE_SECONDS = 0.25
 
 
 @dataclass(frozen=True)
@@ -105,11 +113,7 @@ def get_slot_context_for_ts(*, signal_bar_ts: int) -> dict[str, Any] | None:
 
 
 def read_latest_executed_position_intent(conn, *, instrument_code: str) -> dict[str, Any] | None:
-    """Возвращает последнее EXECUTED-событие, которое меняло позицию по инструменту.
-
-    Если последнее событие — CLOSE_POSITION, recovery не закрывает позицию автоматически:
-    это уже mismatch между брокером и нашей БД, и его нельзя лечить слепым market-ордером.
-    """
+    """Возвращает последнее EXECUTED-событие, которое меняло позицию по инструменту."""
 
     row = conn.execute(
         f"""
@@ -274,6 +278,52 @@ def expire_stale_execution_intents(conn, *, now_ts: int) -> None:
     )
 
 
+async def refresh_open_orders_for_recovery(order_service: OrderService) -> tuple[bool, str | None]:
+    """Принудительно обновляет open orders перед решением, что TP точно нет.
+
+    Если refresh не удался, market-close делать нельзя: скрытый TP может остаться у брокера
+    и после закрытия позиции открыть обратную сделку.
+    """
+
+    ib = order_service.ib
+    errors: list[str] = []
+
+    for method_name in ("reqAllOpenOrdersAsync", "reqOpenOrdersAsync"):
+        method = getattr(ib, method_name, None)
+
+        if method is None:
+            continue
+
+        try:
+            await method()
+            await asyncio.sleep(float(OPEN_ORDER_REFRESH_SETTLE_SECONDS))
+            return True, None
+        except Exception as exc:
+            errors.append(f"{method_name}: {type(exc).__name__}: {exc}")
+
+    for method_name in ("reqAllOpenOrders", "reqOpenOrders"):
+        method = getattr(ib, method_name, None)
+
+        if method is None:
+            continue
+
+        try:
+            maybe_awaitable = method()
+
+            if inspect.isawaitable(maybe_awaitable):
+                await maybe_awaitable
+
+            await asyncio.sleep(float(OPEN_ORDER_REFRESH_SETTLE_SECONDS))
+            return True, None
+        except Exception as exc:
+            errors.append(f"{method_name}: {type(exc).__name__}: {exc}")
+
+    if not errors:
+        return False, "IB object has no reqAllOpenOrders/reqOpenOrders method"
+
+    return False, "; ".join(errors)
+
+
 def collect_live_take_profit_orders(
         *,
         order_service: OrderService,
@@ -386,6 +436,20 @@ async def cancel_take_profit_orders_for_recovery(
     finally:
         conn.close()
 
+    refresh_ok, refresh_error = await refresh_open_orders_for_recovery(order_service)
+
+    if not refresh_ok:
+        events.append(SlotCloseRecoveryEvent(
+            instrument_code=instrument_code,
+            event="OPEN_ORDER_REFRESH_FAILED",
+            message=(
+                f"{instrument_code}: recovery could not refresh broker open orders before live TP cancel; "
+                f"market close must be skipped until refresh succeeds: {refresh_error}"
+            ),
+            log_level="WARNING",
+        ))
+        return events
+
     live_take_profit_orders = collect_live_take_profit_orders(
         order_service=order_service,
         instrument_code=instrument_code,
@@ -446,7 +510,7 @@ def mark_local_take_profit_orders_without_live_order_cancelled(
                 conn,
                 order_id=order_id,
                 status="CANCELLED",
-                error_text="marked cancelled by recovery: no matching live open TP order at broker",
+                error_text="marked cancelled by recovery after successful open-order refresh: no matching live TP order at broker",
             )
 
         conn.commit()
@@ -455,11 +519,47 @@ def mark_local_take_profit_orders_without_live_order_cancelled(
         conn.close()
 
 
+def build_recovery_reason(
+        *,
+        snapshot: BrokerPositionSnapshot,
+        latest_position_intent: dict[str, Any] | None,
+        slot_context: dict[str, Any] | None,
+        recovery_reason_detail: str,
+) -> str:
+    parts = [
+        SLOT_CLOSE_RECOVERY_REASON,
+        recovery_reason_detail,
+        f"broker_position={str(snapshot.side).upper()}/{float(snapshot.quantity):g}",
+    ]
+
+    if latest_position_intent is not None:
+        parts.extend([
+            f"latest_db_trade_intent_id={latest_position_intent['trade_intent_id']}",
+            f"latest_db_action={latest_position_intent['action']}",
+            f"latest_db_target={latest_position_intent['target_side']}/{latest_position_intent['target_qty']:g}",
+            f"latest_db_signal_bar_ts={latest_position_intent['signal_bar_ts']}",
+        ])
+    else:
+        parts.append("latest_db_position_event=missing")
+
+    if slot_context is not None:
+        parts.extend([
+            f"slot_start_ts={slot_context['slot_start_ts']}",
+            f"slot_end_ts={slot_context['slot_end_ts']}",
+            f"close_at_ts={slot_context['close_at_ts']}",
+        ])
+    else:
+        parts.append("slot_context=missing_or_not_applicable")
+
+    return "; ".join(parts)
+
+
 def build_recovery_close_trade_intent_draft(
         *,
         snapshot: BrokerPositionSnapshot,
-        latest_entry: dict[str, Any],
-        slot_context: dict[str, Any],
+        latest_position_intent: dict[str, Any] | None,
+        slot_context: dict[str, Any] | None,
+        recovery_reason_detail: str,
         now_ts: int,
 ) -> TradeIntentDraft:
     _, signal_time_ct, _ = build_time_text_fields_from_ts(now_ts)
@@ -471,13 +571,11 @@ def build_recovery_close_trade_intent_draft(
         signal_time_ct=signal_time_ct,
         intent_source=SLOT_CLOSE_RECOVERY_INTENT_SOURCE,
         action=TradeDecisionAction.CLOSE_POSITION,
-        reason=(
-            f"{SLOT_CLOSE_RECOVERY_REASON}; "
-            f"entry_trade_intent_id={latest_entry['trade_intent_id']}; "
-            f"entry_signal_bar_ts={latest_entry['signal_bar_ts']}; "
-            f"entry_slot_start_ts={slot_context['slot_start_ts']}; "
-            f"entry_slot_end_ts={slot_context['slot_end_ts']}; "
-            f"entry_close_at_ts={slot_context['close_at_ts']}"
+        reason=build_recovery_reason(
+            snapshot=snapshot,
+            latest_position_intent=latest_position_intent,
+            slot_context=slot_context,
+            recovery_reason_detail=recovery_reason_detail,
         ),
         signal_direction="CLOSE",
         entry_price=0.0,
@@ -500,8 +598,9 @@ async def create_and_execute_recovery_close(
         *,
         order_service: OrderService,
         snapshot: BrokerPositionSnapshot,
-        latest_entry: dict[str, Any],
-        slot_context: dict[str, Any],
+        latest_position_intent: dict[str, Any] | None,
+        slot_context: dict[str, Any] | None,
+        recovery_reason_detail: str,
         now_ts: int,
 ) -> SlotCloseRecoveryEvent:
     conn = get_trade_db_connection()
@@ -512,8 +611,9 @@ async def create_and_execute_recovery_close(
 
         draft = build_recovery_close_trade_intent_draft(
             snapshot=snapshot,
-            latest_entry=latest_entry,
+            latest_position_intent=latest_position_intent,
             slot_context=slot_context,
+            recovery_reason_detail=recovery_reason_detail,
             now_ts=now_ts,
         )
         trade_intent_id = write_trade_intent(conn, draft)
@@ -600,6 +700,136 @@ async def create_and_execute_recovery_close(
         conn.close()
 
 
+def build_recovery_decision(
+        *,
+        snapshot: BrokerPositionSnapshot,
+        latest_position_intent: dict[str, Any] | None,
+        now_ts: int,
+) -> tuple[bool, dict[str, Any] | None, str, list[SlotCloseRecoveryEvent]]:
+    """Решает, надо ли закрывать live broker-position.
+
+    Возвращает: should_close, slot_context, recovery_reason_detail, diagnostic_events.
+    """
+
+    instrument_code = str(snapshot.instrument_code)
+    events: list[SlotCloseRecoveryEvent] = []
+
+    if latest_position_intent is None:
+        if not CLOSE_CONFIGURED_BROKER_POSITIONS_WITHOUT_DB_ENTRY:
+            events.append(SlotCloseRecoveryEvent(
+                instrument_code=instrument_code,
+                event="UNKNOWN_BROKER_POSITION",
+                message=(
+                    f"{instrument_code}: broker has open position {snapshot.side}/{snapshot.quantity:g}, "
+                    f"but no EXECUTED DB position event was found; recovery policy forbids auto-close"
+                ),
+                log_level="WARNING",
+            ))
+            return False, None, "", events
+
+        reason_detail = "configured instrument broker position has no EXECUTED DB position event; broker truth wins"
+        events.append(SlotCloseRecoveryEvent(
+            instrument_code=instrument_code,
+            event="UNKNOWN_BROKER_POSITION_WILL_CLOSE",
+            message=(
+                f"{instrument_code}: broker has open position {snapshot.side}/{snapshot.quantity:g}, "
+                f"but no EXECUTED DB position event was found; configured-instrument policy will close live broker position"
+            ),
+            log_level="WARNING",
+        ))
+        return True, None, reason_detail, events
+
+    if latest_position_intent["action"] == "CLOSE_POSITION":
+        if not CLOSE_CONFIGURED_BROKER_POSITIONS_ON_DB_MISMATCH:
+            events.append(SlotCloseRecoveryEvent(
+                instrument_code=instrument_code,
+                event="BROKER_DB_POSITION_MISMATCH",
+                message=(
+                    f"{instrument_code}: broker has open position {snapshot.side}/{snapshot.quantity:g}, "
+                    f"but latest EXECUTED DB position event is CLOSE_POSITION "
+                    f"trade_intent_id={latest_position_intent['trade_intent_id']}; policy forbids auto-close"
+                ),
+                log_level="WARNING",
+            ))
+            return False, None, "", events
+
+        reason_detail = "broker still has open position after latest EXECUTED DB CLOSE_POSITION; broker truth wins"
+        events.append(SlotCloseRecoveryEvent(
+            instrument_code=instrument_code,
+            event="BROKER_DB_POSITION_MISMATCH_WILL_CLOSE",
+            message=(
+                f"{instrument_code}: broker has open position {snapshot.side}/{snapshot.quantity:g}, "
+                f"but latest EXECUTED DB position event is CLOSE_POSITION "
+                f"trade_intent_id={latest_position_intent['trade_intent_id']}; recovery will close live broker position"
+            ),
+            log_level="WARNING",
+        ))
+        return True, None, reason_detail, events
+
+    slot_context = get_slot_context_for_ts(
+        signal_bar_ts=int(latest_position_intent["signal_bar_ts"]),
+    )
+
+    if slot_context is None:
+        events.append(SlotCloseRecoveryEvent(
+            instrument_code=instrument_code,
+            event="RECOVERY_SKIPPED_NO_SLOT_CONTEXT",
+            message=(
+                f"{instrument_code}: broker has open position {snapshot.side}/{snapshot.quantity:g}, "
+                f"but recovery could not calculate slot context from latest DB entry "
+                f"trade_intent_id={latest_position_intent['trade_intent_id']}; market close skipped"
+            ),
+            log_level="WARNING",
+        ))
+        return False, None, "", events
+
+    side_mismatch = latest_position_intent["target_side"] != str(snapshot.side).upper()
+    qty_mismatch = abs(float(snapshot.quantity) - float(latest_position_intent["target_qty"])) > 1e-9
+    is_past_close_at = now_ts >= int(slot_context["close_at_ts"])
+
+    if side_mismatch:
+        events.append(SlotCloseRecoveryEvent(
+            instrument_code=instrument_code,
+            event="BROKER_DB_POSITION_SIDE_MISMATCH",
+            message=(
+                f"{instrument_code}: broker side={snapshot.side}, "
+                f"latest DB entry side={latest_position_intent['target_side']}; "
+                f"entry_trade_intent_id={latest_position_intent['trade_intent_id']}; "
+                f"broker side will be used if recovery closes"
+            ),
+            log_level="WARNING",
+        ))
+
+    if qty_mismatch:
+        events.append(SlotCloseRecoveryEvent(
+            instrument_code=instrument_code,
+            event="BROKER_DB_POSITION_QTY_MISMATCH",
+            message=(
+                f"{instrument_code}: broker qty={float(snapshot.quantity):g}, "
+                f"latest DB entry qty={latest_position_intent['target_qty']:g}; "
+                f"entry_trade_intent_id={latest_position_intent['trade_intent_id']}; "
+                f"broker qty will be used if recovery closes"
+            ),
+            log_level="WARNING",
+        ))
+
+    if not is_past_close_at:
+        return False, slot_context, "", events
+
+    reason_bits = [
+        "position is past slot close_at",
+        f"entry_trade_intent_id={latest_position_intent['trade_intent_id']}",
+    ]
+
+    if side_mismatch:
+        reason_bits.append("broker/db side mismatch ignored because broker truth wins")
+
+    if qty_mismatch:
+        reason_bits.append("broker/db qty mismatch ignored because broker truth wins")
+
+    return True, slot_context, "; ".join(reason_bits), events
+
+
 async def run_slot_close_recovery_once(*, order_service: OrderService) -> list[SlotCloseRecoveryEvent]:
     now_ts = int(time.time())
     events: list[SlotCloseRecoveryEvent] = []
@@ -625,8 +855,6 @@ async def run_slot_close_recovery_once(*, order_service: OrderService) -> list[S
 
     for snapshot in open_snapshots:
         instrument_code = str(snapshot.instrument_code)
-        latest_entry: dict[str, Any] | None = None
-        slot_context: dict[str, Any] | None = None
 
         conn = get_trade_db_connection()
 
@@ -640,70 +868,14 @@ async def run_slot_close_recovery_once(*, order_service: OrderService) -> list[S
                 instrument_code=instrument_code,
             )
 
-            if latest_position_intent is None:
-                events.append(SlotCloseRecoveryEvent(
-                    instrument_code=instrument_code,
-                    event="UNKNOWN_BROKER_POSITION",
-                    message=(
-                        f"{instrument_code}: broker has open position "
-                        f"{snapshot.side}/{snapshot.quantity:g}, but no EXECUTED robot entry/close "
-                        f"was found in DB; recovery will not close unknown position automatically"
-                    ),
-                    log_level="WARNING",
-                ))
-                continue
-
-            if latest_position_intent["action"] == "CLOSE_POSITION":
-                events.append(SlotCloseRecoveryEvent(
-                    instrument_code=instrument_code,
-                    event="BROKER_DB_POSITION_MISMATCH",
-                    message=(
-                        f"{instrument_code}: broker has open position {snapshot.side}/{snapshot.quantity:g}, "
-                        f"but latest EXECUTED DB position event is CLOSE_POSITION "
-                        f"trade_intent_id={latest_position_intent['trade_intent_id']}; "
-                        f"recovery will not send blind market close"
-                    ),
-                    log_level="WARNING",
-                ))
-                continue
-
-            if latest_position_intent["target_side"] != str(snapshot.side).upper():
-                events.append(SlotCloseRecoveryEvent(
-                    instrument_code=instrument_code,
-                    event="BROKER_DB_POSITION_SIDE_MISMATCH",
-                    message=(
-                        f"{instrument_code}: broker side={snapshot.side}, "
-                        f"latest DB entry side={latest_position_intent['target_side']}; "
-                        f"entry_trade_intent_id={latest_position_intent['trade_intent_id']}; "
-                        f"recovery will not send blind market close"
-                    ),
-                    log_level="WARNING",
-                ))
-                continue
-
-
-            if abs(float(snapshot.quantity) - float(latest_position_intent["target_qty"])) > 1e-9:
-                events.append(SlotCloseRecoveryEvent(
-                    instrument_code=instrument_code,
-                    event="BROKER_DB_POSITION_QTY_MISMATCH",
-                    message=(
-                        f"{instrument_code}: broker qty={float(snapshot.quantity):g}, "
-                        f"latest DB entry qty={latest_position_intent['target_qty']:g}; "
-                        f"entry_trade_intent_id={latest_position_intent['trade_intent_id']}; "
-                        f"recovery will not send blind market close"
-                    ),
-                    log_level="WARNING",
-                ))
-                continue
-
-            slot_context = get_slot_context_for_ts(
-                signal_bar_ts=int(latest_position_intent["signal_bar_ts"]),
+            should_close, slot_context, recovery_reason_detail, decision_events = build_recovery_decision(
+                snapshot=snapshot,
+                latest_position_intent=latest_position_intent,
+                now_ts=now_ts,
             )
+            events.extend(decision_events)
 
-            if slot_context is None:
-                continue
-
-            if now_ts < int(slot_context["close_at_ts"]):
+            if not should_close:
                 continue
 
             unresolved_intent = read_unresolved_trade_intent_for_instrument(
@@ -716,7 +888,7 @@ async def run_slot_close_recovery_once(*, order_service: OrderService) -> list[S
                     instrument_code=instrument_code,
                     event="RECOVERY_SKIPPED_UNRESOLVED_INTENT",
                     message=(
-                        f"{instrument_code}: stale slot position detected, but unresolved "
+                        f"{instrument_code}: stale/configured broker position detected, but unresolved "
                         f"trade_intent exists: trade_intent_id={unresolved_intent['trade_intent_id']}, "
                         f"source={unresolved_intent['intent_source']}, action={unresolved_intent['action']}, "
                         f"status={unresolved_intent['status']}, order_id={unresolved_intent['order_id']}; "
@@ -726,22 +898,32 @@ async def run_slot_close_recovery_once(*, order_service: OrderService) -> list[S
                 ))
                 continue
 
-            latest_entry = latest_position_intent
-
         finally:
             conn.close()
 
+        slot_text = (
+            f"slot_start_ts={slot_context['slot_start_ts']}, "
+            f"slot_end_ts={slot_context['slot_end_ts']}, "
+            f"close_at_ts={slot_context['close_at_ts']}, "
+            if slot_context is not None
+            else "slot_context=missing_or_not_applicable, "
+        )
+        latest_db_text = (
+            f"latest_db_trade_intent_id={latest_position_intent['trade_intent_id']}, "
+            f"latest_db_action={latest_position_intent['action']}, "
+            if latest_position_intent is not None
+            else "latest_db_position_event=missing, "
+        )
+
         events.append(SlotCloseRecoveryEvent(
             instrument_code=instrument_code,
-            event="STALE_SLOT_POSITION_DETECTED",
+            event="RECOVERY_BROKER_POSITION_DETECTED_FOR_CLOSE",
             message=(
-                f"{instrument_code}: stale slot position detected: "
+                f"{instrument_code}: recovery will close broker position: "
                 f"broker_position={snapshot.side}/{snapshot.quantity:g}, "
-                f"entry_trade_intent_id={latest_entry['trade_intent_id']}, "
-                f"entry_signal_bar_ts={latest_entry['signal_bar_ts']}, "
-                f"slot_start_ts={slot_context['slot_start_ts']}, "
-                f"slot_end_ts={slot_context['slot_end_ts']}, "
-                f"close_at_ts={slot_context['close_at_ts']}, now_ts={now_ts}"
+                f"{latest_db_text}"
+                f"{slot_text}"
+                f"reason={recovery_reason_detail}, now_ts={now_ts}"
             ),
             log_level="WARNING",
         ))
@@ -802,6 +984,20 @@ async def run_slot_close_recovery_once(*, order_service: OrderService) -> list[S
             ))
             continue
 
+        refresh_ok, refresh_error = await refresh_open_orders_for_recovery(order_service)
+
+        if not refresh_ok:
+            events.append(SlotCloseRecoveryEvent(
+                instrument_code=instrument_code,
+                event="RECOVERY_CLOSE_SKIPPED_OPEN_ORDER_REFRESH_FAILED",
+                message=(
+                    f"{instrument_code}: recovery skipped market close because broker open-order refresh failed; "
+                    f"cannot prove TP orders are gone: {refresh_error}"
+                ),
+                log_level="WARNING",
+            ))
+            continue
+
         live_take_profit_orders = collect_live_take_profit_orders(
             order_service=order_service,
             instrument_code=instrument_code,
@@ -820,7 +1016,7 @@ async def run_slot_close_recovery_once(*, order_service: OrderService) -> list[S
                 event="RECOVERY_CLOSE_SKIPPED_LIVE_TP_STILL_OPEN",
                 message=(
                     f"{instrument_code}: recovery skipped market close because live TP orders "
-                    f"are still open at broker: {live_take_profit_orders}"
+                    f"are still open at broker after successful refresh: {live_take_profit_orders}"
                 ),
                 log_level="WARNING",
             ))
@@ -829,27 +1025,64 @@ async def run_slot_close_recovery_once(*, order_service: OrderService) -> list[S
         if str(snapshot_after_tp.side).upper() != str(snapshot.side).upper():
             events.append(SlotCloseRecoveryEvent(
                 instrument_code=instrument_code,
-                event="RECOVERY_CLOSE_SKIPPED_POSITION_CHANGED",
+                event="RECOVERY_CLOSE_POSITION_SIDE_CHANGED_BEFORE_MARKET_CLOSE",
                 message=(
-                    f"{instrument_code}: recovery skipped market close because broker position "
-                    f"changed after TP cancellation: before={snapshot.side}/{snapshot.quantity:g}, "
-                    f"after={snapshot_after_tp.side}/{snapshot_after_tp.quantity:g}"
+                    f"{instrument_code}: broker position side changed after TP cancellation: "
+                    f"before={snapshot.side}/{snapshot.quantity:g}, "
+                    f"after={snapshot_after_tp.side}/{snapshot_after_tp.quantity:g}; "
+                    f"recovery will close current live broker side/qty"
                 ),
                 log_level="WARNING",
             ))
-            continue
+
+        if abs(float(snapshot_after_tp.quantity) - float(snapshot.quantity)) > 1e-9:
+            events.append(SlotCloseRecoveryEvent(
+                instrument_code=instrument_code,
+                event="RECOVERY_CLOSE_POSITION_QTY_CHANGED_BEFORE_MARKET_CLOSE",
+                message=(
+                    f"{instrument_code}: broker position qty changed after TP cancellation: "
+                    f"before={snapshot.side}/{snapshot.quantity:g}, "
+                    f"after={snapshot_after_tp.side}/{snapshot_after_tp.quantity:g}; "
+                    f"recovery will close current live broker side/qty"
+                ),
+                log_level="WARNING",
+            ))
 
         recovery_close_event = await create_and_execute_recovery_close(
             order_service=order_service,
             snapshot=snapshot_after_tp,
-            latest_entry=latest_entry,
+            latest_position_intent=latest_position_intent,
             slot_context=slot_context,
+            recovery_reason_detail=recovery_reason_detail,
             now_ts=int(time.time()),
         )
         events.append(recovery_close_event)
 
         try:
-            await sync_broker_positions_once(order_service.ib)
+            snapshots_after_close = await sync_broker_positions_once(order_service.ib)
+            snapshot_after_close = find_snapshot(
+                snapshots_after_close,
+                instrument_code=instrument_code,
+            )
+
+            if snapshot_after_close is not None and is_open_snapshot(snapshot_after_close):
+                events.append(SlotCloseRecoveryEvent(
+                    instrument_code=instrument_code,
+                    event="RECOVERY_POSITION_STILL_OPEN_AFTER_MARKET_CLOSE",
+                    message=(
+                        f"{instrument_code}: recovery market close was sent, but broker still has "
+                        f"position {snapshot_after_close.side}/{snapshot_after_close.quantity:g}; "
+                        f"manual check required"
+                    ),
+                    log_level="WARNING",
+                ))
+            else:
+                events.append(SlotCloseRecoveryEvent(
+                    instrument_code=instrument_code,
+                    event="RECOVERY_POSITION_FLAT_AFTER_MARKET_CLOSE",
+                    message=f"{instrument_code}: broker position is FLAT after recovery market close",
+                ))
+
         except Exception as exc:
             events.append(SlotCloseRecoveryEvent(
                 instrument_code=instrument_code,
