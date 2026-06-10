@@ -22,6 +22,10 @@ from ib_execution.execution_store import (
     mark_take_profit_order_status,
 )
 from ib_execution.order_service import OrderService
+from ib_execution.slot_close_recovery import (
+    SLOT_CLOSE_RECOVERY_INTERVAL_SECONDS,
+    run_slot_close_recovery_once,
+)
 from ib_execution.take_profit_reconciliation import reconcile_take_profit_orders_once
 from ib_signal.signal_event_store import SIGNAL_EVENTS_TABLE_NAME
 from ib_signal.signal_plot import build_plot_path
@@ -650,6 +654,7 @@ async def run_execution_loop(
     )
 
     next_heartbeat_ts = int(time.time()) + EXECUTION_HEARTBEAT_INTERVAL_SECONDS
+    next_slot_close_recovery_ts = 0
 
     while True:
         try:
@@ -713,6 +718,75 @@ async def run_execution_loop(
                 f"take-profit reconciliation failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
                 to_telegram=True,
             )
+
+        now_ts = int(time.time())
+        if now_ts >= next_slot_close_recovery_ts:
+            next_slot_close_recovery_ts = now_ts + SLOT_CLOSE_RECOVERY_INTERVAL_SECONDS
+
+            try:
+                recovery_events = await run_slot_close_recovery_once(
+                    order_service=order_service,
+                )
+
+                for recovery_event in recovery_events:
+                    if str(recovery_event.log_level).upper() == "WARNING":
+                        log_warning(
+                            logger,
+                            recovery_event.message,
+                            to_telegram=True,
+                        )
+                    else:
+                        log_info(
+                            logger,
+                            recovery_event.message,
+                            to_telegram=False,
+                        )
+
+                    if recovery_event.intent is None or recovery_event.result is None:
+                        continue
+
+                    try:
+                        await send_executed_deal_notification(
+                            telegram_sender=deal_telegram_sender,
+                            message_thread_id=deal_message_thread_id,
+                            intent=recovery_event.intent,
+                            result=recovery_event.result,
+                        )
+                    except Exception as notification_exc:
+                        log_warning(
+                            logger,
+                            (
+                                f"slot-close recovery deal notification failed "
+                                f"trade_intent={recovery_event.intent.trade_intent_id}: "
+                                f"{type(notification_exc).__name__}: {notification_exc}"
+                            ),
+                            to_telegram=True,
+                        )
+
+                    try:
+                        await send_deal_status_notification(
+                            telegram_sender=deal_telegram_sender,
+                            message_thread_id=deal_status_message_thread_id,
+                            intent=recovery_event.intent,
+                            result=recovery_event.result,
+                        )
+                    except Exception as notification_exc:
+                        log_warning(
+                            logger,
+                            (
+                                f"slot-close recovery status notification failed "
+                                f"trade_intent={recovery_event.intent.trade_intent_id}: "
+                                f"{type(notification_exc).__name__}: {notification_exc}"
+                            ),
+                            to_telegram=True,
+                        )
+
+            except Exception as exc:
+                log_warning(
+                    logger,
+                    f"slot-close recovery failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
+                    to_telegram=True,
+                )
 
         intents = read_new_trade_intents(
             limit=NEW_INTENTS_LIMIT,
