@@ -102,7 +102,7 @@ TEST_INSTRUMENT_CODE = "MNQ"
 
 # Интервалы задаются в UTC.
 TEST_INTERVALS_UTC: list[tuple[str, str]] = [
-    ("2026-06-01 00:00:00", "2026-06-11 00:00:00"),
+    ("2026-06-10 00:00:00", "2026-06-11 00:00:00"),
 ]
 
 # SignalConfig grid. Ключи такие же, как в tester/signal_strategy_tester.py.
@@ -152,7 +152,7 @@ EXECUTION_TESTER_CONFIG: dict[str, list[Any]] = {
 
 # Мультипроцессинг.
 # None = max(1, os.cpu_count() - 1). Для тяжёлых сеток можно поставить конкретно, например 6.
-MAX_WORKERS: int | None = 14
+MAX_WORKERS: int | None = 12
 
 # Чтобы быстро проверить, можно ограничить число задач.
 MAX_TASKS: int | None = None
