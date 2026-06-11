@@ -1368,11 +1368,11 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> TradeProcessRe
     try:
         initialize_trade_db(conn)
 
-        expire_stale_new_trade_intents(
-            conn,
-            max_age_seconds=TRADER_MAX_NEW_INTENT_AGE_SECONDS,
-        )
-
+        # ВАЖНО: ib_trader — producer trade_intents, а не владелец исполнения.
+        # Не переводим NEW intents в FAILED здесь. Иначе, если ib_execution временно
+        # не успел забрать intent, trader сам гасит заявку и создаёт новую по следующему
+        # сигналу, засоряя trade_intents пачкой FAILED записей без order_id.
+        # Просрочку NEW/SENDING/ACCEPTED должен делать ib_execution через execution_store.
         now_ts = int(time.time())
         created: list[TradeIntentCreated] = []
         rejected: list[TradeIntentRejected] = []
