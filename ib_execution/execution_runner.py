@@ -41,6 +41,26 @@ EXECUTION_HEARTBEAT_INTERVAL_SECONDS = 60
 TAKE_PROFIT_ORDER_REF_SUFFIX = "_TP"
 
 
+def is_ib_not_connected_exception(exc: BaseException) -> bool:
+    """Transient IB disconnect: не надо слать traceback в Telegram."""
+
+    seen: set[int] = set()
+    current: BaseException | None = exc
+
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+
+        if isinstance(current, ConnectionError):
+            return True
+
+        if "Not connected" in str(current):
+            return True
+
+        current = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+
+    return False
+
+
 def get_take_profit_points(instrument_code: str) -> float:
     instrument_row = Instrument.get(str(instrument_code))
 

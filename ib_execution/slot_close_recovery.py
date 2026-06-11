@@ -69,6 +69,53 @@ def is_open_snapshot(snapshot: BrokerPositionSnapshot) -> bool:
     return str(snapshot.side).upper() in {"LONG", "SHORT"} and float(snapshot.quantity) > 0.0
 
 
+def is_ib_connected(ib) -> bool:
+    """Best-effort check: можно ли сейчас отправлять запросы в IB API."""
+
+    for owner in (ib, getattr(ib, "client", None)):
+        if owner is None:
+            continue
+
+        method = getattr(owner, "isConnected", None)
+
+        if callable(method):
+            try:
+                return bool(method())
+            except Exception:
+                continue
+
+    return True
+
+
+def is_ib_not_connected_exception(exc: BaseException) -> bool:
+    """Распознаёт ожидаемый transient-disconnect IB без traceback-spam."""
+
+    seen: set[int] = set()
+    current: BaseException | None = exc
+
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+
+        if isinstance(current, ConnectionError):
+            return True
+
+        if "Not connected" in str(current):
+            return True
+
+        current = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+
+    return False
+
+
+def build_ib_disconnected_recovery_event(*, reason: str) -> SlotCloseRecoveryEvent:
+    return SlotCloseRecoveryEvent(
+        instrument_code="ALL",
+        event="RECOVERY_SKIPPED_IB_DISCONNECTED",
+        message=f"slot-close recovery skipped: IB is not connected; {reason}",
+        log_level="INFO",
+    )
+
+
 def find_snapshot(
         snapshots: list[BrokerPositionSnapshot],
         *,
@@ -286,6 +333,10 @@ async def refresh_open_orders_for_recovery(order_service: OrderService) -> tuple
     """
 
     ib = order_service.ib
+
+    if not is_ib_connected(ib):
+        return False, "IB is not connected"
+
     errors: list[str] = []
 
     for method_name in ("reqAllOpenOrdersAsync", "reqOpenOrdersAsync"):
@@ -837,6 +888,9 @@ async def run_slot_close_recovery_once(*, order_service: OrderService) -> list[S
     if DEFAULT_SIGNAL_CONFIG.signal_window_mode != SignalWindowMode.SLOT:
         return events
 
+    if not is_ib_connected(order_service.ib):
+        return [build_ib_disconnected_recovery_event(reason="pre-flight connection check")]
+
     conn = get_trade_db_connection()
 
     try:
@@ -847,7 +901,14 @@ async def run_slot_close_recovery_once(*, order_service: OrderService) -> list[S
     finally:
         conn.close()
 
-    snapshots = await sync_broker_positions_once(order_service.ib)
+    try:
+        snapshots = await sync_broker_positions_once(order_service.ib)
+    except Exception as exc:
+        if is_ib_not_connected_exception(exc):
+            return [build_ib_disconnected_recovery_event(reason="broker position sync failed with transient disconnect")]
+
+        raise
+
     open_snapshots = [snapshot for snapshot in snapshots if is_open_snapshot(snapshot)]
 
     if not open_snapshots:
