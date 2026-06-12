@@ -2,7 +2,8 @@ import asyncio
 import sqlite3
 import time
 import traceback
-from decimal import Decimal, ROUND_FLOOR
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
+from typing import Any
 
 from core.logger import get_logger, log_info, log_warning, setup_logging
 from contracts import Instrument
@@ -17,16 +18,21 @@ from ib_execution.execution_store import (
     mark_trade_intent_sending,
     read_new_trade_intents,
     write_trade_intent_execution_result,
-    record_take_profit_order,
-    read_active_take_profit_orders,
-    mark_take_profit_order_status,
 )
 from ib_execution.order_service import OrderService
+from ib_execution.protective_order_reconciliation import reconcile_protective_orders_once
+from ib_execution.protective_order_store import (
+    PROTECTIVE_ORDER_ROLE_STOP_LOSS,
+    PROTECTIVE_ORDER_ROLE_TAKE_PROFIT,
+    PROTECTIVE_ORDER_STATUS_ACTIVE,
+    mark_protective_order_status,
+    read_active_protective_orders,
+    record_protective_order,
+)
 from ib_execution.slot_close_recovery import (
     SLOT_CLOSE_RECOVERY_INTERVAL_SECONDS,
     run_slot_close_recovery_once,
 )
-from ib_execution.take_profit_reconciliation import reconcile_take_profit_orders_once
 from ib_signal.signal_event_store import SIGNAL_EVENTS_TABLE_NAME
 from ib_signal.signal_plot import build_plot_path
 
@@ -39,6 +45,9 @@ MAX_NEW_INTENT_AGE_SECONDS = 10
 EXECUTION_HEARTBEAT_INTERVAL_SECONDS = 60
 
 TAKE_PROFIT_ORDER_REF_SUFFIX = "_TP"
+STOP_LOSS_ORDER_REF_SUFFIX = "_SL"
+PROTECTIVE_OCA_GROUP_PREFIX = "IBMD_OCA"
+PROTECTIVE_ORDER_TIME_IN_FORCE = "DAY"
 
 
 def is_ib_not_connected_exception(exc: BaseException) -> bool:
@@ -70,11 +79,28 @@ def get_take_profit_points(instrument_code: str) -> float:
     return float(instrument_row.get("take_profit_points", 0.0) or 0.0)
 
 
+def get_stop_loss_points(instrument_code: str) -> float:
+    instrument_row = Instrument.get(str(instrument_code))
+
+    if instrument_row is None:
+        return 0.0
+
+    return float(instrument_row.get("stop_loss_points", 0.0) or 0.0)
+
+
 def normalize_price_to_tick_floor(*, price: Decimal, price_tick: Decimal) -> float:
     if price_tick <= Decimal("0"):
         raise ValueError(f"price_tick must be positive: {price_tick!r}")
 
     steps = (price / price_tick).to_integral_value(rounding=ROUND_FLOOR)
+    return float(steps * price_tick)
+
+
+def normalize_price_to_tick_ceiling(*, price: Decimal, price_tick: Decimal) -> float:
+    if price_tick <= Decimal("0"):
+        raise ValueError(f"price_tick must be positive: {price_tick!r}")
+
+    steps = (price / price_tick).to_integral_value(rounding=ROUND_CEILING)
     return float(steps * price_tick)
 
 
@@ -108,7 +134,43 @@ def calculate_take_profit_price(*, instrument_code: str, position_side: str, avg
     )
 
 
-def get_take_profit_order_action(position_side: str) -> str | None:
+def calculate_stop_loss_price(*, instrument_code: str, position_side: str, avg_fill_price: float) -> float | None:
+    instrument_row = Instrument.get(str(instrument_code))
+
+    if instrument_row is None:
+        return None
+
+    stop_loss_points = Decimal(str(instrument_row.get("stop_loss_points", 0.0) or 0.0))
+
+    if stop_loss_points <= Decimal("0"):
+        return None
+
+    avg_fill_price_decimal = Decimal(str(avg_fill_price))
+    position_side = str(position_side).upper()
+    price_tick = Decimal(str(instrument_row.get("price_tick", 0.0) or 0.0))
+
+    if position_side == "LONG":
+        raw_stop_loss_price = avg_fill_price_decimal - stop_loss_points
+        if raw_stop_loss_price <= Decimal("0"):
+            return None
+        return normalize_price_to_tick_ceiling(
+            price=raw_stop_loss_price,
+            price_tick=price_tick,
+        )
+
+    if position_side == "SHORT":
+        raw_stop_loss_price = avg_fill_price_decimal + stop_loss_points
+        if raw_stop_loss_price <= Decimal("0"):
+            return None
+        return normalize_price_to_tick_floor(
+            price=raw_stop_loss_price,
+            price_tick=price_tick,
+        )
+
+    return None
+
+
+def get_protective_order_action(position_side: str) -> str | None:
     position_side = str(position_side).upper()
 
     if position_side == "LONG":
@@ -120,7 +182,7 @@ def get_take_profit_order_action(position_side: str) -> str | None:
     return None
 
 
-def get_take_profit_order_quantity(intent) -> int | None:
+def get_protective_order_quantity(intent) -> int | None:
     target_qty = float(intent.target_qty)
 
     if target_qty <= 0.0:
@@ -136,15 +198,27 @@ def build_take_profit_order_ref(intent) -> str:
     return f"{intent.order_ref}{TAKE_PROFIT_ORDER_REF_SUFFIX}"
 
 
+def build_stop_loss_order_ref(intent) -> str:
+    return f"{intent.order_ref}{STOP_LOSS_ORDER_REF_SUFFIX}"
+
+
+def build_protective_oca_group(intent) -> str:
+    return f"{PROTECTIVE_OCA_GROUP_PREFIX}_{int(intent.trade_intent_id)}_{str(intent.instrument_code)}"
+
+
+def protective_role_text(role: str) -> str:
+    return str(role).lower().replace("_", "-")
+
+
 async def cancel_take_profit_orders_before_position_change(*, conn, order_service: OrderService, intent) -> None:
     action = str(intent.action).upper()
 
-    # Перед OPEN_POSITION тоже чистим старые ACTIVE TP из прошлых запусков/сессий.
+    # Перед OPEN_POSITION тоже чистим старые ACTIVE защитные ордера из прошлых запусков/сессий.
     if action not in {"OPEN_POSITION", "CLOSE_POSITION", "REVERSE_POSITION"}:
         return
 
     instrument_code = str(intent.instrument_code)
-    active_orders = read_active_take_profit_orders(
+    active_orders = read_active_protective_orders(
         conn,
         instrument_code=instrument_code,
     )
@@ -154,10 +228,11 @@ async def cancel_take_profit_orders_before_position_change(*, conn, order_servic
 
     for active_order in active_orders:
         order_id = int(active_order["order_id"])
+        role_text = protective_role_text(str(active_order.get("role", "PROTECTIVE")))
 
         try:
             await order_service.cancel_order_id(order_id)
-            mark_take_profit_order_status(
+            mark_protective_order_status(
                 conn,
                 order_id=order_id,
                 status="CANCELLED",
@@ -165,21 +240,21 @@ async def cancel_take_profit_orders_before_position_change(*, conn, order_servic
             )
             log_info(
                 logger,
-                f"{instrument_code}: take-profit order cancelled before {action}: order_id={order_id}",
+                f"{instrument_code}: {role_text} order cancelled before {action}: order_id={order_id}",
                 to_telegram=False,
             )
 
         except Exception as exc:
-            mark_take_profit_order_status(
+            mark_protective_order_status(
                 conn,
                 order_id=order_id,
-                status="ACTIVE",
+                status=PROTECTIVE_ORDER_STATUS_ACTIVE,
                 error_text=f"cancel failed before {action}: {type(exc).__name__}: {exc}",
             )
             log_warning(
                 logger,
                 (
-                    f"{instrument_code}: take-profit cancel failed before {action}: "
+                    f"{instrument_code}: {role_text} cancel failed before {action}: "
                     f"order_id={order_id}, {type(exc).__name__}: {exc}"
                 ),
                 to_telegram=False,
@@ -199,23 +274,19 @@ async def place_take_profit_after_entry(*, conn, order_service: OrderService, in
         return
 
     instrument_code = str(intent.instrument_code)
-
-    if get_take_profit_points(instrument_code) <= 0.0:
-        return
-
     target_side = str(intent.target_side).upper()
-    order_action = get_take_profit_order_action(target_side)
+    order_action = get_protective_order_action(target_side)
 
     if order_action is None:
         return
 
-    quantity = get_take_profit_order_quantity(intent)
+    quantity = get_protective_order_quantity(intent)
 
     if quantity is None:
         log_warning(
             logger,
             (
-                f"{instrument_code}: take-profit skipped: unsupported target_qty={intent.target_qty!r} "
+                f"{instrument_code}: protective orders skipped: unsupported target_qty={intent.target_qty!r} "
                 f"for trade_intent={intent.trade_intent_id}"
             ),
             to_telegram=False,
@@ -228,67 +299,109 @@ async def place_take_profit_after_entry(*, conn, order_service: OrderService, in
             position_side=target_side,
             avg_fill_price=float(result.avg_fill_price),
         )
+        stop_loss_price = calculate_stop_loss_price(
+            instrument_code=instrument_code,
+            position_side=target_side,
+            avg_fill_price=float(result.avg_fill_price),
+        )
 
-        if take_profit_price is None:
+        if take_profit_price is None and stop_loss_price is None:
             return
 
+        specs: list[dict[str, Any]] = []
+
+        # SL ставим первым: если TP почему-то не поставится, позиция всё равно останется защищённой.
+        if stop_loss_price is not None:
+            stop_order = order_service.api.build_stop(
+                action=order_action,
+                quantity=quantity,
+                stop_price=float(stop_loss_price),
+                time_in_force=PROTECTIVE_ORDER_TIME_IN_FORCE,
+            )
+            specs.append({
+                "role": PROTECTIVE_ORDER_ROLE_STOP_LOSS,
+                "order": stop_order,
+                "order_ref": build_stop_loss_order_ref(intent),
+                "order_type": "STP",
+                "limit_price": None,
+                "stop_price": float(stop_loss_price),
+                "price": float(stop_loss_price),
+            })
+
+        if take_profit_price is not None:
+            take_profit_order = order_service.api.build_limit(
+                action=order_action,
+                quantity=quantity,
+                limit_price=float(take_profit_price),
+                time_in_force=PROTECTIVE_ORDER_TIME_IN_FORCE,
+            )
+            specs.append({
+                "role": PROTECTIVE_ORDER_ROLE_TAKE_PROFIT,
+                "order": take_profit_order,
+                "order_ref": build_take_profit_order_ref(intent),
+                "order_type": "LIMIT",
+                "limit_price": float(take_profit_price),
+                "stop_price": None,
+                "price": float(take_profit_price),
+            })
+
+        oca_group = build_protective_oca_group(intent) if len(specs) >= 2 else None
+
+        if oca_group is not None:
+            order_service.api.apply_oca_group(
+                [spec["order"] for spec in specs],
+                oca_group=oca_group,
+                oca_type=1,
+            )
+
         contract = build_execution_contract(instrument_code=instrument_code)
-        order_ref = build_take_profit_order_ref(intent)
+        contract_q = await order_service.qualify(contract)
 
-        if order_action == "BUY":
-            placement = await order_service.buy_limit(
-                contract=contract,
-                quantity=quantity,
-                limit_price=float(take_profit_price),
-                order_ref=order_ref,
-                ttl_seconds=None,
-                wait="none",
+        for spec in specs:
+            receipt = await order_service.api.place_order(
+                contract_q,
+                spec["order"],
+                order_ref=str(spec["order_ref"]),
+            )
+            order_id = int(receipt.order_id)
+
+            record_protective_order(
+                conn,
+                instrument_code=instrument_code,
+                parent_trade_intent_id=int(intent.trade_intent_id),
+                role=str(spec["role"]),
+                order_ref=str(spec["order_ref"]),
+                order_id=order_id,
+                order_action=order_action,
+                order_quantity=quantity,
+                order_type=str(spec["order_type"]),
+                limit_price=spec["limit_price"],
+                stop_price=spec["stop_price"],
+                oca_group=oca_group,
             )
 
-        else:
-            placement = await order_service.sell_limit(
-                contract=contract,
-                quantity=quantity,
-                limit_price=float(take_profit_price),
-                order_ref=order_ref,
-                ttl_seconds=None,
-                wait="none",
+            role_text = protective_role_text(str(spec["role"]))
+            log_info(
+                logger,
+                (
+                    f"{instrument_code}: {role_text} order submitted: "
+                    f"parent_trade_intent={intent.trade_intent_id}, "
+                    f"order_id={order_id}, action={order_action}, qty={quantity}, "
+                    f"price={spec['price']}, order_ref={spec['order_ref']}, oca_group={oca_group}"
+                ),
+                to_telegram=False,
             )
-
-        order_id = int(placement.receipt.order_id)
-        record_take_profit_order(
-            conn,
-            instrument_code=instrument_code,
-            parent_trade_intent_id=int(intent.trade_intent_id),
-            order_ref=order_ref,
-            order_id=order_id,
-            order_action=order_action,
-            order_quantity=quantity,
-            take_profit_price=float(take_profit_price),
-        )
-
-        log_info(
-            logger,
-            (
-                f"{instrument_code}: take-profit order submitted: "
-                f"parent_trade_intent={intent.trade_intent_id}, "
-                f"order_id={order_id}, action={order_action}, qty={quantity}, "
-                f"price={take_profit_price}, order_ref={order_ref}"
-            ),
-            to_telegram=False,
-        )
 
     except Exception as exc:
         log_warning(
             logger,
             (
-                f"{instrument_code}: take-profit order submit failed: "
+                f"{instrument_code}: protective order submit failed: "
                 f"trade_intent={intent.trade_intent_id}, "
                 f"{type(exc).__name__}: {exc}"
             ),
             to_telegram=False,
         )
-
 
 
 
@@ -402,6 +515,7 @@ def build_executed_deal_title(intent) -> str:
 
     return "✅ Сделка исполнена"
 
+
 def resolve_deal_plot_path(intent, signal_event: dict | None):
     # PNG отправляем при открытии и при реверсе сделки.
     # CLOSE_POSITION и прочие post-trade события идут текстом.
@@ -417,6 +531,7 @@ def resolve_deal_plot_path(intent, signal_event: dict | None):
         instrument_code=str(signal_event["instrument_code"]),
         signal_bar_time_ct=str(signal_event["signal_time_ct"]),
     )
+
 
 def build_executed_deal_caption(*, intent, result, signal_event: dict | None) -> str:
     signal_time_ct = signal_event.get("signal_time_ct") if signal_event else "n/a"
@@ -678,30 +793,31 @@ async def run_execution_loop(
 
     while True:
         try:
-            reconciled_take_profits = await reconcile_take_profit_orders_once(
+            reconciled_protective_orders = await reconcile_protective_orders_once(
                 order_service=order_service,
             )
 
-            for reconciled_take_profit in reconciled_take_profits:
+            for reconciled_protective_order in reconciled_protective_orders:
+                role_text = protective_role_text(str(reconciled_protective_order.get("role", "PROTECTIVE")))
                 log_info(
                     logger,
                     (
-                        f"{reconciled_take_profit['instrument_code']}: "
-                        f"take-profit {reconciled_take_profit['event'].lower()}: "
-                        f"order_id={reconciled_take_profit['order_id']}, "
-                        f"parent_trade_intent_id={reconciled_take_profit['parent_trade_intent_id']}, "
-                        f"synthetic_trade_intent_id={reconciled_take_profit['synthetic_trade_intent_id']}, "
-                        f"filled_qty={reconciled_take_profit['filled_qty']}, "
-                        f"avg_fill={reconciled_take_profit['avg_fill_price']}, "
-                        f"realized_pnl={reconciled_take_profit['realized_pnl']}"
+                        f"{reconciled_protective_order['instrument_code']}: "
+                        f"{role_text} {reconciled_protective_order['event'].lower()}: "
+                        f"order_id={reconciled_protective_order['order_id']}, "
+                        f"parent_trade_intent_id={reconciled_protective_order['parent_trade_intent_id']}, "
+                        f"synthetic_trade_intent_id={reconciled_protective_order['synthetic_trade_intent_id']}, "
+                        f"filled_qty={reconciled_protective_order['filled_qty']}, "
+                        f"avg_fill={reconciled_protective_order['avg_fill_price']}, "
+                        f"realized_pnl={reconciled_protective_order['realized_pnl']}"
                     ),
                     to_telegram=False,
                 )
 
-                if str(reconciled_take_profit.get("event", "")).upper() != "FILLED":
+                if str(reconciled_protective_order.get("event", "")).upper() != "FILLED":
                     continue
 
-                synthetic_trade_intent_id = reconciled_take_profit.get("synthetic_trade_intent_id")
+                synthetic_trade_intent_id = reconciled_protective_order.get("synthetic_trade_intent_id")
 
                 if synthetic_trade_intent_id is None:
                     continue
@@ -725,7 +841,7 @@ async def run_execution_loop(
                     log_warning(
                         logger,
                         (
-                            f"take-profit deal notification failed "
+                            f"protective-order deal notification failed "
                             f"synthetic_trade_intent_id={synthetic_trade_intent_id}: "
                             f"{type(notification_exc).__name__}: {notification_exc}"
                         ),
@@ -735,7 +851,7 @@ async def run_execution_loop(
         except Exception as exc:
             log_warning(
                 logger,
-                f"take-profit reconciliation failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
+                f"protective-order reconciliation failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
                 to_telegram=True,
             )
 
@@ -930,7 +1046,7 @@ async def run_execution_loop(
                 finally:
                     log_warning(
                         logger,
-                        f"ib_execution failed trade_intent={intent.trade_intent_id}: {error_text}\\n"
+                        f"ib_execution failed trade_intent={intent.trade_intent_id}: {error_text}\n"
                         f"{traceback.format_exc()}",
                         to_telegram=True,
                     )
