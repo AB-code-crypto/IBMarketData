@@ -210,7 +210,7 @@ def protective_role_text(role: str) -> str:
     return str(role).lower().replace("_", "-")
 
 
-async def cancel_take_profit_orders_before_position_change(*, conn, order_service: OrderService, intent) -> None:
+async def cancel_protective_orders_before_position_change(*, conn, order_service: OrderService, intent) -> None:
     action = str(intent.action).upper()
 
     # Перед OPEN_POSITION тоже чистим старые ACTIVE защитные ордера из прошлых запусков/сессий.
@@ -261,7 +261,7 @@ async def cancel_take_profit_orders_before_position_change(*, conn, order_servic
             )
 
 
-async def place_take_profit_after_entry(*, conn, order_service: OrderService, intent, result) -> None:
+async def place_protective_orders_after_entry(*, conn, order_service: OrderService, intent, result) -> None:
     if result.status != ExecutionStatus.EXECUTED:
         return
 
@@ -400,7 +400,7 @@ async def place_take_profit_after_entry(*, conn, order_service: OrderService, in
                 f"trade_intent={intent.trade_intent_id}, "
                 f"{type(exc).__name__}: {exc}"
             ),
-            to_telegram=False,
+            to_telegram=True,
         )
 
 
@@ -947,7 +947,7 @@ async def run_execution_loop(
                     )
                     conn.commit()
 
-                await cancel_take_profit_orders_before_position_change(
+                await cancel_protective_orders_before_position_change(
                     conn=conn,
                     order_service=order_service,
                     intent=intent,
@@ -963,7 +963,7 @@ async def run_execution_loop(
                 write_trade_intent_execution_result(conn, result=result)
                 conn.commit()
 
-                await place_take_profit_after_entry(
+                await place_protective_orders_after_entry(
                     conn=conn,
                     order_service=order_service,
                     intent=intent,
