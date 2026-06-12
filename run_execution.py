@@ -18,7 +18,7 @@ from core.logger import (
     wait_telegram_logging,
 )
 from core.telegram_sender import TelegramSender
-from ib_execution.execution_runner import run_execution_loop
+from ib_execution.protective_execution_runner import run_execution_loop
 from ib_execution.order_service import OrderService
 
 setup_logging()
