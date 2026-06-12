@@ -27,6 +27,7 @@ DEFAULTS_DATA: InstrumentRow = {
     "limit_offset_points": 30.0,
     "limit_ttl_seconds": 600,
     "take_profit_points": 100.0,
+    "stop_loss_points": 150.0,
 }
 
 FUT_DEFAULTS: InstrumentRow = {
