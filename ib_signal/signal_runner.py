@@ -9,6 +9,7 @@ from ib_signal.job_reader import get_fresh_job_bar_status, read_job_bar_time_ct
 from ib_signal.signal_schedule import get_due_signal_bar_ts
 from ib_signal.signal_config import MarketRegimeFilterMode, SignalConfig
 from ib_signal.signal_errors import SignalDataNotReadyError
+from ib_signal.candidate_funnel_store import record_candidate_funnel_event
 from ib_signal.signal_event import build_signal_event
 from ib_signal.signal_event_store import write_signal_event
 from ib_signal.signal_interpretation import interpret_signal_event
@@ -61,23 +62,213 @@ def format_fresh_job_bar_status(status) -> str:
 def format_candidate_search_summary(result) -> str:
     """Что делает: компактно форматирует первичный поиск кандидатов.
     Зачем нужна: финальный runtime-лог должен читаться человеком, а не превращаться в кашу."""
+    prefix = (
+        f"hour={result.current_hour_slot_ct}, "
+        f"allowed={result.allowed_hour_slots_ct}, "
+        f"raw={result.raw_candidate_rows_count}, "
+        f"slot_kept={result.slot_offset_kept_count}, "
+        f"slot_dropped={result.slot_offset_dropped_count}, "
+    )
+
     if not result.candidates:
-        return (
-            f"hour={result.current_hour_slot_ct}, "
-            f"allowed={result.allowed_hour_slots_ct}, "
-            f"found=0"
-        )
+        return prefix + "found=0"
 
     first_candidate = result.candidates[0]
     last_candidate = result.candidates[-1]
 
     return (
-        f"hour={result.current_hour_slot_ct}, "
-        f"allowed={result.allowed_hour_slots_ct}, "
-        f"found={len(result.candidates)}, "
-        f"first={first_candidate.signal_bar_time_ct} CT, "
-        f"last={last_candidate.signal_bar_time_ct} CT"
+        prefix
+        + f"found={len(result.candidates)}, "
+        + f"first={first_candidate.signal_bar_time_ct} CT, "
+        + f"last={last_candidate.signal_bar_time_ct} CT"
     )
+
+
+def relation_to_text(value) -> str | None:
+    if value is None:
+        return None
+    return str(getattr(value, "value", value))
+
+
+def build_candidate_funnel_rows(
+        *,
+        candidate_search_result,
+        pattern_matrix_result=None,
+        pearson_min: float | None = None,
+        pearson_passed_count: int | None = None,
+        best_pearson: float | None = None,
+        price_sma_600_relation=None,
+        current_price_direction=None,
+        current_sma600_direction=None,
+        candidate_regime_filter_result=None,
+        regime_skip_reason: str | None = None,
+        candidate_minmax_filter_result=None,
+        candidate_score_result=None,
+        candidate_potential_result=None,
+        final_plot_candidates_count: int | None = None,
+) -> list[tuple[str, str | None]]:
+    rows: list[tuple[str, str | None]] = [
+        (
+            f"time/hr/phase: {candidate_search_result.raw_candidate_rows_count}",
+            None,
+        ),
+        (
+            f"slot offset  : {candidate_search_result.slot_offset_kept_count} "
+            f"(-{candidate_search_result.slot_offset_dropped_count})",
+            None,
+        ),
+    ]
+
+    if pattern_matrix_result is not None:
+        rows.append((
+            f"matrix valid : {len(pattern_matrix_result.valid_candidates)} "
+            f"(-{pattern_matrix_result.skipped_candidates_count})",
+            None,
+        ))
+
+    if pearson_passed_count is not None:
+        rows.append((
+            f"pearson      : {pearson_passed_count}"
+            f" / {pearson_min:.2f}; best={best_pearson:.4f}"
+            if pearson_min is not None and best_pearson is not None
+            else f"pearson      : {pearson_passed_count}",
+            None,
+        ))
+
+    relation_text = relation_to_text(getattr(price_sma_600_relation, "relation", None))
+    if relation_text is not None:
+        rows.append((f"relation     : {relation_text}", None))
+
+    if current_price_direction is not None or current_sma600_direction is not None:
+        rows.append((
+            f"dirs p/sma   : {relation_to_text(current_price_direction)}/{relation_to_text(current_sma600_direction)}",
+            None,
+        ))
+
+    if candidate_regime_filter_result is not None:
+        rows.extend([
+            (f"regime final : {candidate_regime_filter_result.final_kept_count}", None),
+            (f"regime soft  : {candidate_regime_filter_result.soft_kept_count}", None),
+            (f"regime hard  : {candidate_regime_filter_result.hard_kept_count}", None),
+            (
+                f"regime drop  : sma={candidate_regime_filter_result.skipped_sma_count} "
+                f"rel={candidate_regime_filter_result.relation_mismatch_count} "
+                f"dir={candidate_regime_filter_result.direction_mismatch_count}",
+                None,
+            ),
+        ])
+    elif regime_skip_reason is not None:
+        rows.append((f"regime skip  : {regime_skip_reason}", None))
+
+    if candidate_minmax_filter_result is not None:
+        rows.append((
+            f"minmax       : {candidate_minmax_filter_result.kept_candidates_count} "
+            f"(-{candidate_minmax_filter_result.dropped_candidates_count})",
+            None,
+        ))
+
+    if candidate_score_result is not None:
+        rows.append((f"score        : {len(candidate_score_result.valid_candidates)}", None))
+
+    if candidate_potential_result is not None:
+        if candidate_potential_result.is_available:
+            rows.append((
+                f"potential    : used={candidate_potential_result.used_candidates_count}/"
+                f"{candidate_potential_result.source_candidates_count}",
+                None,
+            ))
+        else:
+            rows.append((f"potential    : {candidate_potential_result.unavailable_reason}", None))
+
+    if final_plot_candidates_count is not None:
+        rows.append((f"plot candidates: {final_plot_candidates_count}", None))
+
+    phase_text = "None" if candidate_search_result.signal_phase_seconds is None else str(candidate_search_result.signal_phase_seconds)
+    offset_text = "None" if candidate_search_result.slot_offset_seconds is None else str(candidate_search_result.slot_offset_seconds)
+    rows.append((f"phase/offset : {phase_text}/{offset_text}", None))
+    return rows
+
+
+def format_candidate_funnel_summary(rows: list[tuple[str, str | None]]) -> str:
+    return "; ".join(text for text, _ in rows)
+
+
+def record_candidate_funnel_snapshot(
+        *,
+        instrument_code: str,
+        due_signal_bar_ts: int,
+        settings: SignalConfig,
+        candidate_search_result,
+        pattern_matrix_result=None,
+        pearson_passed_count: int | None = None,
+        best_pearson: float | None = None,
+        price_sma_600_relation=None,
+        current_price_direction=None,
+        current_sma600_direction=None,
+        candidate_regime_filter_result=None,
+        regime_skip_reason: str | None = None,
+        candidate_minmax_filter_result=None,
+        candidate_score_result=None,
+        candidate_potential_result=None,
+        final_plot_candidates_count: int | None = None,
+        png_saved: bool | None = None,
+        skip_reason: str | None = None,
+) -> None:
+    try:
+        record_candidate_funnel_event(
+            instrument_code=instrument_code,
+            signal_bar_ts=due_signal_bar_ts,
+            signal_time_ct=candidate_search_result.current_signal_bar_time_ct,
+            signal_window_mode=settings.signal_window_mode.value,
+            market_regime_filter_mode=settings.market_regime_filter_mode.value,
+            current_hour_ct=candidate_search_result.current_hour_slot_ct,
+            allowed_hours_ct=candidate_search_result.allowed_hour_slots_ct,
+            min_candidate_signal_ts=candidate_search_result.min_candidate_signal_ts,
+            max_candidate_signal_ts=candidate_search_result.max_candidate_signal_ts,
+            signal_phase_seconds=candidate_search_result.signal_phase_seconds,
+            slot_offset_seconds=candidate_search_result.slot_offset_seconds,
+            raw_candidate_rows_count=candidate_search_result.raw_candidate_rows_count,
+            slot_offset_kept_count=candidate_search_result.slot_offset_kept_count,
+            slot_offset_dropped_count=candidate_search_result.slot_offset_dropped_count,
+            matrix_source_candidates_count=len(candidate_search_result.candidates) if pattern_matrix_result is not None else None,
+            matrix_valid_candidates_count=len(pattern_matrix_result.valid_candidates) if pattern_matrix_result is not None else None,
+            matrix_skipped_candidates_count=getattr(pattern_matrix_result, "skipped_candidates_count", None),
+            pearson_min=settings.pearson_min,
+            pearson_passed_count=pearson_passed_count,
+            best_pearson=best_pearson,
+            current_relation=relation_to_text(getattr(price_sma_600_relation, "relation", None)),
+            current_price_direction=relation_to_text(current_price_direction),
+            current_sma600_direction=relation_to_text(current_sma600_direction),
+            regime_source_candidates_count=getattr(candidate_regime_filter_result, "source_candidates_count", None),
+            regime_pearson_passed_count=getattr(candidate_regime_filter_result, "pearson_passed_count", None),
+            regime_soft_kept_count=getattr(candidate_regime_filter_result, "soft_kept_count", None),
+            regime_hard_kept_count=getattr(candidate_regime_filter_result, "hard_kept_count", None),
+            regime_final_kept_count=getattr(candidate_regime_filter_result, "final_kept_count", None),
+            regime_skipped_sma_count=getattr(candidate_regime_filter_result, "skipped_sma_count", None),
+            regime_relation_mismatch_count=getattr(candidate_regime_filter_result, "relation_mismatch_count", None),
+            regime_direction_mismatch_count=getattr(candidate_regime_filter_result, "direction_mismatch_count", None),
+            regime_skip_reason=regime_skip_reason,
+            minmax_source_candidates_count=getattr(candidate_minmax_filter_result, "source_candidates_count", None),
+            minmax_kept_candidates_count=getattr(candidate_minmax_filter_result, "kept_candidates_count", None),
+            minmax_dropped_candidates_count=getattr(candidate_minmax_filter_result, "dropped_candidates_count", None),
+            minmax_disabled_reason=getattr(candidate_minmax_filter_result, "disabled_reason", None),
+            score_candidates_count=len(candidate_score_result.valid_candidates) if candidate_score_result is not None else None,
+            potential_available=getattr(candidate_potential_result, "is_available", None),
+            potential_used_candidates_count=getattr(candidate_potential_result, "used_candidates_count", None),
+            potential_source_candidates_count=getattr(candidate_potential_result, "source_candidates_count", None),
+            potential_direction=getattr(candidate_potential_result, "direction", None),
+            potential_unavailable_reason=getattr(candidate_potential_result, "unavailable_reason", None),
+            potential_end_delta_points=getattr(candidate_potential_result, "end_delta_points", None),
+            final_plot_candidates_count=final_plot_candidates_count,
+            png_saved=png_saved,
+            skip_reason=skip_reason,
+        )
+    except Exception as exc:
+        log_info(
+            logger,
+            f"{instrument_code}: candidate_funnel запись в state DB не удалась: {type(exc).__name__}: {exc}",
+            to_telegram=False,
+        )
 
 
 def format_regression_summary(
@@ -316,6 +507,8 @@ async def run_signal_loop(
                 plot_candidate_matrix = pattern_matrix_result.candidate_matrix
                 plot_pearson_scores = pearson_scores
                 candidate_regime_filter_result = None
+                current_price_direction = None
+                current_sma600_direction = None
 
                 if (
                         price_sma_600_relation is not None
@@ -357,6 +550,27 @@ async def run_signal_loop(
                         and price_sma_600_relation.relation == "mixed_sma"
                         else "SMA 600 relation не рассчитан"
                     )
+                    funnel_rows = build_candidate_funnel_rows(
+                        candidate_search_result=candidate_search_result,
+                        pattern_matrix_result=pattern_matrix_result,
+                        pearson_min=settings.pearson_min,
+                        pearson_passed_count=pearson_passed_count,
+                        best_pearson=best_pearson,
+                        price_sma_600_relation=price_sma_600_relation,
+                        regime_skip_reason=skip_reason,
+                    )
+                    record_candidate_funnel_snapshot(
+                        instrument_code=instrument_code,
+                        due_signal_bar_ts=due_signal_bar_ts,
+                        settings=settings,
+                        candidate_search_result=candidate_search_result,
+                        pattern_matrix_result=pattern_matrix_result,
+                        pearson_passed_count=pearson_passed_count,
+                        best_pearson=best_pearson,
+                        price_sma_600_relation=price_sma_600_relation,
+                        regime_skip_reason=skip_reason,
+                        skip_reason=skip_reason,
+                    )
                     log_info(
                         logger,
                         f"{instrument_code}: пропускаю расчёт, "
@@ -364,7 +578,8 @@ async def run_signal_loop(
                         f"market_regime_filter_mode={settings.market_regime_filter_mode.value}, "
                         f"{skip_reason}; "
                         f"latest_job_row={status.last_bar_time_ct} CT, "
-                        f"pearson_passed={pearson_passed_count}",
+                        f"pearson_passed={pearson_passed_count}; "
+                        f"candidate_funnel: {format_candidate_funnel_summary(funnel_rows)}",
                         to_telegram=False,
                     )
                     continue
@@ -476,6 +691,22 @@ async def run_signal_loop(
                         to_telegram=False,
                     )
 
+                funnel_rows = build_candidate_funnel_rows(
+                    candidate_search_result=candidate_search_result,
+                    pattern_matrix_result=pattern_matrix_result,
+                    pearson_min=settings.pearson_min,
+                    pearson_passed_count=pearson_passed_count,
+                    best_pearson=best_pearson,
+                    price_sma_600_relation=price_sma_600_relation,
+                    current_price_direction=current_price_direction,
+                    current_sma600_direction=current_sma600_direction,
+                    candidate_regime_filter_result=candidate_regime_filter_result,
+                    candidate_minmax_filter_result=candidate_minmax_filter_result,
+                    candidate_score_result=candidate_score_result,
+                    candidate_potential_result=candidate_potential_result,
+                    final_plot_candidates_count=len(plot_valid_candidates),
+                )
+
                 saved_plot_path = save_signal_candidate_plot(
                     instrument_code=instrument_code,
                     signal_bar_time_ct=candidate_search_result.current_signal_bar_time_ct,
@@ -490,6 +721,26 @@ async def run_signal_loop(
                     market_regime_filter_mode=settings.market_regime_filter_mode.value,
                     candidate_scores=plot_candidate_scores,
                     candidate_potential_result=candidate_potential_result,
+                    candidate_funnel_rows=funnel_rows,
+                )
+
+                record_candidate_funnel_snapshot(
+                    instrument_code=instrument_code,
+                    due_signal_bar_ts=due_signal_bar_ts,
+                    settings=settings,
+                    candidate_search_result=candidate_search_result,
+                    pattern_matrix_result=pattern_matrix_result,
+                    pearson_passed_count=pearson_passed_count,
+                    best_pearson=best_pearson,
+                    price_sma_600_relation=price_sma_600_relation,
+                    current_price_direction=current_price_direction,
+                    current_sma600_direction=current_sma600_direction,
+                    candidate_regime_filter_result=candidate_regime_filter_result,
+                    candidate_minmax_filter_result=candidate_minmax_filter_result,
+                    candidate_score_result=candidate_score_result,
+                    candidate_potential_result=candidate_potential_result,
+                    final_plot_candidates_count=len(plot_valid_candidates),
+                    png_saved=saved_plot_path is not None,
                 )
 
                 if saved_plot_path is not None:
@@ -567,6 +818,7 @@ async def run_signal_loop(
                     f"market_regime_filter={settings.market_regime_filter_mode.value}\n"
                     f"  window: {window_text}\n"
                     f"  candidates: {candidate_search_text}\n"
+                    f"  candidate_funnel: {format_candidate_funnel_summary(funnel_rows)}\n"
                     f"  pearson: min={settings.pearson_min:.2f}, "
                     f"best={best_pearson:.4f}, "
                     f"passed={pearson_passed_count}/{len(pattern_matrix_result.valid_candidates)}\n"

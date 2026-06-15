@@ -14,8 +14,8 @@ Registry = Dict[str, InstrumentRow]
 PLACEHOLDER_CON_ID = 111
 
 DEFAULTS_DATA: InstrumentRow = {
-    "history_enabled": False,
-    "realtime_enabled": False,
+    "history_enabled": True,
+    "realtime_enabled": True,
     "trading_enabled": False,
     "useRTH": False,
     "barSizeSetting": "5 secs",
@@ -106,16 +106,6 @@ Instrument: Registry = {
         ]
     },
 
-    "EURUSD": {
-        **FX_DEFAULTS,
-        "symbol": "EUR",
-        "currency": "USD",
-        "db_filename": "EURUSD.sqlite3",
-        "history_start_utc": "2025-09-22T01:00:00Z",
-        "regression_flat_delta_threshold_bps": 2.0,
-        "regime_flat_delta_threshold_points": 0.00008,
-    },
-
     "MES": {
         **FUT_DEFAULTS,
         "tradingClass": "MES",
@@ -162,7 +152,15 @@ Instrument: Registry = {
              "active_from_utc": "2026-09-16T22:00:00Z", "active_to_utc": "2026-12-16T22:00:00Z"},
         ]
     },
-
+    "EURUSD": {
+        **FX_DEFAULTS,
+        "symbol": "EUR",
+        "currency": "USD",
+        "db_filename": "EURUSD.sqlite3",
+        "history_start_utc": "2025-09-22T01:00:00Z",
+        "regression_flat_delta_threshold_bps": 2.0,
+        "regime_flat_delta_threshold_points": 0.00008,
+    },
     "NQ": {
         **FUT_DEFAULTS,
         "tradingClass": "NQ",

@@ -37,6 +37,18 @@ class CandidateSearchResult:
     allowed_hour_slots_ct: list[int]
     candidates: list[CandidateWindow]
 
+    # Диагностика early candidate-funnel.
+    # raw_candidate_rows_count: прошли time-range + CT-hour + phase внутри часа.
+    # slot_offset_kept_count: остались после same SLOT offset.
+    # slot_offset_dropped_count: отсеялись по SLOT offset.
+    raw_candidate_rows_count: int = 0
+    slot_offset_kept_count: int = 0
+    slot_offset_dropped_count: int = 0
+    min_candidate_signal_ts: int | None = None
+    max_candidate_signal_ts: int | None = None
+    signal_phase_seconds: int | None = None
+    slot_offset_seconds: int | None = None
+
 
 def shift_ct_time_text(time_text_ct: str, seconds: int) -> str:
     """Что делает: сдвигает CT-время из job DB на заданное число секунд.
@@ -283,6 +295,13 @@ def find_candidate_windows(
             current_hour_slot_ct=current_hour_slot_ct,
             allowed_hour_slots_ct=allowed_hour_slots_ct,
             candidates=[],
+            raw_candidate_rows_count=0,
+            slot_offset_kept_count=0,
+            slot_offset_dropped_count=0,
+            min_candidate_signal_ts=min_candidate_signal_ts,
+            max_candidate_signal_ts=max_candidate_signal_ts,
+            signal_phase_seconds=int(current_window.signal_bar_ts) % 3600,
+            slot_offset_seconds=current_window.slot_offset_seconds,
         )
 
     candidate_rows = read_candidate_signal_rows(
@@ -295,6 +314,7 @@ def find_candidate_windows(
     )
 
     candidates: list[CandidateWindow] = []
+    slot_offset_dropped_count = 0
 
     for signal_bar_ts, signal_bar_time_ct, hour_slot_ct in candidate_rows:
         if not is_same_slot_offset(
@@ -302,6 +322,7 @@ def find_candidate_windows(
             current_window=current_window,
             settings=settings,
         ):
+            slot_offset_dropped_count += 1
             continue
 
         candidates.append(
@@ -318,6 +339,13 @@ def find_candidate_windows(
         current_hour_slot_ct=current_hour_slot_ct,
         allowed_hour_slots_ct=allowed_hour_slots_ct,
         candidates=candidates,
+        raw_candidate_rows_count=len(candidate_rows),
+        slot_offset_kept_count=len(candidates),
+        slot_offset_dropped_count=slot_offset_dropped_count,
+        min_candidate_signal_ts=min_candidate_signal_ts,
+        max_candidate_signal_ts=max_candidate_signal_ts,
+        signal_phase_seconds=int(current_window.signal_bar_ts) % 3600,
+        slot_offset_seconds=current_window.slot_offset_seconds,
     )
 
 
@@ -329,6 +357,9 @@ def format_candidate_search_result(result: CandidateSearchResult) -> str:
             f"current_signal_bar={result.current_signal_bar_time_ct} CT, "
             f"current_hour_ct={result.current_hour_slot_ct}, "
             f"allowed_hours_ct={result.allowed_hour_slots_ct}, "
+            f"raw={result.raw_candidate_rows_count}, "
+            f"slot_kept={result.slot_offset_kept_count}, "
+            f"slot_dropped={result.slot_offset_dropped_count}, "
             f"candidates=0"
         )
 
@@ -338,6 +369,9 @@ def format_candidate_search_result(result: CandidateSearchResult) -> str:
     return (
         f"current_hour_ct={result.current_hour_slot_ct}, "
         f"allowed_hours_ct={result.allowed_hour_slots_ct}, "
+        f"raw={result.raw_candidate_rows_count}, "
+        f"slot_kept={result.slot_offset_kept_count}, "
+        f"slot_dropped={result.slot_offset_dropped_count}, "
         f"candidates={len(result.candidates)}, "
         f"first={first_candidate.signal_bar_time_ct} CT, "
         f"last={last_candidate.signal_bar_time_ct} CT"

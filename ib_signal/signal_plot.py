@@ -340,6 +340,7 @@ def save_signal_candidate_plot(
         market_regime_filter_mode: str,
         candidate_scores: np.ndarray | None = None,
         candidate_potential_result: CandidatePotentialResult | None = None,
+        candidate_funnel_rows: list[tuple[str, str | None]] | None = None,
         output_dir: Path | None = None,
 ) -> Path | None:
     """Что делает: сохраняет PNG с текущим паттерном и лучшими историческими кандидатами.
@@ -828,6 +829,14 @@ def save_signal_candidate_plot(
         y=y,
         line_height=line_height,
     )
+    if candidate_funnel_rows is not None:
+        y = draw_info_section(
+            ax_info,
+            title="CANDIDATE FUNNEL",
+            rows=candidate_funnel_rows,
+            y=y,
+            line_height=line_height,
+        )
     y = draw_info_section(
         ax_info,
         title="LINES",
