@@ -15,7 +15,7 @@ PLACEHOLDER_CON_ID = 111
 
 DEFAULTS_DATA: InstrumentRow = {
     "history_enabled": True,
-    "realtime_enabled": True,
+    "realtime_enabled": False,
     "trading_enabled": False,
     "useRTH": False,
     "barSizeSetting": "5 secs",
@@ -65,6 +65,7 @@ Instrument: Registry = {
         "tradingClass": "MNQ",
         "multiplier": 2.0,
         "db_filename": "MNQ.sqlite3",
+        "realtime_enabled": True,
         "trading_enabled": True,
         "regression_flat_delta_threshold_bps": 3.0,
         "take_profit_points": 75.0,
@@ -109,6 +110,7 @@ Instrument: Registry = {
         "tradingClass": "MES",
         "multiplier": 5.0,
         "db_filename": "MES.sqlite3",
+        "realtime_enabled": True,
         "trading_enabled": True,
         "regime_flat_delta_threshold_points": 0.4,
         "take_profit_points": 35.0,
