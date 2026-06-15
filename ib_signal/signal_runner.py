@@ -449,6 +449,7 @@ async def run_signal_loop(
                 signal_bar_ts=due_signal_bar_ts,
                 settings=settings,
             )
+            candidate_search_result = None
 
             try:
                 candidate_search_result = find_candidate_windows(
@@ -761,6 +762,15 @@ async def run_signal_loop(
                     signal_window,
                     lambda ts: read_job_bar_time_ct(instrument_code, ts),
                 )
+
+                if candidate_search_result is not None:
+                    record_candidate_funnel_snapshot(
+                        instrument_code=instrument_code,
+                        due_signal_bar_ts=due_signal_bar_ts,
+                        settings=settings,
+                        candidate_search_result=candidate_search_result,
+                        skip_reason=f"DATA_NOT_READY: {exc}",
+                    )
 
                 log_info(
                     logger,
