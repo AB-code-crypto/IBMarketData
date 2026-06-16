@@ -325,6 +325,23 @@ def draw_info_section(
     return y - line_height * 0.22
 
 
+def info_rows_have_label(
+        rows: list[tuple[str, str | None]] | None,
+        label: str,
+) -> bool:
+    """Что делает: проверяет, есть ли label в строках инфо-панели.
+    Зачем нужна: не дублировать в верхних блоках значения, которые уже показаны в CANDIDATE FUNNEL."""
+    if rows is None:
+        return False
+
+    for text, _ in rows:
+        row_label = text.split(":", 1)[0].strip()
+        if row_label == label:
+            return True
+
+    return False
+
+
 def save_signal_candidate_plot(
         *,
         instrument_code: str,
@@ -642,6 +659,10 @@ def save_signal_candidate_plot(
         bar_size_seconds=bar_size_seconds,
     )
 
+    relation_value_in_funnel = info_rows_have_label(candidate_funnel_rows, "relation")
+    regression_dirs_in_funnel = info_rows_have_label(candidate_funnel_rows, "dirs p/sma")
+    potential_usage_in_funnel = info_rows_have_label(candidate_funnel_rows, "potential")
+
     current_regression_delta_bps = calculate_regression_delta_bps(current_regression)
     current_regression_threshold_points = calculate_regression_threshold_points(
         current_regression,
@@ -661,20 +682,20 @@ def save_signal_candidate_plot(
             f"{format_plot_regression_value(current_regression.fitted_delta)}",
             None,
         ),
-        (f"price  dir     : {current_regression_direction}", None),
     ]
+    if not regression_dirs_in_funnel:
+        regression_rows.append((f"price  dir     : {current_regression_direction}", None))
 
     if sma_600_regression is not None:
         sma_600_regression_delta_bps = calculate_regression_delta_bps(sma_600_regression)
-        regression_rows.extend([
-            (
-                f"sma 600 delta : "
-                f"{format_plot_regression_value(sma_600_regression_delta_bps)} / "
-                f"{format_plot_regression_value(sma_600_regression.fitted_delta)}",
-                None,
-            ),
-            (f"sma 600 dir   : {sma_600_regression_direction}", None),
-        ])
+        regression_rows.append((
+            f"sma 600 delta : "
+            f"{format_plot_regression_value(sma_600_regression_delta_bps)} / "
+            f"{format_plot_regression_value(sma_600_regression.fitted_delta)}",
+            None,
+        ))
+        if not regression_dirs_in_funnel:
+            regression_rows.append((f"sma 600 dir   : {sma_600_regression_direction}", None))
     else:
         regression_rows.append(("sma 600       : regression=None", None))
 
@@ -688,8 +709,9 @@ def save_signal_candidate_plot(
 
     relation_rows: list[tuple[str, str | None]] = []
     if price_sma_600_relation is not None:
+        if not relation_value_in_funnel:
+            relation_rows.append((f"price/sma 600  : {price_sma_600_relation.relation}", None))
         relation_rows.extend([
-            (f"price/sma 600  : {price_sma_600_relation.relation}", None),
             (
                 f"start_diff     : "
                 f"{format_plot_regression_value(price_sma_600_relation.diff_start_bps)} / "
@@ -723,14 +745,15 @@ def save_signal_candidate_plot(
 
     potential_rows: list[tuple[str, str | None]] = []
     if candidate_potential_result is not None and candidate_potential_result.is_available:
-        potential_rows.extend([
-            (f"dir          : {candidate_potential_result.direction}", None),
-            (
+        potential_rows.append((f"dir          : {candidate_potential_result.direction}", None))
+        if not potential_usage_in_funnel:
+            potential_rows.append((
                 f"used         : "
                 f"{candidate_potential_result.used_candidates_count}/"
                 f"{candidate_potential_result.max_count}",
                 None,
-            ),
+            ))
+        potential_rows.extend([
             (
                 f"end          : "
                 f"{candidate_potential_result.end_delta_points:+.2f}",
@@ -763,7 +786,8 @@ def save_signal_candidate_plot(
             ),
         ])
     elif candidate_potential_result is not None:
-        potential_rows.append((f"status       : {candidate_potential_result.unavailable_reason}", None))
+        if not potential_usage_in_funnel:
+            potential_rows.append((f"status       : {candidate_potential_result.unavailable_reason}", None))
     else:
         potential_rows.append(("status       : None", None))
 
@@ -822,13 +846,14 @@ def save_signal_candidate_plot(
         y=y,
         line_height=line_height,
     )
-    y = draw_info_section(
-        ax_info,
-        title="POTENTIAL (pt)",
-        rows=potential_rows,
-        y=y,
-        line_height=line_height,
-    )
+    if potential_rows:
+        y = draw_info_section(
+            ax_info,
+            title="POTENTIAL (pt)",
+            rows=potential_rows,
+            y=y,
+            line_height=line_height,
+        )
     if candidate_funnel_rows is not None:
         y = draw_info_section(
             ax_info,
@@ -842,7 +867,7 @@ def save_signal_candidate_plot(
         title="LINES",
         rows=lines_rows,
         y=y,
-        line_height=line_height,
+        line_height=line_height
     )
     draw_info_section(
         ax_info,
