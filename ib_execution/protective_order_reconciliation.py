@@ -7,6 +7,7 @@ from typing import Any
 from ib_execution.execution_logic import (
     are_commission_reports_final_for_fills,
     collect_trade_fill_statistics,
+    should_finalize_with_pending_commission,
 )
 from ib_execution.protective_order_store import (
     PROTECTIVE_ORDERS_TABLE_NAME,
@@ -174,6 +175,19 @@ def collect_protective_order_fill_statistics(order_service, protective_order: di
 
         if filled_qty >= expected_qty:
             if not are_commission_reports_final_for_fills(trade_fills):
+                if should_finalize_with_pending_commission(filled_at_ts):
+                    return {
+                        "filled": True,
+                        "cancelled": False,
+                        "commission_pending": True,
+                        "status": status,
+                        "avg_fill_price": avg_fill_price,
+                        "total_commission": total_commission,
+                        "realized_pnl": realized_pnl,
+                        "filled_qty": filled_qty,
+                        "filled_at_ts": filled_at_ts,
+                    }
+
                 return {
                     "filled": False,
                     "cancelled": False,
@@ -219,6 +233,19 @@ def collect_protective_order_fill_statistics(order_service, protective_order: di
 
         if filled_qty >= expected_qty:
             if not are_commission_reports_final_for_fills(fills):
+                if should_finalize_with_pending_commission(filled_at_ts):
+                    return {
+                        "filled": True,
+                        "cancelled": False,
+                        "commission_pending": True,
+                        "status": "Filled",
+                        "avg_fill_price": avg_fill_price,
+                        "total_commission": total_commission,
+                        "realized_pnl": realized_pnl,
+                        "filled_qty": filled_qty,
+                        "filled_at_ts": filled_at_ts,
+                    }
+
                 return {
                     "filled": False,
                     "cancelled": False,

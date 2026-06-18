@@ -63,6 +63,29 @@ def calculate_order_delta(intent: TradeIntent) -> tuple[str, int]:
 COMMISSION_REPORT_WAIT_TIMEOUT_SECONDS = 3.0
 COMMISSION_REPORT_POLL_INTERVAL_SECONDS = 0.20
 
+# Для protective TP/SL: если ордер уже filled, но IB долго не отдаёт commissionReport,
+# не держим локальный protective order в ACTIVE бесконечно. Создаём synthetic close
+# с NULL stats, а execution-stats reconciliation дозаполнит их позже.
+COMMISSION_REPORT_PENDING_FINALIZE_GRACE_SECONDS = 60
+
+
+def should_finalize_with_pending_commission(
+        filled_at_ts: int | None,
+        *,
+        now_ts: int | None = None,
+        grace_seconds: int = COMMISSION_REPORT_PENDING_FINALIZE_GRACE_SECONDS,
+) -> bool:
+    if filled_at_ts is None:
+        return False
+
+    try:
+        filled_ts = int(filled_at_ts)
+    except (TypeError, ValueError):
+        return False
+
+    now_value = int(time.time() if now_ts is None else now_ts)
+    return now_value - filled_ts >= int(grace_seconds)
+
 
 def _fill_execution(fill):
     return getattr(fill, "execution", None)

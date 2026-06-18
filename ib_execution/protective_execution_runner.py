@@ -9,6 +9,10 @@ from contracts import Instrument
 from ib_execution.contract_resolver import build_execution_contract
 from ib_execution.execution_logic import execute_trade_intent
 from ib_execution.execution_models import ExecutionResult, ExecutionStatus
+from ib_execution.execution_stats_reconciliation import (
+    format_backfilled_execution_stats_message,
+    reconcile_missing_execution_stats_once,
+)
 from ib_execution.execution_runner import (
     read_executed_trade_intent_and_result_for_notification,
     send_deal_status_notification,
@@ -528,6 +532,54 @@ async def run_execution_loop(
                     f"slot-close recovery failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
                     to_telegram=True,
                 )
+
+        try:
+            execution_stats_events = await reconcile_missing_execution_stats_once(
+                order_service=order_service,
+            )
+
+            for execution_stats_event in execution_stats_events:
+                if str(execution_stats_event.get("event", "")).upper() != "BACKFILLED":
+                    continue
+
+                log_info(
+                    logger,
+                    (
+                        f"{execution_stats_event['instrument_code']}: execution stats backfilled: "
+                        f"trade_intent_id={execution_stats_event['trade_intent_id']}, "
+                        f"order_id={execution_stats_event['order_id']}, "
+                        f"avg_fill={execution_stats_event.get('avg_fill_price')}, "
+                        f"commission={execution_stats_event.get('total_commission')}, "
+                        f"realized_pnl={execution_stats_event.get('realized_pnl')}"
+                    ),
+                    to_telegram=False,
+                )
+
+                if deal_telegram_sender is None:
+                    continue
+
+                try:
+                    await deal_telegram_sender.send_text(
+                        format_backfilled_execution_stats_message(execution_stats_event),
+                        message_thread_id=deal_message_thread_id,
+                    )
+                except Exception as notification_exc:
+                    log_warning(
+                        logger,
+                        (
+                            f"execution-stats backfill notification failed "
+                            f"trade_intent={execution_stats_event['trade_intent_id']}: "
+                            f"{type(notification_exc).__name__}: {notification_exc}"
+                        ),
+                        to_telegram=True,
+                    )
+
+        except Exception as exc:
+            log_warning(
+                logger,
+                f"execution-stats reconciliation failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
+                to_telegram=True,
+            )
 
         intents = read_new_trade_intents(
             limit=NEW_INTENTS_LIMIT,
