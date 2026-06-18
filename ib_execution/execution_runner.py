@@ -533,6 +533,21 @@ def resolve_deal_plot_path(intent, signal_event: dict | None):
     )
 
 
+def format_optional_execution_money(value, *, signed: bool = False) -> str:
+    if value is None:
+        return "pending"
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+    if signed:
+        return f"{number:+.2f}"
+
+    return f"{number:.2f}"
+
+
 def build_executed_deal_caption(*, intent, result, signal_event: dict | None) -> str:
     signal_time_ct = signal_event.get("signal_time_ct") if signal_event else "n/a"
     signal_direction = signal_event.get("direction") if signal_event else "n/a"
@@ -547,6 +562,8 @@ def build_executed_deal_caption(*, intent, result, signal_event: dict | None) ->
         if result.avg_fill_price is not None
         else "n/a"
     )
+    commission_text = format_optional_execution_money(result.total_commission)
+    realized_pnl_text = format_optional_execution_money(result.realized_pnl, signed=True)
 
     return (
         f"{build_executed_deal_title(intent)}\n"
@@ -564,8 +581,8 @@ def build_executed_deal_caption(*, intent, result, signal_event: dict | None) ->
         f"order_action: {result.order_action}\n"
         f"order_qty: {result.order_quantity}\n"
         f"avg_fill: {avg_fill_text}\n"
-        f"commission: {result.total_commission}\n"
-        f"realized_pnl: {result.realized_pnl}"
+        f"commission: {commission_text}\n"
+        f"realized_pnl: {realized_pnl_text}"
     )
 
 

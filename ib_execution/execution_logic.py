@@ -1,3 +1,4 @@
+import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
@@ -59,6 +60,144 @@ def calculate_order_delta(intent: TradeIntent) -> tuple[str, int]:
     return ("BUY" if delta > 0 else "SELL"), int(abs_qty)
 
 
+COMMISSION_REPORT_WAIT_TIMEOUT_SECONDS = 3.0
+COMMISSION_REPORT_POLL_INTERVAL_SECONDS = 0.20
+
+
+def _fill_execution(fill):
+    return getattr(fill, "execution", None)
+
+
+def _fill_size(fill) -> float:
+    execution = _fill_execution(fill)
+
+    if execution is None:
+        return 0.0
+
+    try:
+        return abs(float(getattr(execution, "shares", 0.0) or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def collect_trade_filled_qty(trade) -> float:
+    total_qty = 0.0
+
+    for fill in list(getattr(trade, "fills", []) or []):
+        total_qty += _fill_size(fill)
+
+    return total_qty
+
+
+def is_fill_commission_report_final(fill) -> bool:
+    """True только когда IB commissionReport реально относится к execution.
+
+    У ib_async/ib_insync commissionReport может существовать как default-объект:
+    execId='', commission=0.0, realizedPNL=0.0. Такой объект нельзя считать
+    финальной комиссией/PNL.
+    """
+    execution = _fill_execution(fill)
+
+    if execution is None:
+        return False
+
+    execution_exec_id = str(getattr(execution, "execId", "") or "").strip()
+
+    if not execution_exec_id:
+        return False
+
+    commission_report = getattr(fill, "commissionReport", None)
+
+    if commission_report is None:
+        return False
+
+    report_exec_id = str(getattr(commission_report, "execId", "") or "").strip()
+
+    if not report_exec_id:
+        return False
+
+    if report_exec_id != execution_exec_id:
+        return False
+
+    if getattr(commission_report, "commission", None) is None:
+        return False
+
+    if getattr(commission_report, "realizedPNL", None) is None:
+        return False
+
+    return True
+
+
+def are_commission_reports_final_for_fills(fills) -> bool:
+    checked_fills = 0
+
+    for fill in list(fills or []):
+        if _fill_size(fill) <= 0.0:
+            continue
+
+        checked_fills += 1
+
+        if not is_fill_commission_report_final(fill):
+            return False
+
+    return checked_fills > 0
+
+
+def are_commission_reports_final_for_trade(trade) -> bool:
+    return are_commission_reports_final_for_fills(
+        list(getattr(trade, "fills", []) or []),
+    )
+
+
+async def refresh_ib_executions_if_possible(ib) -> None:
+    try:
+        req_async = getattr(ib, "reqExecutionsAsync", None)
+
+        if req_async is not None:
+            await req_async()
+            return
+
+        req_sync = getattr(ib, "reqExecutions", None)
+
+        if req_sync is not None:
+            maybe_awaitable = req_sync()
+
+            if asyncio.iscoroutine(maybe_awaitable):
+                await maybe_awaitable
+
+    except Exception:
+        return
+
+
+async def wait_for_commission_reports(
+        order_service,
+        trade,
+        *,
+        timeout_seconds: float = COMMISSION_REPORT_WAIT_TIMEOUT_SECONDS,
+        poll_interval_seconds: float = COMMISSION_REPORT_POLL_INTERVAL_SECONDS,
+) -> bool:
+    """Ждёт, пока для всех фактических fills появятся финальные commissionReport.
+
+    Возвращает False по timeout. Это не ломает исполнение ордера: результат всё равно
+    будет записан, но commission/realized_pnl останутся NULL вместо ложных 0.0.
+    """
+    if collect_trade_filled_qty(trade) <= 0.0:
+        return True
+
+    loop_time = asyncio.get_running_loop().time
+    deadline = loop_time() + float(timeout_seconds)
+
+    while True:
+        if are_commission_reports_final_for_trade(trade):
+            return True
+
+        if loop_time() >= deadline:
+            return False
+
+        await refresh_ib_executions_if_possible(order_service.ib)
+        await asyncio.sleep(float(poll_interval_seconds))
+
+
 def collect_trade_fill_statistics(trade) -> tuple[float | None, float | None, float | None, float]:
     """Что делает: собирает avg_fill_price/commission/pnl/filled_qty из trade.fills.
     Зачем нужна: LIMIT теперь ждёт терминального состояния и должен записать факт fill, если он был."""
@@ -88,7 +227,7 @@ def collect_trade_fill_statistics(trade) -> tuple[float | None, float | None, fl
 
         commission_report = getattr(fill, "commissionReport", None)
 
-        if commission_report is not None:
+        if is_fill_commission_report_final(fill):
             commission = getattr(commission_report, "commission", None)
             realized_pnl = getattr(commission_report, "realizedPNL", None)
 
@@ -218,6 +357,11 @@ async def execute_market_intent(
             wait="done",
             done_timeout=60.0,
         )
+
+    await wait_for_commission_reports(
+        order_service,
+        placement.receipt.trade,
+    )
 
     return build_execution_result(
         intent=intent,
@@ -405,6 +549,9 @@ async def execute_limit_intent(
         order_id=order_id,
         timeout_seconds=float((effective_ttl_seconds or DEFAULT_LIMIT_DONE_TIMEOUT_SECONDS) + LIMIT_DONE_TIMEOUT_EXTRA_SECONDS),
     )
+
+    if collect_trade_filled_qty(trade) > 0.0:
+        await wait_for_commission_reports(order_service, trade)
 
     avg_fill_price, total_commission, realized_pnl, filled_qty = collect_trade_fill_statistics(trade)
 

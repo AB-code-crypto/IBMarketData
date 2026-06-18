@@ -4,7 +4,10 @@ import time
 from types import SimpleNamespace
 from typing import Any
 
-from ib_execution.execution_logic import collect_trade_fill_statistics
+from ib_execution.execution_logic import (
+    are_commission_reports_final_for_fills,
+    collect_trade_fill_statistics,
+)
 from ib_execution.execution_store import (
     TAKE_PROFIT_ORDERS_TABLE_NAME,
     get_trade_db_connection,
@@ -264,6 +267,19 @@ def collect_take_profit_fill_statistics(order_service, take_profit_order: dict[s
         filled_at_ts = latest_fill_ts_from_fills(trade_fills) or int(time.time())
 
         if filled_qty >= expected_qty:
+            if not are_commission_reports_final_for_fills(trade_fills):
+                return {
+                    "filled": False,
+                    "cancelled": False,
+                    "waiting_commission": True,
+                    "status": status,
+                    "avg_fill_price": avg_fill_price,
+                    "total_commission": total_commission,
+                    "realized_pnl": realized_pnl,
+                    "filled_qty": filled_qty,
+                    "filled_at_ts": filled_at_ts,
+                }
+
             return {
                 "filled": True,
                 "cancelled": False,
@@ -296,6 +312,19 @@ def collect_take_profit_fill_statistics(order_service, take_profit_order: dict[s
         filled_at_ts = latest_fill_ts_from_fills(fills) or int(time.time())
 
         if filled_qty >= expected_qty:
+            if not are_commission_reports_final_for_fills(fills):
+                return {
+                    "filled": False,
+                    "cancelled": False,
+                    "waiting_commission": True,
+                    "status": "Filled",
+                    "avg_fill_price": avg_fill_price,
+                    "total_commission": total_commission,
+                    "realized_pnl": realized_pnl,
+                    "filled_qty": filled_qty,
+                    "filled_at_ts": filled_at_ts,
+                }
+
             return {
                 "filled": True,
                 "cancelled": False,
