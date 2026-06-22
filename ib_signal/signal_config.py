@@ -40,6 +40,16 @@ class SignalConfig:
     slot_entry_minutes: int = 20  # Вход возможно только в первые 20 минут после анализа
     slot_close_before_end_seconds: int = 10  # Закрываем сделку за 10
 
+
+    # SLOT loss extension: если slot-close пришёл в минусе и цена уже оттолкнулась
+    # от максимальной просадки, даём позиции второй шанс до breakeven-buffer.
+    # Execution-сервис владеет этой логикой и штатным slot-close, trader её не исполняет.
+    slot_loss_extension_enabled: bool = True
+    slot_loss_extension_profit_buffer_points: float = 2.0
+    slot_loss_extension_min_drawdown_ratio: float = 0.70
+    slot_loss_extension_max_drawdown_ratio: float = 0.95
+    slot_loss_extension_deadline_minutes: int = 30
+
     # Поиск кандидатов по Pearson.
     price_source: str = "mid_close"  #
     pearson_min: float = 0.7  # минимальный пирсон

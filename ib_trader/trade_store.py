@@ -13,6 +13,7 @@ from ib_signal.signal_event_store import SIGNAL_EVENTS_TABLE_NAME, initialize_si
 from ib_signal.signal_interpretation import MarketSnapshot, read_market_snapshot
 from ib_signal.signal_rules_config import SIGNAL_RULES, SIGNAL_RULE_SETTINGS
 from ib_signal.signal_schedule import get_slot_start_ts
+from ib_execution.slot_loss_extension_store import has_active_slot_loss_extension_for_instrument
 from ib_trader.trade_models import (
     PositionSide,
     PositionSnapshot,
@@ -1307,6 +1308,13 @@ def process_extreme_ma_zone_close_once(conn, *, now_ts: int | None = None) -> li
 
 def process_slot_close_once(conn, *, now_ts: int | None = None) -> list[TradeIntentCreated]:
     now_ts = int(time.time() if now_ts is None else now_ts)
+
+    # Если включён second-chance механизм, штатным slot-close владеет ib_execution.
+    # Это убирает race: trader не создаёт CLOSE_POSITION, пока execution решает
+    # закрывать позицию сразу или переводить её в SLOT_LOSS_EXTENSION.
+    if bool(getattr(DEFAULT_SIGNAL_CONFIG, "slot_loss_extension_enabled", False)):
+        return []
+
     close_context = get_slot_close_context(now_ts=now_ts)
 
     if close_context is None:
@@ -1395,6 +1403,12 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> TradeProcessRe
                 instrument_code=signal.instrument_code,
                 now_ts=now_ts,
             )
+
+            if has_active_slot_loss_extension_for_instrument(
+                    conn,
+                    instrument_code=signal.instrument_code,
+            ):
+                continue
 
             # Если позиции ещё нет, но висит LIMIT-вход в противоположную сторону,
             # новый сигнал важнее старого лимитника: просим execution отменить pending order.

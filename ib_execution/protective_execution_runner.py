@@ -40,6 +40,7 @@ from ib_execution.slot_close_recovery import (
     SLOT_CLOSE_RECOVERY_INTERVAL_SECONDS,
     run_slot_close_recovery_once,
 )
+from ib_execution.slot_loss_extension import run_slot_loss_extension_once
 
 setup_logging()
 logger = get_logger(__name__)
@@ -461,6 +462,71 @@ async def run_execution_loop(
             log_warning(
                 logger,
                 f"protective-order reconciliation failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
+                to_telegram=True,
+            )
+
+        try:
+            slot_loss_extension_events = await run_slot_loss_extension_once(
+                order_service=order_service,
+            )
+
+            for extension_event in slot_loss_extension_events:
+                if str(extension_event.log_level).upper() == "WARNING":
+                    log_warning(
+                        logger,
+                        extension_event.message,
+                        to_telegram=True,
+                    )
+                else:
+                    log_info(
+                        logger,
+                        extension_event.message,
+                        to_telegram=False,
+                    )
+
+                if extension_event.intent is None or extension_event.result is None:
+                    continue
+
+                try:
+                    await send_executed_deal_notification(
+                        telegram_sender=deal_telegram_sender,
+                        message_thread_id=deal_message_thread_id,
+                        intent=extension_event.intent,
+                        result=extension_event.result,
+                    )
+                except Exception as notification_exc:
+                    log_warning(
+                        logger,
+                        (
+                            f"slot-loss extension deal notification failed "
+                            f"trade_intent={extension_event.intent.trade_intent_id}: "
+                            f"{type(notification_exc).__name__}: {notification_exc}"
+                        ),
+                        to_telegram=True,
+                    )
+
+                try:
+                    await send_deal_status_notification(
+                        telegram_sender=deal_telegram_sender,
+                        message_thread_id=deal_status_message_thread_id,
+                        intent=extension_event.intent,
+                        result=extension_event.result,
+                    )
+                except Exception as notification_exc:
+                    log_warning(
+                        logger,
+                        (
+                            f"slot-loss extension status notification failed "
+                            f"trade_intent={extension_event.intent.trade_intent_id}: "
+                            f"{type(notification_exc).__name__}: {notification_exc}"
+                        ),
+                        to_telegram=True,
+                    )
+
+        except Exception as exc:
+            log_warning(
+                logger,
+                f"slot-loss extension failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
                 to_telegram=True,
             )
 

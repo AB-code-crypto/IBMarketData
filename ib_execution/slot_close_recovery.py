@@ -21,6 +21,7 @@ from ib_execution.execution_store import (
     write_trade_intent_execution_result,
 )
 from ib_execution.order_service import OrderService
+from ib_execution.slot_loss_extension_store import has_active_slot_loss_extension_for_instrument
 from ib_execution.take_profit_reconciliation import reconcile_take_profit_orders_once
 from ib_position_sync.position_models import BrokerPositionSnapshot
 from ib_position_sync.position_store import (
@@ -923,6 +924,20 @@ async def run_slot_close_recovery_once(*, order_service: OrderService) -> list[S
             initialize_execution_db(conn)
             expire_stale_execution_intents(conn, now_ts=now_ts)
             conn.commit()
+
+            if has_active_slot_loss_extension_for_instrument(
+                    conn,
+                    instrument_code=instrument_code,
+            ):
+                events.append(SlotCloseRecoveryEvent(
+                    instrument_code=instrument_code,
+                    event="RECOVERY_SKIPPED_SLOT_LOSS_EXTENSION_ACTIVE",
+                    message=(
+                        f"{instrument_code}: slot-close recovery skipped because "
+                        "SLOT_LOSS_EXTENSION is active for this instrument"
+                    ),
+                ))
+                continue
 
             latest_position_intent = read_latest_executed_position_intent(
                 conn,
