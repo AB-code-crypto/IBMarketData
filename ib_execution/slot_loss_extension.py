@@ -83,6 +83,26 @@ EXTENSION_OCA_GROUP_PREFIX = "IBMD_EXT_OCA"
 PROTECTIVE_ORDER_TIME_IN_FORCE = "DAY"
 OPEN_ORDER_REFRESH_SETTLE_SECONDS = 0.25
 
+SLOT_LOSS_EXTENSION_WATCHDOG_SOURCE_SIGNAL_ID = -9
+SLOT_LOSS_EXTENSION_WATCHDOG_INTENT_SOURCE = "SLOT_LOSS_EXTENSION_WATCHDOG"
+SLOT_LOSS_EXTENSION_WATCHDOG_STOP_REASON = "slot_loss_extension_watchdog_stop_price_breached"
+SLOT_LOSS_EXTENSION_WATCHDOG_TP_REASON = "slot_loss_extension_watchdog_take_profit_price_touched"
+SLOT_LOSS_EXTENSION_WATCHDOG_STALE_REASON = "slot_loss_extension_watchdog_price_path_stale"
+
+EXTENSION_EXIT_ORDER_ACCEPTED_STATUSES = {
+    "ApiPending",
+    "PendingSubmit",
+    "PreSubmitted",
+    "Submitted",
+}
+EXTENSION_EXIT_ORDER_FILLED_STATUSES = {"Filled"}
+EXTENSION_EXIT_ORDER_REJECTED_STATUSES = {
+    "ApiCancelled",
+    "Cancelled",
+    "Inactive",
+    "Rejected",
+}
+
 
 @dataclass(frozen=True)
 class SlotLossExtensionEvent:
@@ -834,6 +854,93 @@ def build_extension_oca_group(*, entry_trade_intent_id: int, instrument_code: st
     return f"{EXTENSION_OCA_GROUP_PREFIX}_{int(entry_trade_intent_id)}_{str(instrument_code)}"
 
 
+def apply_extension_exit_order_safety_flags(order) -> None:
+    """Что делает: включает безопасные flags для extension TP/SL, если IB Order их поддерживает."""
+    if hasattr(order, "outsideRth"):
+        # Для Globex/overnight нельзя полагаться на дефолт TWS. Stop должен триггериться вне RTH.
+        setattr(order, "outsideRth", True)
+
+
+def describe_ib_error(error) -> str:
+    if error is None:
+        return "missing"
+
+    parts = []
+    for attr_name in ("id", "code", "message"):
+        value = getattr(error, attr_name, None)
+        if value is not None:
+            parts.append(f"{attr_name}={value}")
+    return ", ".join(parts) if parts else str(error)
+
+
+def find_known_trade_order_status(order_service: OrderService, *, order_id: int) -> str | None:
+    order_id = int(order_id)
+
+    for method_name in ("trades", "openTrades"):
+        method = getattr(order_service.ib, method_name, None)
+        if method is None:
+            continue
+
+        try:
+            trades = list(method() or [])
+        except Exception:
+            continue
+
+        for trade in trades:
+            order = getattr(trade, "order", None)
+            if order is None:
+                continue
+
+            trade_order_id = int(getattr(order, "orderId", 0) or 0)
+            if trade_order_id != order_id:
+                continue
+
+            return str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
+
+    return None
+
+
+async def wait_for_extension_exit_order_working_or_done(
+        *,
+        order_service: OrderService,
+        trade,
+        role: str,
+        order_ref: str,
+) -> str:
+    """Ждёт, что extension TP/SL реально принят IB, а не просто локально создан placeOrder()."""
+    loop_time = asyncio.get_running_loop().time
+    timeout_seconds = get_setting_float("slot_loss_extension_order_accept_timeout_seconds", 5.0)
+    poll_interval_seconds = 0.10
+    deadline = loop_time() + float(timeout_seconds)
+    order_id = int(getattr(getattr(trade, "order", None), "orderId", 0) or 0)
+
+    while True:
+        status = str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
+
+        if status in EXTENSION_EXIT_ORDER_ACCEPTED_STATUSES:
+            return status
+
+        if status in EXTENSION_EXIT_ORDER_FILLED_STATUSES:
+            return status
+
+        if status in EXTENSION_EXIT_ORDER_REJECTED_STATUSES:
+            raise RuntimeError(
+                f"extension {role} order was rejected/cancelled by broker: "
+                f"order_id={order_id}, order_ref={order_ref}, status={status}, "
+                f"ib_error={describe_ib_error(order_service.monitor.last_error(order_id))}"
+            )
+
+        if loop_time() >= deadline:
+            raise RuntimeError(
+                f"extension {role} order was not accepted by broker before timeout: "
+                f"order_id={order_id}, order_ref={order_ref}, status={status}, "
+                f"timeout_seconds={timeout_seconds}, "
+                f"ib_error={describe_ib_error(order_service.monitor.last_error(order_id))}"
+            )
+
+        await asyncio.sleep(float(poll_interval_seconds))
+
+
 async def place_extension_exit_orders(
         *,
         order_service: OrderService,
@@ -863,20 +970,25 @@ async def place_extension_exit_orders(
         instrument_code=instrument_code,
     )
 
-    take_profit_order = order_service.api.build_limit(
-        action=order_action,
-        quantity=quantity,
-        limit_price=float(prices.take_profit_price),
-        time_in_force=PROTECTIVE_ORDER_TIME_IN_FORCE,
-    )
+    # Важно: SL создаётся первым. Между первым и вторым order place позиция должна быть защищена.
     stop_loss_order = order_service.api.build_stop(
         action=order_action,
         quantity=quantity,
         stop_price=float(prices.stop_loss_price),
         time_in_force=PROTECTIVE_ORDER_TIME_IN_FORCE,
     )
+    take_profit_order = order_service.api.build_limit(
+        action=order_action,
+        quantity=quantity,
+        limit_price=float(prices.take_profit_price),
+        time_in_force=PROTECTIVE_ORDER_TIME_IN_FORCE,
+    )
+
+    apply_extension_exit_order_safety_flags(stop_loss_order)
+    apply_extension_exit_order_safety_flags(take_profit_order)
+
     order_service.api.apply_oca_group(
-        [take_profit_order, stop_loss_order],
+        [stop_loss_order, take_profit_order],
         oca_group=oca_group,
         oca_type=1,
     )
@@ -890,29 +1002,6 @@ async def place_extension_exit_orders(
     try:
         initialize_protective_order_db(conn)
 
-        take_profit_receipt = await order_service.api.place_order(
-            contract_q,
-            take_profit_order,
-            order_ref=take_profit_order_ref,
-        )
-        take_profit_order_id = int(take_profit_receipt.order_id)
-        placed_order_ids.append(take_profit_order_id)
-        record_protective_order(
-            conn,
-            instrument_code=instrument_code,
-            parent_trade_intent_id=int(latest_event["trade_intent_id"]),
-            role=PROTECTIVE_ORDER_ROLE_TAKE_PROFIT,
-            order_ref=take_profit_order_ref,
-            order_id=take_profit_order_id,
-            order_action=order_action,
-            order_quantity=quantity,
-            order_type="LIMIT",
-            limit_price=float(prices.take_profit_price),
-            stop_price=None,
-            oca_group=oca_group,
-        )
-        conn.commit()
-
         stop_loss_receipt = await order_service.api.place_order(
             contract_q,
             stop_loss_order,
@@ -920,6 +1009,18 @@ async def place_extension_exit_orders(
         )
         stop_loss_order_id = int(stop_loss_receipt.order_id)
         placed_order_ids.append(stop_loss_order_id)
+        stop_loss_status = await wait_for_extension_exit_order_working_or_done(
+            order_service=order_service,
+            trade=stop_loss_receipt.trade,
+            role="stop-loss",
+            order_ref=stop_loss_order_ref,
+        )
+        if stop_loss_status in EXTENSION_EXIT_ORDER_FILLED_STATUSES:
+            raise RuntimeError(
+                f"extension stop-loss filled during placement before TP was submitted: "
+                f"order_id={stop_loss_order_id}, order_ref={stop_loss_order_ref}"
+            )
+
         record_protective_order(
             conn,
             instrument_code=instrument_code,
@@ -936,6 +1037,41 @@ async def place_extension_exit_orders(
         )
         conn.commit()
 
+        take_profit_receipt = await order_service.api.place_order(
+            contract_q,
+            take_profit_order,
+            order_ref=take_profit_order_ref,
+        )
+        take_profit_order_id = int(take_profit_receipt.order_id)
+        placed_order_ids.append(take_profit_order_id)
+        take_profit_status = await wait_for_extension_exit_order_working_or_done(
+            order_service=order_service,
+            trade=take_profit_receipt.trade,
+            role="take-profit",
+            order_ref=take_profit_order_ref,
+        )
+        if take_profit_status in EXTENSION_EXIT_ORDER_FILLED_STATUSES:
+            raise RuntimeError(
+                f"extension take-profit filled during placement: "
+                f"order_id={take_profit_order_id}, order_ref={take_profit_order_ref}"
+            )
+
+        record_protective_order(
+            conn,
+            instrument_code=instrument_code,
+            parent_trade_intent_id=int(latest_event["trade_intent_id"]),
+            role=PROTECTIVE_ORDER_ROLE_TAKE_PROFIT,
+            order_ref=take_profit_order_ref,
+            order_id=take_profit_order_id,
+            order_action=order_action,
+            order_quantity=quantity,
+            order_type="LIMIT",
+            limit_price=float(prices.take_profit_price),
+            stop_price=None,
+            oca_group=oca_group,
+        )
+        conn.commit()
+
         return (
             take_profit_order_id,
             stop_loss_order_id,
@@ -945,8 +1081,16 @@ async def place_extension_exit_orders(
         )
 
     except Exception:
+        # Если второй ордер не встал, не оставляем одиночный SL/TP без пары.
         for order_id in placed_order_ids:
             try:
+                known_status = find_known_trade_order_status(
+                    order_service,
+                    order_id=order_id,
+                )
+                if known_status in EXTENSION_EXIT_ORDER_FILLED_STATUSES:
+                    continue
+
                 await order_service.cancel_order_id(order_id)
                 mark_protective_order_status(
                     conn,
@@ -1125,6 +1269,298 @@ def calculate_profit_points(*, side: str, entry_price: float, current_exit_price
     return 0.0
 
 
+def get_price_path_stale_max_seconds() -> int:
+    configured = getattr(DEFAULT_SIGNAL_CONFIG, "slot_loss_extension_price_stale_max_seconds", None)
+    if configured is not None:
+        return max(1, int(configured))
+    return max(1, int(getattr(DEFAULT_SIGNAL_CONFIG, "max_job_bar_lag_seconds", 15)))
+
+
+def is_price_path_fresh(price_stats: PricePathStats, *, now_ts: int) -> bool:
+    return int(now_ts) - int(price_stats.latest_bar_ts) <= get_price_path_stale_max_seconds()
+
+
+def is_extension_price_watchdog_enabled() -> bool:
+    return bool(getattr(DEFAULT_SIGNAL_CONFIG, "slot_loss_extension_price_watchdog_enabled", True))
+
+
+def is_extension_stale_price_fail_safe_enabled() -> bool:
+    return bool(getattr(DEFAULT_SIGNAL_CONFIG, "slot_loss_extension_price_watchdog_stale_close_enabled", True))
+
+
+def read_latest_feature_bar(
+        *,
+        instrument_code: str,
+        start_ts: int,
+        now_ts: int,
+) -> dict[str, Any] | None:
+    instrument_row = Instrument.get(str(instrument_code))
+    if instrument_row is None:
+        return None
+
+    feature_db_path = Path(get_instrument_feature_db_path(str(instrument_code), instrument_row))
+    if not feature_db_path.is_file():
+        return None
+
+    conn = open_sqlite_connection(str(feature_db_path), use_wal=True)
+    try:
+        row = conn.execute(
+            f"""
+            SELECT bar_time_ts, mid_close, spread_close
+            FROM {MID_PRICE_TABLE_NAME}
+            WHERE bar_time_ts >= ?
+              AND bar_time_ts <= ?
+            ORDER BY bar_time_ts DESC
+            LIMIT 1
+            """,
+            (int(start_ts), int(now_ts)),
+        ).fetchone()
+
+        if row is None:
+            return None
+
+        return {
+            "bar_time_ts": int(row[0]),
+            "mid_close": float(row[1]),
+            "spread_close": float(row[2]),
+        }
+
+    finally:
+        conn.close()
+
+
+def read_first_level_touch_row(
+        *,
+        instrument_code: str,
+        side: str,
+        level_kind: str,
+        level_price: float,
+        start_ts: int,
+        now_ts: int,
+) -> dict[str, Any] | None:
+    instrument_row = Instrument.get(str(instrument_code))
+    if instrument_row is None:
+        return None
+
+    feature_db_path = Path(get_instrument_feature_db_path(str(instrument_code), instrument_row))
+    if not feature_db_path.is_file():
+        return None
+
+    side_value = str(side).upper()
+    level_kind_value = str(level_kind).upper()
+
+    if side_value == PositionSide.LONG.value and level_kind_value == "STOP":
+        trigger_expr = "(mid_low - spread_high / 2.0)"
+        condition_sql = f"{trigger_expr} <= ?"
+    elif side_value == PositionSide.LONG.value and level_kind_value == "TAKE_PROFIT":
+        trigger_expr = "(mid_high - spread_low / 2.0)"
+        condition_sql = f"{trigger_expr} >= ?"
+    elif side_value == PositionSide.SHORT.value and level_kind_value == "STOP":
+        trigger_expr = "(mid_high + spread_high / 2.0)"
+        condition_sql = f"{trigger_expr} >= ?"
+    elif side_value == PositionSide.SHORT.value and level_kind_value == "TAKE_PROFIT":
+        trigger_expr = "(mid_low + spread_low / 2.0)"
+        condition_sql = f"{trigger_expr} <= ?"
+    else:
+        return None
+
+    conn = open_sqlite_connection(str(feature_db_path), use_wal=True)
+    try:
+        row = conn.execute(
+            f"""
+            SELECT
+                bar_time_ts,
+                {trigger_expr} AS trigger_price,
+                mid_open,
+                mid_high,
+                mid_low,
+                mid_close,
+                spread_open,
+                spread_high,
+                spread_low,
+                spread_close
+            FROM {MID_PRICE_TABLE_NAME}
+            WHERE bar_time_ts >= ?
+              AND bar_time_ts <= ?
+              AND {condition_sql}
+            ORDER BY bar_time_ts ASC
+            LIMIT 1
+            """,
+            (int(start_ts), int(now_ts), float(level_price)),
+        ).fetchone()
+
+        if row is None:
+            return None
+
+        return {
+            "bar_time_ts": int(row[0]),
+            "trigger_price": float(row[1]),
+            "mid_open": float(row[2]),
+            "mid_high": float(row[3]),
+            "mid_low": float(row[4]),
+            "mid_close": float(row[5]),
+            "spread_open": float(row[6]),
+            "spread_high": float(row[7]),
+            "spread_low": float(row[8]),
+            "spread_close": float(row[9]),
+        }
+
+    finally:
+        conn.close()
+
+
+def build_watchdog_event_from_level_touch(
+        *,
+        extension: dict[str, Any],
+        level_kind: str,
+        row: dict[str, Any],
+) -> dict[str, Any]:
+    instrument_code = str(extension["instrument_code"])
+    level_kind_value = str(level_kind).upper()
+
+    if level_kind_value == "STOP":
+        return {
+            "event": "SLOT_LOSS_EXTENSION_STOP_PRICE_BREACHED",
+            "finish_reason": "watchdog_stop_price_breached_market_close_executed",
+            "source_signal_id": SLOT_LOSS_EXTENSION_WATCHDOG_SOURCE_SIGNAL_ID,
+            "intent_source": SLOT_LOSS_EXTENSION_WATCHDOG_INTENT_SOURCE,
+            "reason": (
+                f"{SLOT_LOSS_EXTENSION_WATCHDOG_STOP_REASON}; "
+                f"extension_id={extension['slot_loss_extension_id']}; "
+                f"stop_loss={float(extension['stop_loss_price']):.2f}; "
+                f"trigger_price={float(row['trigger_price']):.2f}; "
+                f"trigger_bar_ts={int(row['bar_time_ts'])}"
+            ),
+            "message": (
+                f"{instrument_code}: slot-loss extension watchdog detected STOP breach: "
+                f"extension_id={extension['slot_loss_extension_id']}, "
+                f"stop_loss={float(extension['stop_loss_price']):.2f}, "
+                f"trigger_price={float(row['trigger_price']):.2f}, "
+                f"trigger_bar_ts={int(row['bar_time_ts'])}; market close will be sent"
+            ),
+        }
+
+    return {
+        "event": "SLOT_LOSS_EXTENSION_TAKE_PROFIT_PRICE_TOUCHED",
+        "finish_reason": "watchdog_take_profit_price_touched_market_close_executed",
+        "source_signal_id": SLOT_LOSS_EXTENSION_WATCHDOG_SOURCE_SIGNAL_ID,
+        "intent_source": SLOT_LOSS_EXTENSION_WATCHDOG_INTENT_SOURCE,
+        "reason": (
+            f"{SLOT_LOSS_EXTENSION_WATCHDOG_TP_REASON}; "
+            f"extension_id={extension['slot_loss_extension_id']}; "
+            f"take_profit={float(extension['take_profit_price']):.2f}; "
+            f"trigger_price={float(row['trigger_price']):.2f}; "
+            f"trigger_bar_ts={int(row['bar_time_ts'])}"
+        ),
+        "message": (
+            f"{instrument_code}: slot-loss extension watchdog detected TP touch while broker position is still open: "
+            f"extension_id={extension['slot_loss_extension_id']}, "
+            f"take_profit={float(extension['take_profit_price']):.2f}, "
+            f"trigger_price={float(row['trigger_price']):.2f}, "
+            f"trigger_bar_ts={int(row['bar_time_ts'])}; market close will be sent"
+        ),
+    }
+
+
+def read_active_extension_watchdog_event(
+        *,
+        extension: dict[str, Any],
+        now_ts: int,
+) -> dict[str, Any] | None:
+    if not is_extension_price_watchdog_enabled():
+        return None
+
+    instrument_code = str(extension["instrument_code"])
+    start_ts = int(extension["created_at_ts"])
+
+    latest_bar = read_latest_feature_bar(
+        instrument_code=instrument_code,
+        start_ts=start_ts,
+        now_ts=now_ts,
+    )
+
+    if latest_bar is None:
+        if not is_extension_stale_price_fail_safe_enabled():
+            return None
+        return {
+            "event": "SLOT_LOSS_EXTENSION_PRICE_PATH_MISSING",
+            "finish_reason": "watchdog_price_path_missing_market_close_executed",
+            "source_signal_id": SLOT_LOSS_EXTENSION_WATCHDOG_SOURCE_SIGNAL_ID,
+            "intent_source": SLOT_LOSS_EXTENSION_WATCHDOG_INTENT_SOURCE,
+            "reason": (
+                f"{SLOT_LOSS_EXTENSION_WATCHDOG_STALE_REASON}; "
+                f"extension_id={extension['slot_loss_extension_id']}; latest_bar_ts=missing"
+            ),
+            "message": (
+                f"{instrument_code}: slot-loss extension watchdog cannot read fresh price path: "
+                f"extension_id={extension['slot_loss_extension_id']}; market close will be sent"
+            ),
+        }
+
+    latest_age_seconds = int(now_ts) - int(latest_bar["bar_time_ts"])
+    stale_max_seconds = get_price_path_stale_max_seconds()
+    if latest_age_seconds > stale_max_seconds:
+        if not is_extension_stale_price_fail_safe_enabled():
+            return None
+        return {
+            "event": "SLOT_LOSS_EXTENSION_PRICE_PATH_STALE",
+            "finish_reason": "watchdog_price_path_stale_market_close_executed",
+            "source_signal_id": SLOT_LOSS_EXTENSION_WATCHDOG_SOURCE_SIGNAL_ID,
+            "intent_source": SLOT_LOSS_EXTENSION_WATCHDOG_INTENT_SOURCE,
+            "reason": (
+                f"{SLOT_LOSS_EXTENSION_WATCHDOG_STALE_REASON}; "
+                f"extension_id={extension['slot_loss_extension_id']}; "
+                f"latest_bar_ts={int(latest_bar['bar_time_ts'])}; "
+                f"age_seconds={latest_age_seconds}; max_age_seconds={stale_max_seconds}"
+            ),
+            "message": (
+                f"{instrument_code}: slot-loss extension watchdog price path is stale: "
+                f"extension_id={extension['slot_loss_extension_id']}, "
+                f"latest_bar_ts={int(latest_bar['bar_time_ts'])}, "
+                f"age_seconds={latest_age_seconds}, max_age_seconds={stale_max_seconds}; "
+                "market close will be sent"
+            ),
+        }
+
+    stop_row = read_first_level_touch_row(
+        instrument_code=instrument_code,
+        side=str(extension["position_side"]),
+        level_kind="STOP",
+        level_price=float(extension["stop_loss_price"]),
+        start_ts=start_ts,
+        now_ts=now_ts,
+    )
+    take_profit_row = read_first_level_touch_row(
+        instrument_code=instrument_code,
+        side=str(extension["position_side"]),
+        level_kind="TAKE_PROFIT",
+        level_price=float(extension["take_profit_price"]),
+        start_ts=start_ts,
+        now_ts=now_ts,
+    )
+
+    candidates: list[tuple[int, int, dict[str, Any]]] = []
+    if stop_row is not None:
+        candidates.append((int(stop_row["bar_time_ts"]), 0, build_watchdog_event_from_level_touch(
+            extension=extension,
+            level_kind="STOP",
+            row=stop_row,
+        )))
+    if take_profit_row is not None:
+        candidates.append((int(take_profit_row["bar_time_ts"]), 1, build_watchdog_event_from_level_touch(
+            extension=extension,
+            level_kind="TAKE_PROFIT",
+            row=take_profit_row,
+        )))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    return candidates[0][2]
+
+
+
 async def handle_slot_close_snapshot(
         *,
         order_service: OrderService,
@@ -1220,6 +1656,21 @@ async def handle_slot_close_snapshot(
             source_signal_id=SLOT_LOSS_EXTENSION_MARKET_CLOSE_SOURCE_SIGNAL_ID,
             intent_source=SLOT_CLOSE_DECISION_INTENT_SOURCE,
             reason="slot_loss_extension_rejected_missing_price_path",
+            now_ts=now_ts,
+        )
+
+    if not is_price_path_fresh(price_stats, now_ts=now_ts):
+        return await close_market_safely(
+            order_service=order_service,
+            snapshot=snapshot,
+            source_signal_id=SLOT_LOSS_EXTENSION_MARKET_CLOSE_SOURCE_SIGNAL_ID,
+            intent_source=SLOT_CLOSE_DECISION_INTENT_SOURCE,
+            reason=(
+                "slot_loss_extension_rejected_stale_price_path; "
+                f"latest_bar_ts={price_stats.latest_bar_ts}; "
+                f"age_seconds={int(now_ts) - int(price_stats.latest_bar_ts)}; "
+                f"max_age_seconds={get_price_path_stale_max_seconds()}"
+            ),
             now_ts=now_ts,
         )
 
@@ -1336,6 +1787,52 @@ async def process_active_slot_loss_extensions_once(
             ))
             continue
 
+        watchdog_event = read_active_extension_watchdog_event(
+            extension=extension,
+            now_ts=now_ts,
+        )
+        if watchdog_event is not None:
+            events.append(SlotLossExtensionEvent(
+                instrument_code=instrument_code,
+                event=str(watchdog_event["event"]),
+                message=str(watchdog_event["message"]),
+                log_level="WARNING",
+            ))
+
+            close_events = await close_market_safely(
+                order_service=order_service,
+                snapshot=snapshot,
+                source_signal_id=int(watchdog_event["source_signal_id"]),
+                intent_source=str(watchdog_event["intent_source"]),
+                reason=str(watchdog_event["reason"]),
+                now_ts=now_ts,
+            )
+            events.extend(close_events)
+
+            close_executed = any(
+                event.result is not None and event.result.status == ExecutionStatus.EXECUTED
+                for event in close_events
+            )
+            already_flat = any(
+                event.event == "MARKET_CLOSE_SKIPPED_ALREADY_FLAT"
+                for event in close_events
+            )
+
+            if close_executed or already_flat:
+                conn = get_trade_db_connection()
+                try:
+                    mark_slot_loss_extension_finished(
+                        conn,
+                        slot_loss_extension_id=int(extension["slot_loss_extension_id"]),
+                        finish_reason=str(watchdog_event["finish_reason"]),
+                        now_ts=int(time.time()),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+
+            continue
+
         if now_ts < int(extension["deadline_ts"]):
             continue
 
@@ -1437,19 +1934,20 @@ async def process_slot_close_decisions_once(
 
 
 async def run_slot_loss_extension_once(*, order_service: OrderService) -> list[SlotLossExtensionEvent]:
-    if not is_slot_loss_extension_enabled():
-        return []
-
     if not is_slot_mode():
         return []
 
     now_ts = int(time.time())
     events: list[SlotLossExtensionEvent] = []
 
+    # Уже активные extensions надо сопровождать всегда, даже если флаг запуска новых выключили.
     events.extend(await process_active_slot_loss_extensions_once(
         order_service=order_service,
         now_ts=now_ts,
     ))
+
+    if not is_slot_loss_extension_enabled():
+        return events
 
     # active-extension processing can take time and can close positions; refresh timestamp before slot-close decision.
     now_ts = int(time.time())

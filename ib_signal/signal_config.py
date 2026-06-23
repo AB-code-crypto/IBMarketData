@@ -50,6 +50,14 @@ class SignalConfig:
     slot_loss_extension_max_drawdown_ratio: float = 0.95
     slot_loss_extension_deadline_minutes: int = 30
 
+    # Safety guard для второго шанса.
+    # order_accept_timeout: ждём, что extension TP/SL реально принят IB.
+    # watchdog: если price DB показывает пробой SL/касание TP, а позиция всё ещё открыта,
+    # execution закрывает позицию market, не ждёт deadline.
+    slot_loss_extension_order_accept_timeout_seconds: float = 5.0
+    slot_loss_extension_price_watchdog_enabled: bool = True
+    slot_loss_extension_price_watchdog_stale_close_enabled: bool = True
+
     # Поиск кандидатов по Pearson.
     price_source: str = "mid_close"  #
     pearson_min: float = 0.7  # минимальный пирсон
