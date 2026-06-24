@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from contracts import Instrument
-from core.logger import get_logger
 from core.sqlite_utils import open_sqlite_connection
 from ib_execution.contract_resolver import build_execution_contract
 from ib_execution.execution_logic import execute_trade_intent
@@ -62,7 +61,6 @@ from ib_trader.trade_store import (
 )
 
 
-logger = get_logger(__name__)
 
 SLOT_LOSS_EXTENSION_SOURCE_SIGNAL_ID = -6
 SLOT_LOSS_EXTENSION_MARKET_CLOSE_SOURCE_SIGNAL_ID = -7
@@ -89,9 +87,9 @@ SLOT_LOSS_EXTENSION_WATCHDOG_STOP_REASON = "slot_loss_extension_watchdog_stop_pr
 SLOT_LOSS_EXTENSION_WATCHDOG_TP_REASON = "slot_loss_extension_watchdog_take_profit_price_touched"
 SLOT_LOSS_EXTENSION_WATCHDOG_STALE_REASON = "slot_loss_extension_watchdog_price_path_stale"
 
+# Для extension TP/SL нельзя считать ApiPending/PendingSubmit защитой.
+# Это промежуточные статусы: ждём реальный working-status или fail/timeout.
 EXTENSION_EXIT_ORDER_ACCEPTED_STATUSES = {
-    "ApiPending",
-    "PendingSubmit",
     "PreSubmitted",
     "Submitted",
 }
@@ -934,6 +932,7 @@ async def wait_for_extension_exit_order_working_or_done(
             raise RuntimeError(
                 f"extension {role} order was not accepted by broker before timeout: "
                 f"order_id={order_id}, order_ref={order_ref}, status={status}, "
+                f"accepted_statuses={sorted(EXTENSION_EXIT_ORDER_ACCEPTED_STATUSES)}, "
                 f"timeout_seconds={timeout_seconds}, "
                 f"ib_error={describe_ib_error(order_service.monitor.last_error(order_id))}"
             )

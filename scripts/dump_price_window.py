@@ -5,11 +5,20 @@
 Запускать из корня репозитория IBMarketData.
 
 Пример:
-    python dump_price_window.py
+    python scripts/dump_price_window.py \
+        --instrument MNQ \
+        --date 2026-06-23 \
+        --start-msk 08:25:00 \
+        --end-msk 09:35:00 \
+        --extension-start-msk 08:59:50 \
+        --deadline-msk 09:30:00 \
+        --side LONG \
+        --entry-price 30166.00 \
+        --take-profit 30168.00 \
+        --stop-loss 30092.25
 
-По умолчанию выгружает MNQ за 2026-06-23 08:25:00–09:35:00 MSK
-и проверяет уровни второго шанса:
-    entry=30166.00, TP=30168.00, SL=30092.25
+Скрипт намеренно не содержит дефолтов конкретной сделки.
+Окно и уровни надо передавать явно.
 
 На выходе создаёт zip в data/debug_price_dumps/:
     - raw_price.csv
@@ -632,17 +641,17 @@ def parse_args() -> DumpConfig:
         description="Dump raw price DB + feature mid_price_5s for a compact MSK time window."
     )
 
-    parser.add_argument("--instrument", default="MNQ")
-    parser.add_argument("--date", default="2026-06-23", help="YYYY-MM-DD, MSK date")
-    parser.add_argument("--start-msk", default="08:25:00")
-    parser.add_argument("--end-msk", default="09:35:00")
-    parser.add_argument("--extension-start-msk", default="08:59:50")
-    parser.add_argument("--deadline-msk", default="09:30:00")
+    parser.add_argument("--instrument", required=True, help="Instrument code from contracts.py, e.g. MNQ")
+    parser.add_argument("--date", required=True, help="YYYY-MM-DD, MSK date")
+    parser.add_argument("--start-msk", required=True, help="HH:MM:SS, inclusive MSK window start")
+    parser.add_argument("--end-msk", required=True, help="HH:MM:SS, inclusive MSK window end")
+    parser.add_argument("--extension-start-msk", default="", help="Optional HH:MM:SS checkpoint")
+    parser.add_argument("--deadline-msk", default="", help="Optional HH:MM:SS checkpoint")
     parser.add_argument("--side", default="LONG", choices=["LONG", "SHORT", "long", "short"])
 
-    parser.add_argument("--entry-price", type=float, default=30166.00)
-    parser.add_argument("--take-profit", type=float, default=30168.00)
-    parser.add_argument("--stop-loss", type=float, default=30092.25)
+    parser.add_argument("--entry-price", type=float, default=None)
+    parser.add_argument("--take-profit", type=float, default=None)
+    parser.add_argument("--stop-loss", type=float, default=None)
 
     parser.add_argument(
         "--output-dir",

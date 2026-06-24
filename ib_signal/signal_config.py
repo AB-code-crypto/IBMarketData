@@ -57,6 +57,7 @@ class SignalConfig:
     slot_loss_extension_order_accept_timeout_seconds: float = 5.0
     slot_loss_extension_price_watchdog_enabled: bool = True
     slot_loss_extension_price_watchdog_stale_close_enabled: bool = True
+    slot_loss_extension_price_stale_max_seconds: int = 15
 
     # Поиск кандидатов по Pearson.
     price_source: str = "mid_close"  #
