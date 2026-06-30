@@ -1471,10 +1471,12 @@ def read_active_extension_watchdog_event(
 
     instrument_code = str(extension["instrument_code"])
     start_ts = int(extension["created_at_ts"])
+    stale_max_seconds = get_price_path_stale_max_seconds()
+    latest_start_ts = max(0, int(now_ts) - stale_max_seconds * 2)
 
     latest_bar = read_latest_feature_bar(
         instrument_code=instrument_code,
-        start_ts=start_ts,
+        start_ts=latest_start_ts,
         now_ts=now_ts,
     )
 
@@ -1497,7 +1499,6 @@ def read_active_extension_watchdog_event(
         }
 
     latest_age_seconds = int(now_ts) - int(latest_bar["bar_time_ts"])
-    stale_max_seconds = get_price_path_stale_max_seconds()
     if latest_age_seconds > stale_max_seconds:
         if not is_extension_stale_price_fail_safe_enabled():
             return None

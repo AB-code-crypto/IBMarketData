@@ -424,15 +424,25 @@ async def run_protective_order_price_watchdog_once(*, order_service: OrderServic
 
     for stop_order in stop_orders:
         instrument_code = str(stop_order["instrument_code"])
+        order_ref = str(stop_order.get("order_ref", "") or "")
+
+        # Extension TP/SL живут в той же protective_orders таблице, но управляются отдельным
+        # SLOT_LOSS_EXTENSION watchdog. Не смешиваем источники закрытия и finish_reason.
+        if order_ref.endswith(("_EXT_SL", "_EXT_TP")):
+            continue
+
         side = side_closed_by_exit_order_action(str(stop_order.get("order_action", "")))
 
         if side is None:
             continue
 
         start_ts = int(stop_order.get("created_at_ts") or now_ts)
+        stale_max_seconds = get_protective_order_price_stale_max_seconds()
+        latest_start_ts = max(0, int(now_ts) - stale_max_seconds * 2)
+
         latest_bar = read_latest_feature_bar(
             instrument_code=instrument_code,
-            start_ts=start_ts,
+            start_ts=latest_start_ts,
             now_ts=now_ts,
         )
 
@@ -462,7 +472,6 @@ async def run_protective_order_price_watchdog_once(*, order_service: OrderServic
             continue
 
         latest_age_seconds = int(now_ts) - int(latest_bar["bar_time_ts"])
-        stale_max_seconds = get_protective_order_price_stale_max_seconds()
 
         if latest_age_seconds > stale_max_seconds:
             if not is_protective_order_stale_price_fail_safe_enabled():
