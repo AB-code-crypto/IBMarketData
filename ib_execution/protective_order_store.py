@@ -226,6 +226,7 @@ def record_protective_order(
             realized_pnl = NULL,
             filled_at_ts = NULL,
             synthetic_trade_intent_id = NULL,
+            created_at_ts = excluded.created_at_ts,
             updated_at_ts = excluded.updated_at_ts,
             finished_at_ts = NULL
         """,

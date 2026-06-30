@@ -59,6 +59,14 @@ class SignalConfig:
     slot_loss_extension_price_watchdog_stale_close_enabled: bool = True
     slot_loss_extension_price_stale_max_seconds: int = 15
 
+    # Safety guard для обычных protective TP/SL после входа.
+    # Работает одинаково в SLOT и ROLLING: если SL не подтверждён или цена уже пробила SL,
+    # execution закрывает позицию market, не ждёт следующего сигнала/reverse.
+    protective_order_accept_timeout_seconds: float = 5.0
+    protective_order_price_watchdog_enabled: bool = True
+    protective_order_price_watchdog_stale_close_enabled: bool = True
+    protective_order_price_stale_max_seconds: int = 15
+
     # Поиск кандидатов по Pearson.
     price_source: str = "mid_close"  #
     pearson_min: float = 0.7  # минимальный пирсон

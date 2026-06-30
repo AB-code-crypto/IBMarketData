@@ -40,7 +40,15 @@ from ib_execution.slot_close_recovery import (
     SLOT_CLOSE_RECOVERY_INTERVAL_SECONDS,
     run_slot_close_recovery_once,
 )
-from ib_execution.slot_loss_extension import run_slot_loss_extension_once
+from ib_execution.slot_loss_extension import (
+    close_market_safely,
+    find_snapshot,
+    read_first_level_touch_row,
+    read_latest_feature_bar,
+    run_slot_loss_extension_once,
+)
+from ib_position_sync.position_store import sync_broker_positions_once
+from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG
 
 setup_logging()
 logger = get_logger(__name__)
@@ -54,6 +62,24 @@ TAKE_PROFIT_ORDER_REF_SUFFIX = "_TP"
 STOP_LOSS_ORDER_REF_SUFFIX = "_SL"
 PROTECTIVE_OCA_GROUP_PREFIX = "IBMD_OCA"
 PROTECTIVE_ORDER_TIME_IN_FORCE = "DAY"
+
+PROTECTIVE_ORDER_SAFETY_SOURCE_SIGNAL_ID = -10
+PROTECTIVE_ORDER_SAFETY_INTENT_SOURCE = "PROTECTIVE_ORDER_SAFETY"
+PROTECTIVE_ORDER_SAFETY_SUBMIT_FAILED_REASON = "protective_order_submit_failed_market_close"
+PROTECTIVE_ORDER_SAFETY_STOP_BREACHED_REASON = "protective_order_watchdog_stop_price_breached"
+PROTECTIVE_ORDER_SAFETY_PRICE_PATH_STALE_REASON = "protective_order_watchdog_price_path_stale"
+
+PROTECTIVE_EXIT_ORDER_ACCEPTED_STATUSES = {
+    "PreSubmitted",
+    "Submitted",
+}
+PROTECTIVE_EXIT_ORDER_FILLED_STATUSES = {"Filled"}
+PROTECTIVE_EXIT_ORDER_REJECTED_STATUSES = {
+    "ApiCancelled",
+    "Cancelled",
+    "Inactive",
+    "Rejected",
+}
 
 
 def normalize_price_to_tick_floor(*, price: Decimal, price_tick: Decimal) -> float:
@@ -225,6 +251,285 @@ async def cancel_protective_orders_before_position_change(*, conn, order_service
             )
 
 
+
+def get_protective_order_accept_timeout_seconds() -> float:
+    return float(getattr(DEFAULT_SIGNAL_CONFIG, "protective_order_accept_timeout_seconds", 5.0))
+
+
+def is_protective_order_price_watchdog_enabled() -> bool:
+    return bool(getattr(DEFAULT_SIGNAL_CONFIG, "protective_order_price_watchdog_enabled", True))
+
+
+def is_protective_order_stale_price_fail_safe_enabled() -> bool:
+    return bool(getattr(DEFAULT_SIGNAL_CONFIG, "protective_order_price_watchdog_stale_close_enabled", True))
+
+
+def get_protective_order_price_stale_max_seconds() -> int:
+    configured = getattr(DEFAULT_SIGNAL_CONFIG, "protective_order_price_stale_max_seconds", None)
+    if configured is not None:
+        return max(1, int(configured))
+    return max(1, int(getattr(DEFAULT_SIGNAL_CONFIG, "max_job_bar_lag_seconds", 15)))
+
+
+def apply_protective_order_safety_flags(order) -> None:
+    if hasattr(order, "outsideRth"):
+        setattr(order, "outsideRth", True)
+
+
+def describe_ib_error(error) -> str:
+    if error is None:
+        return "missing"
+
+    parts = []
+    for attr_name in ("id", "code", "message"):
+        value = getattr(error, attr_name, None)
+        if value is not None:
+            parts.append(f"{attr_name}={value}")
+    return ", ".join(parts) if parts else str(error)
+
+
+def find_known_trade_order_status(order_service: OrderService, *, order_id: int) -> str | None:
+    order_id = int(order_id)
+
+    for method_name in ("trades", "openTrades"):
+        method = getattr(order_service.ib, method_name, None)
+        if method is None:
+            continue
+
+        try:
+            trades = list(method() or [])
+        except Exception:
+            continue
+
+        for trade in trades:
+            order = getattr(trade, "order", None)
+            if order is None:
+                continue
+
+            trade_order_id = int(getattr(order, "orderId", 0) or 0)
+            if trade_order_id != order_id:
+                continue
+
+            return str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
+
+    return None
+
+
+async def wait_for_protective_exit_order_working_or_done(
+        *,
+        order_service: OrderService,
+        trade,
+        role: str,
+        order_ref: str,
+) -> str:
+    loop_time = asyncio.get_running_loop().time
+    timeout_seconds = get_protective_order_accept_timeout_seconds()
+    poll_interval_seconds = 0.10
+    deadline = loop_time() + float(timeout_seconds)
+    order_id = int(getattr(getattr(trade, "order", None), "orderId", 0) or 0)
+
+    while True:
+        status = str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
+
+        if status in PROTECTIVE_EXIT_ORDER_ACCEPTED_STATUSES:
+            return status
+
+        if status in PROTECTIVE_EXIT_ORDER_FILLED_STATUSES:
+            return status
+
+        if status in PROTECTIVE_EXIT_ORDER_REJECTED_STATUSES:
+            raise RuntimeError(
+                f"protective {role} order was rejected/cancelled by broker: "
+                f"order_id={order_id}, order_ref={order_ref}, status={status}, "
+                f"ib_error={describe_ib_error(order_service.monitor.last_error(order_id))}"
+            )
+
+        if loop_time() >= deadline:
+            raise RuntimeError(
+                f"protective {role} order was not accepted by broker before timeout: "
+                f"order_id={order_id}, order_ref={order_ref}, status={status}, "
+                f"accepted_statuses={sorted(PROTECTIVE_EXIT_ORDER_ACCEPTED_STATUSES)}, "
+                f"timeout_seconds={timeout_seconds}, "
+                f"ib_error={describe_ib_error(order_service.monitor.last_error(order_id))}"
+            )
+
+        await asyncio.sleep(float(poll_interval_seconds))
+
+
+def side_closed_by_exit_order_action(order_action: str) -> str | None:
+    action = str(order_action).upper()
+    if action == "SELL":
+        return "LONG"
+    if action == "BUY":
+        return "SHORT"
+    return None
+
+
+async def log_safety_close_events(events) -> None:
+    for event in events:
+        if str(getattr(event, "log_level", "")).upper() == "WARNING":
+            log_warning(logger, event.message, to_telegram=True)
+        else:
+            log_info(logger, event.message, to_telegram=False)
+
+
+async def emergency_close_position_after_protective_failure(
+        *,
+        order_service: OrderService,
+        instrument_code: str,
+        reason: str,
+) -> None:
+    snapshots = await sync_broker_positions_once(order_service.ib)
+    snapshot = find_snapshot(snapshots, instrument_code=str(instrument_code))
+
+    if snapshot is None or str(snapshot.side).upper() not in {"LONG", "SHORT"} or float(snapshot.quantity) <= 0.0:
+        log_warning(
+            logger,
+            f"{instrument_code}: protective safety market close skipped because broker position is already FLAT; reason={reason}",
+            to_telegram=True,
+        )
+        return
+
+    close_events = await close_market_safely(
+        order_service=order_service,
+        snapshot=snapshot,
+        source_signal_id=PROTECTIVE_ORDER_SAFETY_SOURCE_SIGNAL_ID,
+        intent_source=PROTECTIVE_ORDER_SAFETY_INTENT_SOURCE,
+        reason=reason,
+        now_ts=int(time.time()),
+    )
+    await log_safety_close_events(close_events)
+
+
+async def run_protective_order_price_watchdog_once(*, order_service: OrderService) -> None:
+    if not is_protective_order_price_watchdog_enabled():
+        return
+
+    now_ts = int(time.time())
+    conn = get_trade_db_connection()
+
+    try:
+        active_orders = read_active_protective_orders(conn)
+    finally:
+        conn.close()
+
+    stop_orders = [
+        order for order in active_orders
+        if str(order.get("role", "")).upper() == PROTECTIVE_ORDER_ROLE_STOP_LOSS
+        and order.get("stop_price") is not None
+    ]
+
+    if not stop_orders:
+        return
+
+    for stop_order in stop_orders:
+        instrument_code = str(stop_order["instrument_code"])
+        side = side_closed_by_exit_order_action(str(stop_order.get("order_action", "")))
+
+        if side is None:
+            continue
+
+        start_ts = int(stop_order.get("created_at_ts") or now_ts)
+        latest_bar = read_latest_feature_bar(
+            instrument_code=instrument_code,
+            start_ts=start_ts,
+            now_ts=now_ts,
+        )
+
+        if latest_bar is None:
+            if not is_protective_order_stale_price_fail_safe_enabled():
+                continue
+
+            reason = (
+                f"{PROTECTIVE_ORDER_SAFETY_PRICE_PATH_STALE_REASON}; "
+                f"protective_order_id={stop_order['protective_order_id']}; "
+                f"order_id={stop_order['order_id']}; latest_bar_ts=missing"
+            )
+            log_warning(
+                logger,
+                (
+                    f"{instrument_code}: protective STOP watchdog cannot read fresh price path: "
+                    f"order_id={stop_order['order_id']}, stop_loss={float(stop_order['stop_price']):.2f}; "
+                    "market close will be sent"
+                ),
+                to_telegram=True,
+            )
+            await emergency_close_position_after_protective_failure(
+                order_service=order_service,
+                instrument_code=instrument_code,
+                reason=reason,
+            )
+            continue
+
+        latest_age_seconds = int(now_ts) - int(latest_bar["bar_time_ts"])
+        stale_max_seconds = get_protective_order_price_stale_max_seconds()
+
+        if latest_age_seconds > stale_max_seconds:
+            if not is_protective_order_stale_price_fail_safe_enabled():
+                continue
+
+            reason = (
+                f"{PROTECTIVE_ORDER_SAFETY_PRICE_PATH_STALE_REASON}; "
+                f"protective_order_id={stop_order['protective_order_id']}; "
+                f"order_id={stop_order['order_id']}; "
+                f"latest_bar_ts={int(latest_bar['bar_time_ts'])}; "
+                f"age_seconds={latest_age_seconds}; max_age_seconds={stale_max_seconds}"
+            )
+            log_warning(
+                logger,
+                (
+                    f"{instrument_code}: protective STOP watchdog price path is stale: "
+                    f"order_id={stop_order['order_id']}, latest_bar_ts={int(latest_bar['bar_time_ts'])}, "
+                    f"age_seconds={latest_age_seconds}, max_age_seconds={stale_max_seconds}; "
+                    "market close will be sent"
+                ),
+                to_telegram=True,
+            )
+            await emergency_close_position_after_protective_failure(
+                order_service=order_service,
+                instrument_code=instrument_code,
+                reason=reason,
+            )
+            continue
+
+        touch_row = read_first_level_touch_row(
+            instrument_code=instrument_code,
+            side=side,
+            level_kind="STOP",
+            level_price=float(stop_order["stop_price"]),
+            start_ts=start_ts,
+            now_ts=now_ts,
+        )
+
+        if touch_row is None:
+            continue
+
+        reason = (
+            f"{PROTECTIVE_ORDER_SAFETY_STOP_BREACHED_REASON}; "
+            f"protective_order_id={stop_order['protective_order_id']}; "
+            f"order_id={stop_order['order_id']}; "
+            f"stop_loss={float(stop_order['stop_price']):.2f}; "
+            f"trigger_price={float(touch_row['trigger_price']):.2f}; "
+            f"trigger_bar_ts={int(touch_row['bar_time_ts'])}"
+        )
+        log_warning(
+            logger,
+            (
+                f"{instrument_code}: protective STOP watchdog detected STOP breach: "
+                f"order_id={stop_order['order_id']}, "
+                f"stop_loss={float(stop_order['stop_price']):.2f}, "
+                f"trigger_price={float(touch_row['trigger_price']):.2f}, "
+                f"trigger_bar_ts={int(touch_row['bar_time_ts'])}; market close will be sent"
+            ),
+            to_telegram=True,
+        )
+        await emergency_close_position_after_protective_failure(
+            order_service=order_service,
+            instrument_code=instrument_code,
+            reason=reason,
+        )
+
+
 async def place_protective_orders_after_entry(*, conn, order_service: OrderService, intent, result) -> None:
     if result.status != ExecutionStatus.EXECUTED:
         return
@@ -253,9 +558,16 @@ async def place_protective_orders_after_entry(*, conn, order_service: OrderServi
                 f"{instrument_code}: protective orders skipped: unsupported target_qty={intent.target_qty!r} "
                 f"for trade_intent={intent.trade_intent_id}"
             ),
-            to_telegram=False,
+            to_telegram=True,
+        )
+        await emergency_close_position_after_protective_failure(
+            order_service=order_service,
+            instrument_code=instrument_code,
+            reason="protective_order_unsupported_quantity_market_close",
         )
         return
+
+    placed_order_ids: list[int] = []
 
     try:
         take_profit_price = calculate_take_profit_price(
@@ -270,11 +582,24 @@ async def place_protective_orders_after_entry(*, conn, order_service: OrderServi
         )
 
         if take_profit_price is None and stop_loss_price is None:
+            log_warning(
+                logger,
+                (
+                    f"{instrument_code}: protective orders skipped because both TP and SL are disabled; "
+                    f"trade_intent={intent.trade_intent_id}; market close will be sent"
+                ),
+                to_telegram=True,
+            )
+            await emergency_close_position_after_protective_failure(
+                order_service=order_service,
+                instrument_code=instrument_code,
+                reason="protective_orders_missing_tp_sl_market_close",
+            )
             return
 
         specs: list[dict[str, Any]] = []
 
-        # SL ставим первым: если TP почему-то не поставится, позиция всё равно останется защищённой.
+        # SL ставим первым: если TP почему-то не поставится, позиция всё равно сначала защищена.
         if stop_loss_price is not None:
             stop_order = order_service.api.build_stop(
                 action=order_action,
@@ -282,6 +607,7 @@ async def place_protective_orders_after_entry(*, conn, order_service: OrderServi
                 stop_price=float(stop_loss_price),
                 time_in_force=PROTECTIVE_ORDER_TIME_IN_FORCE,
             )
+            apply_protective_order_safety_flags(stop_order)
             specs.append({
                 "role": PROTECTIVE_ORDER_ROLE_STOP_LOSS,
                 "order": stop_order,
@@ -299,6 +625,7 @@ async def place_protective_orders_after_entry(*, conn, order_service: OrderServi
                 limit_price=float(take_profit_price),
                 time_in_force=PROTECTIVE_ORDER_TIME_IN_FORCE,
             )
+            apply_protective_order_safety_flags(take_profit_order)
             specs.append({
                 "role": PROTECTIVE_ORDER_ROLE_TAKE_PROFIT,
                 "order": take_profit_order,
@@ -328,6 +655,20 @@ async def place_protective_orders_after_entry(*, conn, order_service: OrderServi
                 order_ref=str(spec["order_ref"]),
             )
             order_id = int(receipt.order_id)
+            placed_order_ids.append(order_id)
+
+            status = await wait_for_protective_exit_order_working_or_done(
+                order_service=order_service,
+                trade=receipt.trade,
+                role=protective_role_text(str(spec["role"])),
+                order_ref=str(spec["order_ref"]),
+            )
+
+            if status in PROTECTIVE_EXIT_ORDER_FILLED_STATUSES:
+                raise RuntimeError(
+                    f"protective {protective_role_text(str(spec['role']))} order filled during placement: "
+                    f"order_id={order_id}, order_ref={spec['order_ref']}"
+                )
 
             record_protective_order(
                 conn,
@@ -343,28 +684,56 @@ async def place_protective_orders_after_entry(*, conn, order_service: OrderServi
                 stop_price=spec["stop_price"],
                 oca_group=oca_group,
             )
+            conn.commit()
 
             role_text = protective_role_text(str(spec["role"]))
             log_info(
                 logger,
                 (
-                    f"{instrument_code}: {role_text} order submitted: "
+                    f"{instrument_code}: {role_text} order accepted: "
                     f"parent_trade_intent={intent.trade_intent_id}, "
                     f"order_id={order_id}, action={order_action}, qty={quantity}, "
-                    f"price={spec['price']}, order_ref={spec['order_ref']}, oca_group={oca_group}"
+                    f"price={spec['price']}, order_ref={spec['order_ref']}, "
+                    f"oca_group={oca_group}, broker_status={status}"
                 ),
                 to_telegram=False,
             )
 
     except Exception as exc:
+        for order_id in placed_order_ids:
+            try:
+                known_status = find_known_trade_order_status(
+                    order_service,
+                    order_id=order_id,
+                )
+                if known_status in PROTECTIVE_EXIT_ORDER_FILLED_STATUSES:
+                    continue
+
+                await order_service.cancel_order_id(order_id)
+                mark_protective_order_status(
+                    conn,
+                    order_id=order_id,
+                    status="CANCELLED",
+                    error_text="cancelled after failed protective order placement",
+                )
+            except Exception:
+                pass
+
+        conn.commit()
+
         log_warning(
             logger,
             (
-                f"{instrument_code}: protective order submit failed: "
+                f"{instrument_code}: protective order submit failed; "
                 f"trade_intent={intent.trade_intent_id}, "
-                f"{type(exc).__name__}: {exc}"
+                f"{type(exc).__name__}: {exc}; market close will be sent"
             ),
-            to_telegram=False,
+            to_telegram=True,
+        )
+        await emergency_close_position_after_protective_failure(
+            order_service=order_service,
+            instrument_code=instrument_code,
+            reason=f"{PROTECTIVE_ORDER_SAFETY_SUBMIT_FAILED_REASON}; trade_intent_id={intent.trade_intent_id}; {type(exc).__name__}: {exc}",
         )
 
 
@@ -462,6 +831,18 @@ async def run_execution_loop(
             log_warning(
                 logger,
                 f"protective-order reconciliation failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
+                to_telegram=True,
+            )
+
+        try:
+            await run_protective_order_price_watchdog_once(
+                order_service=order_service,
+            )
+
+        except Exception as exc:
+            log_warning(
+                logger,
+                f"protective-order watchdog failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
                 to_telegram=True,
             )
 
