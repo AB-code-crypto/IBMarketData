@@ -111,7 +111,6 @@ Instrument: Registry = {
         "tradingClass": "MES",
         "multiplier": 5.0,
         "db_filename": "MES.sqlite3",
-        "realtime_enabled": True,
         "regime_flat_delta_threshold_points": 0.4,
         "take_profit_points": 35.0,
         "stop_loss_points": 60.0,
