@@ -25,7 +25,7 @@ class SignalConfig:
     # запись price DB, обновление job DB и polling signal-сервиса.
     # Другими словами минимальный max_job_bar_lag_seconds = 5 секунд это размер бара + пару секунд на обработку сигнала
 
-    max_job_bar_lag_seconds: int = 15
+    max_job_bar_lag_seconds: int = 60
 
     # ROLLING-режим.
     rolling_signal_step_seconds: int = 60  # считаем сигнал не на каждом баре, а через это кол-во секунд
