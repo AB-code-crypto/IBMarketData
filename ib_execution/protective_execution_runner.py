@@ -58,6 +58,19 @@ NEW_INTENTS_LIMIT = 20
 MAX_NEW_INTENT_AGE_SECONDS = 10
 EXECUTION_HEARTBEAT_INTERVAL_SECONDS = 60
 
+# Hard safety timeouts: execution-loop не должен зависать из-за IB disconnect,
+# зависшего reqPositionsAsync/reqExecutionsAsync или auxiliary recovery task.
+PROTECTIVE_RECONCILE_TIMEOUT_SECONDS = 20.0
+PROTECTIVE_WATCHDOG_TIMEOUT_SECONDS = 20.0
+PROTECTIVE_EMERGENCY_SYNC_TIMEOUT_SECONDS = 8.0
+PROTECTIVE_EMERGENCY_CLOSE_TIMEOUT_SECONDS = 45.0
+SLOT_LOSS_EXTENSION_TIMEOUT_SECONDS = 90.0
+SLOT_CLOSE_RECOVERY_TIMEOUT_SECONDS = 90.0
+EXECUTION_STATS_RECONCILE_TIMEOUT_SECONDS = 20.0
+MARKET_INTENT_EXECUTION_TIMEOUT_SECONDS = 90.0
+LIMIT_INTENT_EXECUTION_TIMEOUT_EXTRA_SECONDS = 30.0
+DEFAULT_LIMIT_INTENT_EXECUTION_TIMEOUT_SECONDS = 630.0
+
 TAKE_PROFIT_ORDER_REF_SUFFIX = "_TP"
 STOP_LOSS_ORDER_REF_SUFFIX = "_SL"
 PROTECTIVE_OCA_GROUP_PREFIX = "IBMD_OCA"
@@ -373,13 +386,66 @@ async def log_safety_close_events(events) -> None:
             log_info(logger, event.message, to_telegram=False)
 
 
+def is_ib_api_connected(order_service: OrderService) -> bool:
+    try:
+        return bool(order_service.ib.isConnected())
+    except Exception:
+        return False
+
+
+def get_trade_intent_execution_timeout_seconds(intent) -> float:
+    order_type = str(getattr(intent, "order_type", "") or "").upper()
+
+    if order_type == "LIMIT":
+        ttl_seconds = getattr(intent, "ttl_seconds", None)
+
+        if ttl_seconds is not None and int(ttl_seconds) > 0:
+            return float(int(ttl_seconds) + LIMIT_INTENT_EXECUTION_TIMEOUT_EXTRA_SECONDS)
+
+        return DEFAULT_LIMIT_INTENT_EXECUTION_TIMEOUT_SECONDS
+
+    return MARKET_INTENT_EXECUTION_TIMEOUT_SECONDS
+
+
 async def emergency_close_position_after_protective_failure(
         *,
         order_service: OrderService,
         instrument_code: str,
         reason: str,
 ) -> None:
-    snapshots = await sync_broker_positions_once(order_service.ib)
+    # Fail-safe market close для protective watchdog.
+    #
+    # Важное правило: если IB сейчас disconnected, не делаем reqPositionsAsync/market order.
+    # Иначе можно подвесить execution-loop или засыпать лог ConnectionError-ами.
+    # Следующая итерация watchdog повторит попытку после reconnect.
+    if not is_ib_api_connected(order_service):
+        log_warning(
+            logger,
+            (
+                f"{instrument_code}: protective safety market close deferred because IB API is disconnected; "
+                f"reason={reason}"
+            ),
+            to_telegram=False,
+        )
+        return
+
+    try:
+        snapshots = await asyncio.wait_for(
+            sync_broker_positions_once(order_service.ib),
+            timeout=float(PROTECTIVE_EMERGENCY_SYNC_TIMEOUT_SECONDS),
+        )
+
+    except Exception as exc:
+        log_warning(
+            logger,
+            (
+                f"{instrument_code}: protective safety market close deferred because broker position sync failed: "
+                f"{type(exc).__name__}: {exc}; reason={reason}"
+            ),
+            to_telegram=False,
+        )
+        return
+
     snapshot = find_snapshot(snapshots, instrument_code=str(instrument_code))
 
     if snapshot is None or str(snapshot.side).upper() not in {"LONG", "SHORT"} or float(snapshot.quantity) <= 0.0:
@@ -390,19 +456,51 @@ async def emergency_close_position_after_protective_failure(
         )
         return
 
-    close_events = await close_market_safely(
-        order_service=order_service,
-        snapshot=snapshot,
-        source_signal_id=PROTECTIVE_ORDER_SAFETY_SOURCE_SIGNAL_ID,
-        intent_source=PROTECTIVE_ORDER_SAFETY_INTENT_SOURCE,
-        reason=reason,
-        now_ts=int(time.time()),
-    )
+    if not is_ib_api_connected(order_service):
+        log_warning(
+            logger,
+            (
+                f"{instrument_code}: protective safety market close deferred because IB disconnected after "
+                f"position sync; reason={reason}"
+            ),
+            to_telegram=False,
+        )
+        return
+
+    try:
+        close_events = await asyncio.wait_for(
+            close_market_safely(
+                order_service=order_service,
+                snapshot=snapshot,
+                source_signal_id=PROTECTIVE_ORDER_SAFETY_SOURCE_SIGNAL_ID,
+                intent_source=PROTECTIVE_ORDER_SAFETY_INTENT_SOURCE,
+                reason=reason,
+                now_ts=int(time.time()),
+            ),
+            timeout=float(PROTECTIVE_EMERGENCY_CLOSE_TIMEOUT_SECONDS),
+        )
+
+    except Exception as exc:
+        log_warning(
+            logger,
+            (
+                f"{instrument_code}: protective safety market close failed/deferred: "
+                f"{type(exc).__name__}: {exc}; reason={reason}"
+            ),
+            to_telegram=True,
+        )
+        return
+
     await log_safety_close_events(close_events)
 
 
 async def run_protective_order_price_watchdog_once(*, order_service: OrderService) -> None:
     if not is_protective_order_price_watchdog_enabled():
+        return
+
+    # Если IB disconnected, watchdog не должен лезть в emergency close.
+    # Проверку цены повторим после reconnect.
+    if not is_ib_api_connected(order_service):
         return
 
     now_ts = int(time.time())
@@ -830,10 +928,13 @@ async def run_execution_loop(
 
     while True:
         try:
-            await reconcile_and_notify_protective_orders(
-                order_service=order_service,
-                deal_telegram_sender=deal_telegram_sender,
-                deal_message_thread_id=deal_message_thread_id,
+            await asyncio.wait_for(
+                reconcile_and_notify_protective_orders(
+                    order_service=order_service,
+                    deal_telegram_sender=deal_telegram_sender,
+                    deal_message_thread_id=deal_message_thread_id,
+                ),
+                timeout=float(PROTECTIVE_RECONCILE_TIMEOUT_SECONDS),
             )
 
         except Exception as exc:
@@ -844,8 +945,11 @@ async def run_execution_loop(
             )
 
         try:
-            await run_protective_order_price_watchdog_once(
-                order_service=order_service,
+            await asyncio.wait_for(
+                run_protective_order_price_watchdog_once(
+                    order_service=order_service,
+                ),
+                timeout=float(PROTECTIVE_WATCHDOG_TIMEOUT_SECONDS),
             )
 
         except Exception as exc:
@@ -856,8 +960,11 @@ async def run_execution_loop(
             )
 
         try:
-            slot_loss_extension_events = await run_slot_loss_extension_once(
-                order_service=order_service,
+            slot_loss_extension_events = await asyncio.wait_for(
+                run_slot_loss_extension_once(
+                    order_service=order_service,
+                ),
+                timeout=float(SLOT_LOSS_EXTENSION_TIMEOUT_SECONDS),
             )
 
             for extension_event in slot_loss_extension_events:
@@ -925,8 +1032,11 @@ async def run_execution_loop(
             next_slot_close_recovery_ts = now_ts + SLOT_CLOSE_RECOVERY_INTERVAL_SECONDS
 
             try:
-                recovery_events = await run_slot_close_recovery_once(
-                    order_service=order_service,
+                recovery_events = await asyncio.wait_for(
+                    run_slot_close_recovery_once(
+                        order_service=order_service,
+                    ),
+                    timeout=float(SLOT_CLOSE_RECOVERY_TIMEOUT_SECONDS),
                 )
 
                 for recovery_event in recovery_events:
@@ -990,8 +1100,11 @@ async def run_execution_loop(
                 )
 
         try:
-            execution_stats_events = await reconcile_missing_execution_stats_once(
-                order_service=order_service,
+            execution_stats_events = await asyncio.wait_for(
+                reconcile_missing_execution_stats_once(
+                    order_service=order_service,
+                ),
+                timeout=float(EXECUTION_STATS_RECONCILE_TIMEOUT_SECONDS),
             )
 
             for execution_stats_event in execution_stats_events:
@@ -1037,12 +1150,43 @@ async def run_execution_loop(
                 to_telegram=True,
             )
 
-        intents = read_new_trade_intents(
-            limit=NEW_INTENTS_LIMIT,
-            max_age_seconds=MAX_NEW_INTENT_AGE_SECONDS,
-        )
+        try:
+            intents = read_new_trade_intents(
+                limit=NEW_INTENTS_LIMIT,
+                max_age_seconds=MAX_NEW_INTENT_AGE_SECONDS,
+            )
+
+        except Exception as exc:
+            log_warning(
+                logger,
+                f"read_new_trade_intents failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
+                to_telegram=True,
+            )
+            intents = []
+
+        if intents and not is_ib_api_connected(order_service):
+            log_warning(
+                logger,
+                (
+                    f"ib_execution deferred {len(intents)} new trade_intent(s) because IB API is disconnected; "
+                    f"they will be retried before max age or expired by read_new_trade_intents"
+                ),
+                to_telegram=False,
+            )
+            intents = []
 
         for intent in intents:
+            if not is_ib_api_connected(order_service):
+                log_warning(
+                    logger,
+                    (
+                        f"ib_execution stops processing new intents because IB API disconnected before "
+                        f"trade_intent={intent.trade_intent_id}"
+                    ),
+                    to_telegram=False,
+                )
+                break
+
             conn = get_trade_db_connection()
             try:
                 initialize_execution_db(conn)
@@ -1067,10 +1211,13 @@ async def run_execution_loop(
                 )
                 conn.commit()
 
-                result = await execute_trade_intent(
-                    order_service=order_service,
-                    intent=intent,
-                    order_submitted_callback=on_order_submitted,
+                result = await asyncio.wait_for(
+                    execute_trade_intent(
+                        order_service=order_service,
+                        intent=intent,
+                        order_submitted_callback=on_order_submitted,
+                    ),
+                    timeout=float(get_trade_intent_execution_timeout_seconds(intent)),
                 )
 
                 write_trade_intent_execution_result(conn, result=result)
