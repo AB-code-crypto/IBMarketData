@@ -60,7 +60,9 @@ EXECUTION_HEARTBEAT_INTERVAL_SECONDS = 60
 
 # Hard safety timeouts: execution-loop не должен зависать из-за IB disconnect,
 # зависшего reqPositionsAsync/reqExecutionsAsync или auxiliary recovery task.
-PROTECTIVE_RECONCILE_TIMEOUT_SECONDS = 20.0
+PROTECTIVE_RECONCILE_BROKER_TIMEOUT_SECONDS = 20.0
+PROTECTIVE_RECONCILE_TOTAL_TIMEOUT_SECONDS = 60.0
+PROTECTIVE_NOTIFICATION_TIMEOUT_SECONDS = 8.0
 PROTECTIVE_WATCHDOG_TIMEOUT_SECONDS = 20.0
 PROTECTIVE_EMERGENCY_SYNC_TIMEOUT_SECONDS = 8.0
 PROTECTIVE_EMERGENCY_CLOSE_TIMEOUT_SECONDS = 45.0
@@ -850,8 +852,12 @@ async def reconcile_and_notify_protective_orders(
         deal_telegram_sender=None,
         deal_message_thread_id=None,
 ) -> None:
-    reconciled_protective_orders = await reconcile_protective_orders_once(
-        order_service=order_service,
+    # Broker/DB reconciliation не должен зависеть от Telegram. Ограничиваем только IB-часть.
+    reconciled_protective_orders = await asyncio.wait_for(
+        reconcile_protective_orders_once(
+            order_service=order_service,
+        ),
+        timeout=float(PROTECTIVE_RECONCILE_BROKER_TIMEOUT_SECONDS),
     )
 
     for reconciled_protective_order in reconciled_protective_orders:
@@ -880,6 +886,9 @@ async def reconcile_and_notify_protective_orders(
             continue
 
         try:
+            if deal_telegram_sender is None:
+                continue
+
             synthetic_intent, synthetic_result = read_executed_trade_intent_and_result_for_notification(
                 trade_intent_id=int(synthetic_trade_intent_id),
             )
@@ -887,14 +896,18 @@ async def reconcile_and_notify_protective_orders(
             if synthetic_intent is None or synthetic_result is None:
                 continue
 
-            await send_executed_deal_notification(
-                telegram_sender=deal_telegram_sender,
-                message_thread_id=deal_message_thread_id,
-                intent=synthetic_intent,
-                result=synthetic_result,
+            await asyncio.wait_for(
+                send_executed_deal_notification(
+                    telegram_sender=deal_telegram_sender,
+                    message_thread_id=deal_message_thread_id,
+                    intent=synthetic_intent,
+                    result=synthetic_result,
+                ),
+                timeout=float(PROTECTIVE_NOTIFICATION_TIMEOUT_SECONDS),
             )
 
         except Exception as notification_exc:
+            # Не пытаемся отправлять warning в Telegram, если сам Telegram уже подвис/сломался.
             log_warning(
                 logger,
                 (
@@ -902,7 +915,7 @@ async def reconcile_and_notify_protective_orders(
                     f"synthetic_trade_intent_id={synthetic_trade_intent_id}: "
                     f"{type(notification_exc).__name__}: {notification_exc}"
                 ),
-                to_telegram=True,
+                to_telegram=False,
             )
 
 
@@ -934,7 +947,7 @@ async def run_execution_loop(
                     deal_telegram_sender=deal_telegram_sender,
                     deal_message_thread_id=deal_message_thread_id,
                 ),
-                timeout=float(PROTECTIVE_RECONCILE_TIMEOUT_SECONDS),
+                timeout=float(PROTECTIVE_RECONCILE_TOTAL_TIMEOUT_SECONDS),
             )
 
         except Exception as exc:

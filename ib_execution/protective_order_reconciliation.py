@@ -13,6 +13,7 @@ from ib_execution.protective_order_store import (
     PROTECTIVE_ORDERS_TABLE_NAME,
     PROTECTIVE_ORDER_ROLE_STOP_LOSS,
     PROTECTIVE_ORDER_ROLE_TAKE_PROFIT,
+    PROTECTIVE_ORDER_STATUS_ACTIVE,
     PROTECTIVE_ORDER_STATUS_CANCELLED,
     PROTECTIVE_ORDER_STATUS_FILLED,
     get_trade_db_connection,
@@ -314,6 +315,90 @@ def mark_protective_cancelled(conn, *, protective_order: dict[str, Any], status_
     )
 
 
+def mark_oca_siblings_cancelled_after_fill(
+        conn,
+        *,
+        protective_order: dict[str, Any],
+        filled_order_id: int,
+        filled_at_ts: int,
+) -> list[dict[str, Any]]:
+    # Если TP/SL входит в OCA-пару и один sibling filled, второй ACTIVE sibling локально уже не активен.
+    oca_group = protective_order.get("oca_group")
+
+    if not oca_group:
+        return []
+
+    parent_trade_intent_id = int(protective_order["parent_trade_intent_id"])
+    filled_order_id = int(filled_order_id)
+    now_ts = int(time.time())
+    finished_at_ts = int(filled_at_ts)
+    error_text = f"cancelled by OCA after sibling filled: order_id={filled_order_id}"
+
+    sibling_rows = conn.execute(
+        f"""
+        SELECT
+            instrument_code,
+            parent_trade_intent_id,
+            role,
+            order_id
+        FROM {PROTECTIVE_ORDERS_TABLE_NAME}
+        WHERE status = ?
+          AND oca_group = ?
+          AND parent_trade_intent_id = ?
+          AND order_id != ?
+        """,
+        (
+            PROTECTIVE_ORDER_STATUS_ACTIVE,
+            str(oca_group),
+            parent_trade_intent_id,
+            filled_order_id,
+        ),
+    ).fetchall()
+
+    if not sibling_rows:
+        return []
+
+    conn.execute(
+        f"""
+        UPDATE {PROTECTIVE_ORDERS_TABLE_NAME}
+        SET
+            status = ?,
+            error_text = ?,
+            updated_at_ts = ?,
+            finished_at_ts = ?
+        WHERE status = ?
+          AND oca_group = ?
+          AND parent_trade_intent_id = ?
+          AND order_id != ?
+        """,
+        (
+            PROTECTIVE_ORDER_STATUS_CANCELLED,
+            error_text,
+            now_ts,
+            finished_at_ts,
+            PROTECTIVE_ORDER_STATUS_ACTIVE,
+            str(oca_group),
+            parent_trade_intent_id,
+            filled_order_id,
+        ),
+    )
+
+    return [
+        {
+            "event": "CANCELLED",
+            "role": str(row[2]),
+            "instrument_code": str(row[0]),
+            "order_id": int(row[3]),
+            "parent_trade_intent_id": int(row[1]),
+            "synthetic_trade_intent_id": None,
+            "filled_qty": 0.0,
+            "avg_fill_price": None,
+            "realized_pnl": None,
+        }
+        for row in sibling_rows
+    ]
+
+
 def create_protective_close_trade_intent(
         conn,
         *,
@@ -549,6 +634,12 @@ async def reconcile_protective_orders_once(*, order_service) -> list[dict[str, A
                     protective_order=protective_order,
                     statistics=statistics,
                 )
+                sibling_cancelled_events = mark_oca_siblings_cancelled_after_fill(
+                    conn,
+                    protective_order=protective_order,
+                    filled_order_id=int(protective_order["order_id"]),
+                    filled_at_ts=int(statistics["filled_at_ts"]),
+                )
                 conn.commit()
                 reconciled.append({
                     "event": "FILLED",
@@ -561,6 +652,7 @@ async def reconcile_protective_orders_once(*, order_service) -> list[dict[str, A
                     "avg_fill_price": statistics["avg_fill_price"],
                     "realized_pnl": statistics["realized_pnl"],
                 })
+                reconciled.extend(sibling_cancelled_events)
                 continue
 
             if statistics["cancelled"]:
