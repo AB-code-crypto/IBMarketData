@@ -36,34 +36,16 @@ def get_price_db_context(instrument_code: str) -> tuple[Path, str] | None:
 
 
 def _row_to_bar(row) -> dict[str, Any]:
-    bid_open = float(row[1])
-    bid_high = float(row[2])
-    bid_low = float(row[3])
-    bid_close = float(row[4])
-    ask_open = float(row[5])
-    ask_high = float(row[6])
-    ask_low = float(row[7])
-    ask_close = float(row[8])
-
     return {
         "bar_time_ts": int(row[0]),
-        "bid_open": bid_open,
-        "bid_high": bid_high,
-        "bid_low": bid_low,
-        "bid_close": bid_close,
-        "ask_open": ask_open,
-        "ask_high": ask_high,
-        "ask_low": ask_low,
-        "ask_close": ask_close,
-        # Compatibility fields. Trigger calculations never use them.
-        "mid_open": (bid_open + ask_open) / 2.0,
-        "mid_high": (bid_high + ask_high) / 2.0,
-        "mid_low": (bid_low + ask_low) / 2.0,
-        "mid_close": (bid_close + ask_close) / 2.0,
-        "spread_open": ask_open - bid_open,
-        "spread_high": ask_high - bid_high,
-        "spread_low": ask_low - bid_low,
-        "spread_close": ask_close - bid_close,
+        "bid_open": float(row[1]),
+        "bid_high": float(row[2]),
+        "bid_low": float(row[3]),
+        "bid_close": float(row[4]),
+        "ask_open": float(row[5]),
+        "ask_high": float(row[6]),
+        "ask_low": float(row[7]),
+        "ask_close": float(row[8]),
     }
 
 

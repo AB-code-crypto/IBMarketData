@@ -17,47 +17,6 @@ from ib_trader.trade_schema import (
 )
 
 
-TRADER_MAX_NEW_INTENT_AGE_SECONDS = 10
-STALE_NEW_INTENT_ERROR_TEXT = "stale trade_intent before trader decision"
-
-def expire_stale_new_trade_intents(
-        conn,
-        *,
-        max_age_seconds: int = TRADER_MAX_NEW_INTENT_AGE_SECONDS,
-        now_ts: int | None = None,
-) -> int:
-    """Переводит старые NEW trade_intents в FAILED."""
-    max_age_seconds = int(max_age_seconds)
-
-    if max_age_seconds <= 0:
-        return 0
-
-    now_ts = int(time.time() if now_ts is None else now_ts)
-    min_created_at_ts = now_ts - max_age_seconds
-
-    changes_before = conn.total_changes
-
-    conn.execute(
-        f"""
-        UPDATE {TRADE_INTENTS_TABLE_NAME}
-        SET
-            status = 'FAILED',
-            error_text = ?,
-            updated_at_ts = ?,
-            finished_at_ts = ?
-        WHERE status = 'NEW'
-          AND created_at_ts < ?
-        """,
-        (
-            f"{STALE_NEW_INTENT_ERROR_TEXT}; max_age_seconds={max_age_seconds}",
-            now_ts,
-            now_ts,
-            min_created_at_ts,
-        ),
-    )
-
-    return int(conn.total_changes - changes_before)
-
 def read_latest_non_failed_trade_intent(conn, *, instrument_code: str) -> dict | None:
     row = conn.execute(
         f"""
@@ -430,4 +389,14 @@ def write_trade_intent_and_event(conn, draft: TradeIntentDraft) -> TradeIntentCr
         draft=draft,
     )
 
-__all__ = ['TRADER_MAX_NEW_INTENT_AGE_SECONDS', 'STALE_NEW_INTENT_ERROR_TEXT', 'expire_stale_new_trade_intents', 'read_latest_non_failed_trade_intent', 'has_unresolved_trade_intent_for_instrument', 'has_trade_intent_for_signal', 'read_pending_entry_limit_intent_for_opposite_signal', 'request_cancel_pending_entry_limit_for_opposite_signal', 'build_trade_order_ref', 'write_trade_intent', 'build_created_event', 'write_trade_intent_and_event']
+__all__ = [
+    'read_latest_non_failed_trade_intent',
+    'has_unresolved_trade_intent_for_instrument',
+    'has_trade_intent_for_signal',
+    'read_pending_entry_limit_intent_for_opposite_signal',
+    'request_cancel_pending_entry_limit_for_opposite_signal',
+    'build_trade_order_ref',
+    'write_trade_intent',
+    'build_created_event',
+    'write_trade_intent_and_event',
+]

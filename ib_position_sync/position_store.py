@@ -7,7 +7,7 @@ from core.ib_account import normalize_account_id, position_belongs_to_account
 from ib_execution.broker_state_service import get_broker_state_service
 from core.time_utils import format_utc_ts
 from ib_execution.contract_resolver import get_active_contract_row
-from ib_trader.trade_store import (
+from ib_trader.trade_schema import (
     POSITIONS_LATEST_TABLE_NAME,
     get_trade_db_connection,
     initialize_trade_db,

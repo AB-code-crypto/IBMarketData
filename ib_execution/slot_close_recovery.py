@@ -9,8 +9,6 @@ from core.logger import get_logger, log_info, log_warning
 from ib_execution.execution_logic import execute_trade_intent
 from ib_execution.execution_models import ExecutionResult, ExecutionStatus, TradeIntent
 from ib_execution.execution_store import (
-    expire_stale_active_trade_intents,
-    expire_stale_new_trade_intents,
     get_trade_db_connection,
     initialize_execution_db,
     mark_trade_intent_order_submitted,
@@ -19,7 +17,7 @@ from ib_execution.execution_store import (
     write_trade_intent_execution_result,
 )
 from ib_execution.order_service import OrderService
-from ib_execution.position_close_service import (
+from ib_execution.slot_loss_extension import (
     cancel_exit_orders_for_instrument as cancel_all_exit_orders_for_instrument,
 )
 from ib_execution.slot_loss_extension_store import has_active_slot_loss_extension_for_instrument
@@ -30,11 +28,11 @@ from ib_position_sync.position_store import (
 from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG, SignalWindowMode
 from ib_signal.signal_schedule import get_slot_start_ts
 from ib_trader.trade_models import PositionSide, TradeDecisionAction
-from ib_trader.trade_store import (
+from ib_trader.trade_intent_repository import write_trade_intent
+from ib_trader.trade_schema import (
     TRADE_INTENTS_TABLE_NAME,
     TradeIntentDraft,
     build_time_text_fields_from_ts,
-    write_trade_intent,
 )
 
 logger = get_logger(__name__)
@@ -49,9 +47,6 @@ SLOT_CLOSE_RECOVERY_SIGNAL_STRENGTH = "SLOT_CLOSE_RECOVERY"
 # Поэтому открытая broker-position из этого списка считается позицией нашего робота/счёта.
 CLOSE_CONFIGURED_BROKER_POSITIONS_WITHOUT_DB_ENTRY = True
 CLOSE_CONFIGURED_BROKER_POSITIONS_ON_DB_MISMATCH = True
-
-EXECUTION_NEW_INTENT_MAX_AGE_SECONDS = 10
-
 
 @dataclass(frozen=True)
 class SlotCloseRecoveryEvent:
@@ -310,17 +305,6 @@ def read_trade_intent_by_id(conn, *, trade_intent_id: int) -> TradeIntent:
         created_at_ts=int(row[14]),
     )
 
-
-def expire_stale_execution_intents(conn, *, now_ts: int) -> None:
-    expire_stale_new_trade_intents(
-        conn,
-        max_age_seconds=EXECUTION_NEW_INTENT_MAX_AGE_SECONDS,
-        now_ts=now_ts,
-    )
-    expire_stale_active_trade_intents(
-        conn,
-        now_ts=now_ts,
-    )
 
 async def cancel_exit_orders_for_recovery(
         *,
@@ -702,7 +686,6 @@ async def run_slot_close_recovery_once(*, order_service: OrderService) -> list[S
 
     try:
         initialize_execution_db(conn)
-        expire_stale_execution_intents(conn, now_ts=now_ts)
         conn.commit()
 
     finally:
@@ -732,7 +715,6 @@ async def run_slot_close_recovery_once(*, order_service: OrderService) -> list[S
 
         try:
             initialize_execution_db(conn)
-            expire_stale_execution_intents(conn, now_ts=now_ts)
             conn.commit()
 
             if has_active_slot_loss_extension_for_instrument(

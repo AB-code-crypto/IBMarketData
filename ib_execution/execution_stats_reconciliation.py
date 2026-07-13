@@ -8,7 +8,7 @@ from ib_execution.execution_logic import (
     refresh_ib_executions_if_possible,
 )
 from ib_execution.execution_store import get_trade_db_connection, initialize_execution_db
-from ib_trader.trade_store import TRADE_INTENTS_TABLE_NAME
+from ib_trader.trade_schema import TRADE_INTENTS_TABLE_NAME
 
 
 MISSING_EXECUTION_STATS_RECONCILE_LIMIT = 50
@@ -150,49 +150,19 @@ def _append_unique_fill(result: list, seen: set[str], fill) -> None:
 
 
 def collect_known_ib_fills_for_order(ib, *, order_id: int) -> list:
-    expected_order_id = int(order_id)
+    expected = int(order_id)
     result: list = []
     seen: set[str] = set()
-
-    fills_method = getattr(ib, "fills", None)
-
-    if fills_method is not None:
-        try:
-            fills = list(fills_method() or [])
-        except Exception:
-            fills = []
-
-        for fill in fills:
-            if _fill_order_id(fill) != expected_order_id:
-                continue
-
+    for fill in list(ib.fills() or []):
+        if _fill_order_id(fill) == expected:
             _append_unique_fill(result, seen, fill)
-
-    for method_name in ("trades", "openTrades"):
-        method = getattr(ib, method_name, None)
-
-        if method is None:
-            continue
-
-        try:
-            trades = list(method() or [])
-        except Exception:
-            continue
-
+    for trades in (list(ib.trades() or []), list(ib.openTrades() or [])):
         for trade in trades:
             order = getattr(trade, "order", None)
-
-            if order is None:
+            if order is None or _safe_int(getattr(order, "orderId", 0) or 0) != expected:
                 continue
-
-            trade_order_id = _safe_int(getattr(order, "orderId", 0) or 0)
-
-            if trade_order_id != expected_order_id:
-                continue
-
             for fill in list(getattr(trade, "fills", []) or []):
                 _append_unique_fill(result, seen, fill)
-
     return result
 
 

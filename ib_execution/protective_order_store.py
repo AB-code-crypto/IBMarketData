@@ -1,10 +1,38 @@
 import time
 from typing import Any
 
+from core.sqlite_schema import require_exact_table_schema
 from ib_execution.execution_store import get_trade_db_connection, initialize_execution_db
 
 
 PROTECTIVE_ORDERS_TABLE_NAME = "protective_orders"
+
+PROTECTIVE_ORDERS_SCHEMA = (
+    ('protective_order_id', 'INTEGER', 0, None, 1),
+    ('instrument_code', 'TEXT', 1, None, 0),
+    ('parent_trade_intent_id', 'INTEGER', 1, None, 0),
+    ('role', 'TEXT', 1, None, 0),
+    ('oca_group', 'TEXT', 0, None, 0),
+    ('order_ref', 'TEXT', 1, None, 0),
+    ('order_id', 'INTEGER', 1, None, 0),
+    ('order_action', 'TEXT', 1, None, 0),
+    ('order_quantity', 'INTEGER', 1, None, 0),
+    ('order_type', 'TEXT', 1, None, 0),
+    ('limit_price', 'REAL', 0, None, 0),
+    ('stop_price', 'REAL', 0, None, 0),
+    ('status', 'TEXT', 1, None, 0),
+    ('error_text', 'TEXT', 0, None, 0),
+    ('filled_qty', 'REAL', 0, None, 0),
+    ('avg_fill_price', 'REAL', 0, None, 0),
+    ('total_commission', 'REAL', 0, None, 0),
+    ('realized_pnl', 'REAL', 0, None, 0),
+    ('filled_at_ts', 'INTEGER', 0, None, 0),
+    ('synthetic_trade_intent_id', 'INTEGER', 0, None, 0),
+    ('created_at_ts', 'INTEGER', 1, None, 0),
+    ('updated_at_ts', 'INTEGER', 1, None, 0),
+    ('finished_at_ts', 'INTEGER', 0, None, 0),
+)
+
 
 PROTECTIVE_ORDER_ROLE_TAKE_PROFIT = "TAKE_PROFIT"
 PROTECTIVE_ORDER_ROLE_STOP_LOSS = "STOP_LOSS"
@@ -63,101 +91,22 @@ def create_protective_orders_table_sql() -> str:
     """
 
 
-def table_columns(conn, table_name: str) -> set[str]:
-    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-    return {str(row[1]) for row in rows}
-
-
-def ensure_table_column(conn, *, table_name: str, column_name: str, column_sql: str) -> None:
-    if column_name in table_columns(conn, table_name):
-        return
-
-    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}")
-
-
-def ensure_protective_order_runtime_columns(conn) -> None:
-    # Защита на случай, если таблица уже была создана старой версией кода.
-    ensure_table_column(
-        conn,
-        table_name=PROTECTIVE_ORDERS_TABLE_NAME,
-        column_name="oca_group",
-        column_sql="oca_group TEXT",
-    )
-    ensure_table_column(
-        conn,
-        table_name=PROTECTIVE_ORDERS_TABLE_NAME,
-        column_name="order_type",
-        column_sql="order_type TEXT NOT NULL DEFAULT 'LMT'",
-    )
-    ensure_table_column(
-        conn,
-        table_name=PROTECTIVE_ORDERS_TABLE_NAME,
-        column_name="limit_price",
-        column_sql="limit_price REAL",
-    )
-    ensure_table_column(
-        conn,
-        table_name=PROTECTIVE_ORDERS_TABLE_NAME,
-        column_name="stop_price",
-        column_sql="stop_price REAL",
-    )
-    ensure_table_column(
-        conn,
-        table_name=PROTECTIVE_ORDERS_TABLE_NAME,
-        column_name="filled_qty",
-        column_sql="filled_qty REAL",
-    )
-    ensure_table_column(
-        conn,
-        table_name=PROTECTIVE_ORDERS_TABLE_NAME,
-        column_name="avg_fill_price",
-        column_sql="avg_fill_price REAL",
-    )
-    ensure_table_column(
-        conn,
-        table_name=PROTECTIVE_ORDERS_TABLE_NAME,
-        column_name="total_commission",
-        column_sql="total_commission REAL",
-    )
-    ensure_table_column(
-        conn,
-        table_name=PROTECTIVE_ORDERS_TABLE_NAME,
-        column_name="realized_pnl",
-        column_sql="realized_pnl REAL",
-    )
-    ensure_table_column(
-        conn,
-        table_name=PROTECTIVE_ORDERS_TABLE_NAME,
-        column_name="filled_at_ts",
-        column_sql="filled_at_ts INTEGER",
-    )
-    ensure_table_column(
-        conn,
-        table_name=PROTECTIVE_ORDERS_TABLE_NAME,
-        column_name="synthetic_trade_intent_id",
-        column_sql="synthetic_trade_intent_id INTEGER",
-    )
-
-
 def initialize_protective_order_db(conn) -> None:
     initialize_execution_db(conn)
     conn.execute(create_protective_orders_table_sql())
-    ensure_protective_order_runtime_columns(conn)
-    conn.execute(
-        f"""
-        CREATE INDEX IF NOT EXISTS idx_protective_orders_active_instrument
-        ON {PROTECTIVE_ORDERS_TABLE_NAME}(instrument_code, status, created_at_ts);
-        """
+    require_exact_table_schema(
+        conn,
+        table_name=PROTECTIVE_ORDERS_TABLE_NAME,
+        expected_schema=PROTECTIVE_ORDERS_SCHEMA,
     )
     conn.execute(
-        f"""
-        CREATE INDEX IF NOT EXISTS idx_protective_orders_parent_role
-        ON {PROTECTIVE_ORDERS_TABLE_NAME}(parent_trade_intent_id, role, status);
-        """
+        f"""CREATE INDEX IF NOT EXISTS idx_protective_orders_active_instrument
+        ON {PROTECTIVE_ORDERS_TABLE_NAME}(instrument_code, status, created_at_ts);"""
     )
-
-    from ib_execution.trade_db_migrations import run_trade_db_migrations
-    run_trade_db_migrations(conn)
+    conn.execute(
+        f"""CREATE INDEX IF NOT EXISTS idx_protective_orders_parent_role
+        ON {PROTECTIVE_ORDERS_TABLE_NAME}(parent_trade_intent_id, role, status);"""
+    )
 
 
 def validate_protective_order_role(role: str) -> str:
@@ -344,22 +293,15 @@ def has_active_protective_stop_for_parent(
         parent_trade_intent_id: int,
 ) -> bool:
     initialize_protective_order_db(conn)
-
     row = conn.execute(
-        f"""
-        SELECT 1
-        FROM {PROTECTIVE_ORDERS_TABLE_NAME}
-        WHERE parent_trade_intent_id = ?
-          AND role = ?
-          AND status IN ('ACTIVE', 'UNPROTECTED')
-        LIMIT 1
-        """,
+        f"""SELECT 1 FROM {PROTECTIVE_ORDERS_TABLE_NAME}
+        WHERE parent_trade_intent_id = ? AND role = ? AND status = ? LIMIT 1""",
         (
             int(parent_trade_intent_id),
             PROTECTIVE_ORDER_ROLE_STOP_LOSS,
+            PROTECTIVE_ORDER_STATUS_ACTIVE,
         ),
     ).fetchone()
-
     return row is not None
 
 

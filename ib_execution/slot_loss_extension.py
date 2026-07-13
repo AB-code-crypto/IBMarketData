@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import time
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
-from pathlib import Path
 from typing import Any
 
 from contracts import Instrument
-from core.sqlite_utils import open_sqlite_connection
+from core.logger import get_logger, log_warning
 from ib_execution.contract_resolver import build_execution_contract
 from ib_execution.execution_logic import execute_trade_intent
 from ib_execution.executable_price_reader import (
@@ -44,8 +42,6 @@ from ib_execution.slot_loss_extension_store import (
     read_active_slot_loss_extensions,
     record_slot_loss_extension_started,
 )
-from ib_job_data.feature_db_sql import MID_PRICE_TABLE_NAME
-from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 from ib_position_sync.position_models import BrokerPositionSnapshot
 from ib_position_sync.position_store import (
     is_same_contract_for_instrument,
@@ -53,18 +49,22 @@ from ib_position_sync.position_store import (
 )
 from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG, SignalWindowMode
 from ib_trader.trade_models import PositionSide, TradeDecisionAction
-from ib_trader.trade_store import (
+from ib_trader.trade_decision_service import (
+    get_futures_daily_flat_context,
+    get_slot_close_context,
+    is_futures_instrument,
+)
+from ib_trader.trade_intent_repository import write_trade_intent
+from ib_trader.trade_schema import (
     ORDER_REF_PREFIX,
     TRADE_INTENTS_TABLE_NAME,
     TradeIntentDraft,
     build_time_text_fields_from_ts,
-    get_futures_daily_flat_context,
-    get_slot_close_context,
-    is_futures_instrument,
-    write_trade_intent,
 )
 
 
+
+logger = get_logger(__name__)
 
 SLOT_LOSS_EXTENSION_SOURCE_SIGNAL_ID = -6
 SLOT_LOSS_EXTENSION_MARKET_CLOSE_SOURCE_SIGNAL_ID = -7
@@ -83,7 +83,6 @@ EXTENSION_TAKE_PROFIT_ORDER_REF_SUFFIX = "_EXT_TP"
 EXTENSION_STOP_LOSS_ORDER_REF_SUFFIX = "_EXT_SL"
 EXTENSION_OCA_GROUP_PREFIX = "IBMD_EXT_OCA"
 PROTECTIVE_ORDER_TIME_IN_FORCE = "DAY"
-OPEN_ORDER_REFRESH_SETTLE_SECONDS = 0.25
 
 SLOT_LOSS_EXTENSION_WATCHDOG_SOURCE_SIGNAL_ID = -9
 SLOT_LOSS_EXTENSION_WATCHDOG_INTENT_SOURCE = "SLOT_LOSS_EXTENSION_WATCHDOG"
@@ -133,7 +132,7 @@ class ExtensionPrices:
 
 
 def is_slot_loss_extension_enabled() -> bool:
-    return bool(getattr(DEFAULT_SIGNAL_CONFIG, "slot_loss_extension_enabled", False))
+    return bool(DEFAULT_SIGNAL_CONFIG.slot_loss_extension_enabled)
 
 
 def is_slot_mode() -> bool:
@@ -161,29 +160,26 @@ def format_points(value: float | None) -> str:
     return f"{float(value):.2f}"
 
 
-def get_setting_float(name: str, default: float) -> float:
-    return float(getattr(DEFAULT_SIGNAL_CONFIG, name, default))
-
-
 def get_extension_deadline_ts(close_context: dict[str, Any]) -> int:
-    # В SLOT-режиме следующая торговая половина начинается после wait/back части следующего слота.
-    # Поэтому extension живёт до next_slot_start + slot_back_minutes, а не залезает в новое торговое окно.
     slot_back_seconds = int(DEFAULT_SIGNAL_CONFIG.slot_back_minutes) * 60
     if slot_back_seconds <= 0:
-        slot_back_seconds = int(getattr(DEFAULT_SIGNAL_CONFIG, "slot_loss_extension_deadline_minutes", 30)) * 60
+        raise ValueError(
+            "slot_back_minutes must be positive for slot-loss extension: "
+            f"{DEFAULT_SIGNAL_CONFIG.slot_back_minutes}"
+        )
     return int(close_context["slot_end_ts"]) + slot_back_seconds
 
 
 def normalize_price_to_tick_floor(*, price: Decimal, price_tick: Decimal) -> float:
     if price_tick <= Decimal("0"):
-        return float(price)
+        raise ValueError(f"price_tick must be positive: {price_tick!r}")
     steps = (price / price_tick).to_integral_value(rounding=ROUND_FLOOR)
     return float(steps * price_tick)
 
 
 def normalize_price_to_tick_ceiling(*, price: Decimal, price_tick: Decimal) -> float:
     if price_tick <= Decimal("0"):
-        return float(price)
+        raise ValueError(f"price_tick must be positive: {price_tick!r}")
     steps = (price / price_tick).to_integral_value(rounding=ROUND_CEILING)
     return float(steps * price_tick)
 
@@ -194,7 +190,9 @@ def calculate_extension_prices(*, instrument_code: str, position_side: str, entr
         return None
 
     price_tick = Decimal(str(instrument_row.get("price_tick", 0.0) or 0.0))
-    buffer_points = Decimal(str(get_setting_float("slot_loss_extension_profit_buffer_points", 2.0)))
+    buffer_points = Decimal(
+        str(DEFAULT_SIGNAL_CONFIG.slot_loss_extension_profit_buffer_points)
+    )
     entry = Decimal(str(entry_price))
     adverse = Decimal(str(max_adverse_price))
     side = str(position_side).upper()
@@ -405,29 +403,336 @@ def read_price_path_stats(
     )
 
 
-async def refresh_open_orders_for_extension(*args, **kwargs):
-    from ib_execution.position_close_service import refresh_open_orders_for_extension as implementation
-    return await implementation(*args, **kwargs)
+async def refresh_open_orders_for_extension(
+        order_service: OrderService,
+) -> tuple[bool, str | None]:
+    return await order_service.broker_state.refresh_open_orders(
+        force=True,
+    )
 
 
-def collect_live_exit_orders(*args, **kwargs):
-    from ib_execution.position_close_service import collect_live_exit_orders as implementation
-    return implementation(*args, **kwargs)
+def collect_live_exit_orders(
+        *,
+        order_service: OrderService,
+        instrument_code: str,
+        now_ts: int,
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen_order_ids: set[int] = set()
+
+    trades = list(order_service.ib.openTrades() or [])
+
+    for trade in trades:
+        order = getattr(trade, "order", None)
+        contract = getattr(trade, "contract", None)
+        if order is None or contract is None:
+            continue
+
+        order_ref = str(getattr(order, "orderRef", "") or "")
+        if not order_ref.startswith(ORDER_REF_PREFIX):
+            continue
+        if not order_ref.endswith(("_TP", "_SL")):
+            continue
+
+        if not is_same_contract_for_instrument(
+                position_contract=contract,
+                instrument_code=instrument_code,
+                now_ts=now_ts,
+        ):
+            continue
+
+        order_id = int(getattr(order, "orderId", 0) or 0)
+        if order_id <= 0 or order_id in seen_order_ids:
+            continue
+
+        seen_order_ids.add(order_id)
+        result.append({
+            "order_id": order_id,
+            "order_ref": order_ref,
+        })
+
+    return result
 
 
-async def cancel_exit_orders_for_instrument(*args, **kwargs):
-    from ib_execution.position_close_service import cancel_exit_orders_for_instrument as implementation
-    return await implementation(*args, **kwargs)
+async def cancel_exit_orders_for_instrument(
+        *,
+        order_service: OrderService,
+        instrument_code: str,
+        now_ts: int,
+        reason: str,
+) -> tuple[bool, list[SlotLossExtensionEvent]]:
+    events: list[SlotLossExtensionEvent] = []
+    cancelled_order_ids: set[int] = set()
+
+    conn = get_trade_db_connection()
+    try:
+        initialize_execution_db(conn)
+        initialize_protective_order_db(conn)
+
+        for protective_order in read_active_protective_orders(conn, instrument_code=instrument_code):
+            order_id = int(protective_order["order_id"])
+            try:
+                await order_service.cancel_order_id(order_id)
+                cancelled_order_ids.add(order_id)
+                mark_protective_order_status(
+                    conn,
+                    order_id=order_id,
+                    status=PROTECTIVE_ORDER_STATUS_CANCELLED,
+                    error_text=reason,
+                )
+                events.append(SlotLossExtensionEvent(
+                    instrument_code=instrument_code,
+                    event="EXIT_ORDER_CANCELLED",
+                    message=f"{instrument_code}: slot-loss extension cancelled protective order_id={order_id}: {reason}",
+                ))
+            except Exception as exc:
+                mark_protective_order_status(
+                    conn,
+                    order_id=order_id,
+                    status=PROTECTIVE_ORDER_STATUS_ACTIVE,
+                    error_text=f"cancel failed: {type(exc).__name__}: {exc}",
+                )
+                events.append(SlotLossExtensionEvent(
+                    instrument_code=instrument_code,
+                    event="EXIT_ORDER_CANCEL_FAILED",
+                    message=f"{instrument_code}: failed to cancel protective order_id={order_id}: {type(exc).__name__}: {exc}",
+                    log_level="WARNING",
+                ))
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+    refresh_ok, refresh_error = await refresh_open_orders_for_extension(order_service)
+    if not refresh_ok:
+        events.append(SlotLossExtensionEvent(
+            instrument_code=instrument_code,
+            event="OPEN_ORDER_REFRESH_FAILED",
+            message=f"{instrument_code}: cannot refresh broker open orders before slot-loss extension action: {refresh_error}",
+            log_level="WARNING",
+        ))
+        return False, events
+
+    live_exit_orders = collect_live_exit_orders(
+        order_service=order_service,
+        instrument_code=instrument_code,
+        now_ts=now_ts,
+    )
+
+    for live_order in live_exit_orders:
+        order_id = int(live_order["order_id"])
+        if order_id in cancelled_order_ids:
+            continue
+        try:
+            await order_service.cancel_order_id(order_id)
+            cancelled_order_ids.add(order_id)
+            events.append(SlotLossExtensionEvent(
+                instrument_code=instrument_code,
+                event="LIVE_EXIT_ORDER_CANCELLED",
+                message=f"{instrument_code}: slot-loss extension cancelled live exit order_id={order_id}, order_ref={live_order['order_ref']}",
+            ))
+        except Exception as exc:
+            events.append(SlotLossExtensionEvent(
+                instrument_code=instrument_code,
+                event="LIVE_EXIT_ORDER_CANCEL_FAILED",
+                message=(
+                    f"{instrument_code}: failed to cancel live exit order_id={order_id}, "
+                    f"order_ref={live_order['order_ref']}: {type(exc).__name__}: {exc}"
+                ),
+                log_level="WARNING",
+            ))
+
+    refresh_ok, refresh_error = await refresh_open_orders_for_extension(order_service)
+    if not refresh_ok:
+        events.append(SlotLossExtensionEvent(
+            instrument_code=instrument_code,
+            event="OPEN_ORDER_REFRESH_AFTER_CANCEL_FAILED",
+            message=f"{instrument_code}: cannot refresh broker open orders after exit-order cancel: {refresh_error}",
+            log_level="WARNING",
+        ))
+        return False, events
+
+    remaining_live_orders = collect_live_exit_orders(
+        order_service=order_service,
+        instrument_code=instrument_code,
+        now_ts=now_ts,
+    )
+    if remaining_live_orders:
+        events.append(SlotLossExtensionEvent(
+            instrument_code=instrument_code,
+            event="LIVE_EXIT_ORDERS_STILL_OPEN",
+            message=f"{instrument_code}: live exit orders are still open; market close/extension is blocked: {remaining_live_orders}",
+            log_level="WARNING",
+        ))
+        return False, events
+
+    return True, events
 
 
-async def create_and_execute_market_close(*args, **kwargs):
-    from ib_execution.position_close_service import create_and_execute_market_close as implementation
-    return await implementation(*args, **kwargs)
+async def create_and_execute_market_close(
+        *,
+        order_service: OrderService,
+        snapshot: BrokerPositionSnapshot,
+        source_signal_id: int,
+        intent_source: str,
+        reason: str,
+        now_ts: int,
+) -> SlotLossExtensionEvent:
+    conn = get_trade_db_connection()
+    intent: TradeIntent | None = None
+
+    try:
+        initialize_execution_db(conn)
+        draft = build_market_close_trade_intent_draft(
+            snapshot=snapshot,
+            source_signal_id=source_signal_id,
+            intent_source=intent_source,
+            reason=reason,
+            now_ts=now_ts,
+        )
+        trade_intent_id = write_trade_intent(conn, draft)
+        conn.commit()
+
+        intent = read_trade_intent_by_id(conn, trade_intent_id=trade_intent_id)
+        if str(intent.status).upper() != ExecutionStatus.NEW.value:
+            return SlotLossExtensionEvent(
+                instrument_code=str(snapshot.instrument_code),
+                event="MARKET_CLOSE_SKIPPED_EXISTING_INTENT",
+                message=(
+                    f"{snapshot.instrument_code}: slot-loss extension market close skipped because "
+                    f"trade_intent_id={trade_intent_id} already has status={intent.status}"
+                ),
+                intent=intent,
+                result=None,
+                log_level="WARNING",
+            )
+
+        mark_trade_intent_sending(conn, trade_intent_id=intent.trade_intent_id)
+        conn.commit()
+
+        async def on_order_submitted(order_id: int, order_action: str, order_quantity: int) -> None:
+            mark_trade_intent_order_submitted(
+                conn,
+                trade_intent_id=intent.trade_intent_id,
+                order_id=order_id,
+                order_action=order_action,
+                order_quantity=order_quantity,
+            )
+            conn.commit()
+
+        try:
+            result = await execute_trade_intent(
+                order_service=order_service,
+                intent=intent,
+                order_submitted_callback=on_order_submitted,
+            )
+        except Exception as exc:
+            submission_state = read_trade_intent_submission_state(
+                conn,
+                trade_intent_id=intent.trade_intent_id,
+            ) or {}
+            order_id = (
+                submission_state.get("order_id")
+                or getattr(exc, "order_id", None)
+            )
+            result = ExecutionResult(
+                trade_intent_id=intent.trade_intent_id,
+                order_id=order_id,
+                order_action=(
+                    submission_state.get("order_action")
+                    or getattr(exc, "order_action", None)
+                ),
+                order_quantity=(
+                    submission_state.get("order_quantity")
+                    or getattr(exc, "order_quantity", None)
+                ),
+                status=(
+                    ExecutionStatus.RECONCILING
+                    if order_id is not None
+                    else ExecutionStatus.FAILED
+                ),
+                avg_fill_price=None,
+                total_commission=None,
+                realized_pnl=None,
+                error_text=f"{type(exc).__name__}: {exc}",
+            )
+
+        write_trade_intent_execution_result(conn, result=result)
+        conn.commit()
+
+        log_level = "INFO" if result.status == ExecutionStatus.EXECUTED else "WARNING"
+        return SlotLossExtensionEvent(
+            instrument_code=str(snapshot.instrument_code),
+            event="MARKET_CLOSE_SENT",
+            message=(
+                f"{snapshot.instrument_code}: slot-loss extension market close result: "
+                f"intent_source={intent_source}, trade_intent_id={intent.trade_intent_id}, "
+                f"status={result.status.value}, order_id={result.order_id}, "
+                f"order_action={result.order_action}, order_qty={result.order_quantity}, "
+                f"avg_fill={result.avg_fill_price}, reason={reason}, error={result.error_text}"
+            ),
+            intent=intent,
+            result=result,
+            log_level=log_level,
+        )
+
+    finally:
+        conn.close()
 
 
-async def close_market_safely(*args, **kwargs):
-    from ib_execution.position_close_service import close_market_safely as implementation
-    return await implementation(*args, **kwargs)
+async def close_market_safely(
+        *,
+        order_service: OrderService,
+        snapshot: BrokerPositionSnapshot,
+        source_signal_id: int,
+        intent_source: str,
+        reason: str,
+        now_ts: int,
+) -> list[SlotLossExtensionEvent]:
+    instrument_code = str(snapshot.instrument_code)
+    events: list[SlotLossExtensionEvent] = []
+
+    cancel_ok, cancel_events = await cancel_exit_orders_for_instrument(
+        order_service=order_service,
+        instrument_code=instrument_code,
+        now_ts=now_ts,
+        reason=f"before {intent_source}: {reason}",
+    )
+    events.extend(cancel_events)
+
+    if not cancel_ok:
+        events.append(SlotLossExtensionEvent(
+            instrument_code=instrument_code,
+            event="MARKET_CLOSE_SKIPPED_EXIT_ORDERS_NOT_CANCELLED",
+            message=f"{instrument_code}: market close skipped because existing exit orders could not be safely cancelled; reason={reason}",
+            log_level="WARNING",
+        ))
+        return events
+
+    snapshots = await sync_broker_positions_once(
+                    order_service.ib,
+                    expected_account_id=order_service.account_id,
+                    force_refresh=True,
+                )
+    current_snapshot = find_snapshot(snapshots, instrument_code=instrument_code)
+    if current_snapshot is None or not is_open_snapshot(current_snapshot):
+        events.append(SlotLossExtensionEvent(
+            instrument_code=instrument_code,
+            event="MARKET_CLOSE_SKIPPED_ALREADY_FLAT",
+            message=f"{instrument_code}: market close skipped because broker position is already FLAT after exit-order cancellation",
+        ))
+        return events
+
+    events.append(await create_and_execute_market_close(
+        order_service=order_service,
+        snapshot=current_snapshot,
+        source_signal_id=source_signal_id,
+        intent_source=intent_source,
+        reason=reason,
+        now_ts=int(time.time()),
+    ))
+    return events
 
 
 def build_extension_order_refs(entry_order_ref: str) -> tuple[str, str]:
@@ -441,11 +746,19 @@ def build_extension_oca_group(*, entry_trade_intent_id: int, instrument_code: st
     return f"{EXTENSION_OCA_GROUP_PREFIX}_{int(entry_trade_intent_id)}_{str(instrument_code)}"
 
 
-def apply_extension_exit_order_safety_flags(order) -> None:
-    """Что делает: включает безопасные flags для extension TP/SL, если IB Order их поддерживает."""
-    if hasattr(order, "outsideRth"):
-        # Для Globex/overnight нельзя полагаться на дефолт TWS. Stop должен триггериться вне RTH.
+def apply_extension_exit_order_safety_flags(
+        order,
+        *,
+        role: str,
+) -> None:
+    role_value = str(role).upper()
+    if role_value == PROTECTIVE_ORDER_ROLE_STOP_LOSS:
+        if not hasattr(order, "outsideRth"):
+            raise RuntimeError("IB STOP order has no outsideRth attribute")
         setattr(order, "outsideRth", True)
+        return
+    if role_value != PROTECTIVE_ORDER_ROLE_TAKE_PROFIT:
+        raise ValueError(f"Unknown extension protective role: {role!r}")
 
 
 def describe_ib_error(error) -> str:
@@ -460,30 +773,25 @@ def describe_ib_error(error) -> str:
     return ", ".join(parts) if parts else str(error)
 
 
-def find_known_trade_order_status(order_service: OrderService, *, order_id: int) -> str | None:
+def find_known_trade_order_status(
+        order_service: OrderService,
+        *,
+        order_id: int,
+) -> str | None:
     order_id = int(order_id)
-
-    for method_name in ("trades", "openTrades"):
-        method = getattr(order_service.ib, method_name, None)
-        if method is None:
-            continue
-
-        try:
-            trades = list(method() or [])
-        except Exception:
-            continue
-
-        for trade in trades:
-            order = getattr(trade, "order", None)
-            if order is None:
-                continue
-
-            trade_order_id = int(getattr(order, "orderId", 0) or 0)
-            if trade_order_id != order_id:
-                continue
-
+    for trade in list(order_service.ib.openTrades() or []):
+        order = getattr(trade, "order", None)
+        if order is not None and int(getattr(order, "orderId", 0) or 0) == order_id:
             return str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
 
+    terminal = EXTENSION_EXIT_ORDER_FILLED_STATUSES | EXTENSION_EXIT_ORDER_REJECTED_STATUSES
+    for trade in list(order_service.ib.trades() or []):
+        order = getattr(trade, "order", None)
+        if order is None or int(getattr(order, "orderId", 0) or 0) != order_id:
+            continue
+        status = str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
+        if status in terminal:
+            return status
     return None
 
 
@@ -494,39 +802,49 @@ async def wait_for_extension_exit_order_working_or_done(
         role: str,
         order_ref: str,
 ) -> str:
-    """Ждёт, что extension TP/SL реально принят IB, а не просто локально создан placeOrder()."""
     loop_time = asyncio.get_running_loop().time
-    timeout_seconds = get_setting_float("slot_loss_extension_order_accept_timeout_seconds", 5.0)
-    poll_interval_seconds = 0.10
-    deadline = loop_time() + float(timeout_seconds)
+    timeout_seconds = float(
+        DEFAULT_SIGNAL_CONFIG.slot_loss_extension_order_accept_timeout_seconds
+    )
+    if timeout_seconds <= 0.0:
+        raise ValueError(f"slot_loss_extension_order_accept_timeout_seconds must be positive: {timeout_seconds}")
+    deadline = loop_time() + timeout_seconds
     order_id = int(getattr(getattr(trade, "order", None), "orderId", 0) or 0)
+    is_stop = str(role).lower() in {"stop-loss", "stop_loss"}
 
     while True:
         status = str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
-
+        held = order_service.monitor.find_error(order_id, code=399)
+        if is_stop and held is not None:
+            raise RuntimeError(
+                f"extension {role} is held until RTH: order_id={order_id}, "
+                f"order_ref={order_ref}, status={status}, ib_error={describe_ib_error(held)}"
+            )
         if status in EXTENSION_EXIT_ORDER_ACCEPTED_STATUSES:
+            if is_stop:
+                await asyncio.sleep(0.50)
+                held = order_service.monitor.find_error(order_id, code=399)
+                if held is not None:
+                    raise RuntimeError(
+                        f"extension {role} is held until RTH: order_id={order_id}, "
+                        f"order_ref={order_ref}, status={status}, ib_error={describe_ib_error(held)}"
+                    )
             return status
-
         if status in EXTENSION_EXIT_ORDER_FILLED_STATUSES:
             return status
-
         if status in EXTENSION_EXIT_ORDER_REJECTED_STATUSES:
             raise RuntimeError(
-                f"extension {role} order was rejected/cancelled by broker: "
-                f"order_id={order_id}, order_ref={order_ref}, status={status}, "
+                f"extension {role} rejected/cancelled: order_id={order_id}, "
+                f"order_ref={order_ref}, status={status}, "
                 f"ib_error={describe_ib_error(order_service.monitor.last_error(order_id))}"
             )
-
         if loop_time() >= deadline:
             raise RuntimeError(
-                f"extension {role} order was not accepted by broker before timeout: "
-                f"order_id={order_id}, order_ref={order_ref}, status={status}, "
-                f"accepted_statuses={sorted(EXTENSION_EXIT_ORDER_ACCEPTED_STATUSES)}, "
-                f"timeout_seconds={timeout_seconds}, "
+                f"extension {role} acceptance timeout: order_id={order_id}, "
+                f"order_ref={order_ref}, status={status}, timeout_seconds={timeout_seconds}, "
                 f"ib_error={describe_ib_error(order_service.monitor.last_error(order_id))}"
             )
-
-        await asyncio.sleep(float(poll_interval_seconds))
+        await asyncio.sleep(0.10)
 
 
 async def place_extension_exit_orders(
@@ -572,8 +890,14 @@ async def place_extension_exit_orders(
         time_in_force=PROTECTIVE_ORDER_TIME_IN_FORCE,
     )
 
-    apply_extension_exit_order_safety_flags(stop_loss_order)
-    apply_extension_exit_order_safety_flags(take_profit_order)
+    apply_extension_exit_order_safety_flags(
+        stop_loss_order,
+        role=PROTECTIVE_ORDER_ROLE_STOP_LOSS,
+    )
+    apply_extension_exit_order_safety_flags(
+        take_profit_order,
+        role=PROTECTIVE_ORDER_ROLE_TAKE_PROFIT,
+    )
 
     order_service.api.apply_oca_group(
         [stop_loss_order, take_profit_order],
@@ -686,8 +1010,15 @@ async def place_extension_exit_orders(
                     status=PROTECTIVE_ORDER_STATUS_CANCELLED,
                     error_text="cancelled after failed slot-loss extension order placement",
                 )
-            except Exception:
-                pass
+            except Exception as cleanup_exc:
+                log_warning(
+                    logger,
+                    (
+                        f"{instrument_code}: failed to cancel partially placed extension order: "
+                        f"order_id={order_id}, {type(cleanup_exc).__name__}: {cleanup_exc}"
+                    ),
+                    to_telegram=True,
+                )
         conn.commit()
         raise
 
@@ -847,8 +1178,12 @@ async def start_slot_loss_extension(
 
 
 def is_extension_ratio_allowed(price_stats: PricePathStats) -> bool:
-    min_ratio = get_setting_float("slot_loss_extension_min_drawdown_ratio", 0.70)
-    max_ratio = get_setting_float("slot_loss_extension_max_drawdown_ratio", 0.95)
+    min_ratio = float(DEFAULT_SIGNAL_CONFIG.slot_loss_extension_min_drawdown_ratio)
+    max_ratio = float(DEFAULT_SIGNAL_CONFIG.slot_loss_extension_max_drawdown_ratio)
+    if not 0.0 <= min_ratio <= max_ratio <= 1.0:
+        raise ValueError(
+            f"Invalid slot-loss extension ratio range: min={min_ratio}, max={max_ratio}"
+        )
     return min_ratio <= float(price_stats.drawdown_ratio) <= max_ratio
 
 
@@ -862,10 +1197,10 @@ def calculate_profit_points(*, side: str, entry_price: float, current_exit_price
 
 
 def get_price_path_stale_max_seconds() -> int:
-    configured = getattr(DEFAULT_SIGNAL_CONFIG, "slot_loss_extension_price_stale_max_seconds", None)
-    if configured is not None:
-        return max(1, int(configured))
-    return max(1, int(getattr(DEFAULT_SIGNAL_CONFIG, "max_job_bar_lag_seconds", 15)))
+    value = int(DEFAULT_SIGNAL_CONFIG.slot_loss_extension_price_stale_max_seconds)
+    if value <= 0:
+        raise ValueError(f"slot_loss_extension_price_stale_max_seconds must be positive: {value}")
+    return value
 
 
 def is_price_path_fresh(price_stats: PricePathStats, *, now_ts: int) -> bool:
@@ -873,11 +1208,11 @@ def is_price_path_fresh(price_stats: PricePathStats, *, now_ts: int) -> bool:
 
 
 def is_extension_price_watchdog_enabled() -> bool:
-    return bool(getattr(DEFAULT_SIGNAL_CONFIG, "slot_loss_extension_price_watchdog_enabled", True))
+    return bool(DEFAULT_SIGNAL_CONFIG.slot_loss_extension_price_watchdog_enabled)
 
 
 def is_extension_stale_price_fail_safe_enabled() -> bool:
-    return bool(getattr(DEFAULT_SIGNAL_CONFIG, "slot_loss_extension_price_watchdog_stale_close_enabled", True))
+    return bool(DEFAULT_SIGNAL_CONFIG.slot_loss_extension_price_watchdog_stale_close_enabled)
 
 
 def read_latest_feature_bar(
@@ -1443,8 +1778,3 @@ async def process_slot_close_decisions_once(
         ))
 
     return events
-
-
-async def run_slot_loss_extension_once(*args, **kwargs):
-    from ib_execution.slot_loss_extension_runner import run_slot_loss_extension_once as implementation
-    return await implementation(*args, **kwargs)

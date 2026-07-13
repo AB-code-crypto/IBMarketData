@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -26,7 +25,10 @@ from ib_execution.protective_order_store import (
     read_active_protective_orders,
 )
 from ib_position_sync.position_store import sync_broker_positions_once
-from ib_trader.trade_store import TRADE_INTENTS_TABLE_NAME, build_time_text_fields_from_ts
+from ib_trader.trade_schema import (
+    TRADE_INTENTS_TABLE_NAME,
+    build_time_text_fields_from_ts,
+)
 
 
 PROTECTIVE_CLOSE_SOURCE_SIGNAL_ID_BASES = {
@@ -44,7 +46,6 @@ PROTECTIVE_REASONS = {
     PROTECTIVE_ORDER_ROLE_STOP_LOSS: "stop_loss_filled",
 }
 
-OPEN_ORDER_REFRESH_SETTLE_SECONDS = 0.25
 BROKER_POSITION_SYNC_TIMEOUT_SECONDS = 8.0
 
 PROTECTIVE_LIVE_ORDER_STATUSES = {
@@ -74,29 +75,17 @@ async def refresh_ib_open_orders_if_possible(order_service) -> tuple[bool, str |
 
 def iter_known_ib_trades(order_service):
     seen_order_ids: set[int] = set()
-
-    for method_name in ("trades", "openTrades"):
-        method = getattr(order_service.ib, method_name, None)
-
-        if method is None:
-            continue
-
-        try:
-            trades = list(method() or [])
-        except Exception:
-            continue
-
+    for trades in (
+        list(order_service.ib.trades() or []),
+        list(order_service.ib.openTrades() or []),
+    ):
         for trade in trades:
             order = getattr(trade, "order", None)
-
             if order is None:
                 continue
-
             order_id = int(getattr(order, "orderId", 0) or 0)
-
             if order_id in seen_order_ids:
                 continue
-
             seen_order_ids.add(order_id)
             yield trade
 
@@ -124,30 +113,12 @@ def find_ib_trade_for_protective_order(order_service, protective_order: dict[str
 
 
 def collect_ib_fills_for_order(order_service, *, order_id: int) -> list:
-    fills_method = getattr(order_service.ib, "fills", None)
-
-    if fills_method is None:
-        return []
-
-    try:
-        fills = list(fills_method() or [])
-    except Exception:
-        return []
-
+    expected = int(order_id)
     result = []
-    order_id = int(order_id)
-
-    for fill in fills:
+    for fill in list(order_service.ib.fills() or []):
         execution = getattr(fill, "execution", None)
-
-        if execution is None:
-            continue
-
-        fill_order_id = int(getattr(execution, "orderId", 0) or 0)
-
-        if fill_order_id == order_id:
+        if execution is not None and int(getattr(execution, "orderId", 0) or 0) == expected:
             result.append(fill)
-
     return result
 
 
@@ -1023,5 +994,3 @@ async def reconcile_protective_orders_once(*, order_service) -> list[dict[str, A
 
     finally:
         conn.close()
-
-

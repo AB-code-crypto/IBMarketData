@@ -3,8 +3,43 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from core.sqlite_schema import require_exact_table_schema
+
 
 SLOT_LOSS_EXTENSIONS_TABLE_NAME = "slot_loss_extensions"
+
+SLOT_LOSS_EXTENSIONS_SCHEMA = (
+    ('slot_loss_extension_id', 'INTEGER', 0, None, 1),
+    ('instrument_code', 'TEXT', 1, None, 0),
+    ('entry_trade_intent_id', 'INTEGER', 1, None, 0),
+    ('entry_order_ref', 'TEXT', 1, None, 0),
+    ('position_side', 'TEXT', 1, None, 0),
+    ('position_qty', 'REAL', 1, None, 0),
+    ('entry_price', 'REAL', 1, None, 0),
+    ('slot_start_ts', 'INTEGER', 1, None, 0),
+    ('slot_end_ts', 'INTEGER', 1, None, 0),
+    ('close_at_ts', 'INTEGER', 1, None, 0),
+    ('deadline_ts', 'INTEGER', 1, None, 0),
+    ('max_adverse_price', 'REAL', 1, None, 0),
+    ('max_drawdown_points', 'REAL', 1, None, 0),
+    ('current_exit_price', 'REAL', 1, None, 0),
+    ('current_drawdown_points', 'REAL', 1, None, 0),
+    ('drawdown_ratio', 'REAL', 1, None, 0),
+    ('take_profit_price', 'REAL', 1, None, 0),
+    ('stop_loss_price', 'REAL', 1, None, 0),
+    ('take_profit_order_id', 'INTEGER', 1, None, 0),
+    ('stop_loss_order_id', 'INTEGER', 1, None, 0),
+    ('take_profit_order_ref', 'TEXT', 1, None, 0),
+    ('stop_loss_order_ref', 'TEXT', 1, None, 0),
+    ('oca_group', 'TEXT', 1, None, 0),
+    ('status', 'TEXT', 1, None, 0),
+    ('finish_reason', 'TEXT', 0, None, 0),
+    ('error_text', 'TEXT', 0, None, 0),
+    ('created_at_ts', 'INTEGER', 1, None, 0),
+    ('updated_at_ts', 'INTEGER', 1, None, 0),
+    ('finished_at_ts', 'INTEGER', 0, None, 0),
+)
+
 
 SLOT_LOSS_EXTENSION_STATUS_ACTIVE = "ACTIVE"
 SLOT_LOSS_EXTENSION_STATUS_FINISHED = "FINISHED"
@@ -15,35 +50,6 @@ TERMINAL_SLOT_LOSS_EXTENSION_STATUSES = {
     SLOT_LOSS_EXTENSION_STATUS_FINISHED,
     SLOT_LOSS_EXTENSION_STATUS_FAILED,
 }
-
-
-def table_exists(conn, table_name: str) -> bool:
-    row = conn.execute(
-        """
-        SELECT 1
-        FROM sqlite_master
-        WHERE type = 'table'
-          AND name = ?
-        LIMIT 1
-        """,
-        (str(table_name),),
-    ).fetchone()
-    return row is not None
-
-
-def table_columns(conn, table_name: str) -> set[str]:
-    if not table_exists(conn, table_name):
-        return set()
-
-    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-    return {str(row[1]) for row in rows}
-
-
-def ensure_table_column(conn, *, table_name: str, column_name: str, column_sql: str) -> None:
-    if column_name in table_columns(conn, table_name):
-        return
-
-    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}")
 
 
 def create_slot_loss_extensions_table_sql() -> str:
@@ -89,62 +95,34 @@ def create_slot_loss_extensions_table_sql() -> str:
     """
 
 
-def ensure_slot_loss_extension_runtime_columns(conn) -> None:
-    # Защита на случай частично применённой миграции.
-    ensure_table_column(
-        conn,
-        table_name=SLOT_LOSS_EXTENSIONS_TABLE_NAME,
-        column_name="entry_order_ref",
-        column_sql="entry_order_ref TEXT NOT NULL DEFAULT ''",
-    )
-    ensure_table_column(
-        conn,
-        table_name=SLOT_LOSS_EXTENSIONS_TABLE_NAME,
-        column_name="finish_reason",
-        column_sql="finish_reason TEXT",
-    )
-    ensure_table_column(
-        conn,
-        table_name=SLOT_LOSS_EXTENSIONS_TABLE_NAME,
-        column_name="error_text",
-        column_sql="error_text TEXT",
-    )
-
-
 def initialize_slot_loss_extension_db(conn) -> None:
     conn.execute(create_slot_loss_extensions_table_sql())
-    ensure_slot_loss_extension_runtime_columns(conn)
-    conn.execute(
-        f"""
-        CREATE INDEX IF NOT EXISTS idx_slot_loss_extensions_active_instrument
-        ON {SLOT_LOSS_EXTENSIONS_TABLE_NAME}(instrument_code, status, created_at_ts);
-        """
+    require_exact_table_schema(
+        conn,
+        table_name=SLOT_LOSS_EXTENSIONS_TABLE_NAME,
+        expected_schema=SLOT_LOSS_EXTENSIONS_SCHEMA,
     )
     conn.execute(
-        f"""
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_slot_loss_extensions_one_active
+        f"""CREATE INDEX IF NOT EXISTS idx_slot_loss_extensions_active_instrument
+        ON {SLOT_LOSS_EXTENSIONS_TABLE_NAME}(instrument_code, status, created_at_ts);"""
+    )
+    conn.execute(
+        f"""CREATE UNIQUE INDEX IF NOT EXISTS idx_slot_loss_extensions_one_active
         ON {SLOT_LOSS_EXTENSIONS_TABLE_NAME}(instrument_code)
-        WHERE status = '{SLOT_LOSS_EXTENSION_STATUS_ACTIVE}';
-        """
+        WHERE status = '{SLOT_LOSS_EXTENSION_STATUS_ACTIVE}';"""
     )
 
 
-def has_active_slot_loss_extension_for_instrument(conn, *, instrument_code: str) -> bool:
-    if not table_exists(conn, SLOT_LOSS_EXTENSIONS_TABLE_NAME):
-        return False
-
+def has_active_slot_loss_extension_for_instrument(
+        conn,
+        *,
+        instrument_code: str,
+) -> bool:
+    initialize_slot_loss_extension_db(conn)
     row = conn.execute(
-        f"""
-        SELECT 1
-        FROM {SLOT_LOSS_EXTENSIONS_TABLE_NAME}
-        WHERE instrument_code = ?
-          AND status = ?
-        LIMIT 1
-        """,
-        (
-            str(instrument_code),
-            SLOT_LOSS_EXTENSION_STATUS_ACTIVE,
-        ),
+        f"""SELECT 1 FROM {SLOT_LOSS_EXTENSIONS_TABLE_NAME}
+        WHERE instrument_code = ? AND status = ? LIMIT 1""",
+        (str(instrument_code), SLOT_LOSS_EXTENSION_STATUS_ACTIVE),
     ).fetchone()
     return row is not None
 

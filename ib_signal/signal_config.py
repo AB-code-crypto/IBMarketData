@@ -52,7 +52,6 @@ class SignalConfig:
     slot_loss_extension_profit_buffer_points: float = 2.0
     slot_loss_extension_min_drawdown_ratio: float = 0.70
     slot_loss_extension_max_drawdown_ratio: float = 0.95
-    slot_loss_extension_deadline_minutes: int = 30
 
     # Safety guard для второго шанса.
     # order_accept_timeout: ждём, что extension TP/SL реально принят IB.

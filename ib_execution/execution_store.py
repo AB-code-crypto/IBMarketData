@@ -1,6 +1,7 @@
 import time
 
-from ib_trader.trade_store import (
+from core.sqlite_schema import require_table_absent
+from ib_trader.trade_schema import (
     TRADE_INTENTS_TABLE_NAME,
     get_trade_db_connection,
     initialize_trade_db,
@@ -20,48 +21,18 @@ def trade_intent_age_anchor_sql() -> str:
 
 
 
-def table_columns(conn, table_name: str) -> set[str]:
-    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-    return {str(row[1]) for row in rows}
-
-
-def ensure_table_column(conn, *, table_name: str, column_name: str, column_sql: str) -> None:
-    if column_name in table_columns(conn, table_name):
-        return
-
-    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}")
-
-
-def ensure_trade_intents_cancel_request_columns(conn) -> None:
-    ensure_table_column(
-        conn,
-        table_name=TRADE_INTENTS_TABLE_NAME,
-        column_name="cancel_requested",
-        column_sql="cancel_requested INTEGER NOT NULL DEFAULT 0",
-    )
-    ensure_table_column(
-        conn,
-        table_name=TRADE_INTENTS_TABLE_NAME,
-        column_name="cancel_reason",
-        column_sql="cancel_reason TEXT",
-    )
-    ensure_table_column(
-        conn,
-        table_name=TRADE_INTENTS_TABLE_NAME,
-        column_name="cancel_source_signal_id",
-        column_sql="cancel_source_signal_id INTEGER",
-    )
-    ensure_table_column(
-        conn,
-        table_name=TRADE_INTENTS_TABLE_NAME,
-        column_name="cancel_requested_at_ts",
-        column_sql="cancel_requested_at_ts INTEGER",
-    )
-
-
 def initialize_execution_db(conn) -> None:
     initialize_trade_db(conn)
-    ensure_trade_intents_cancel_request_columns(conn)
+    require_table_absent(
+        conn,
+        "take_profit_orders",
+        reason="legacy TP storage is unsupported; protective_orders is the only source",
+    )
+    require_table_absent(
+        conn,
+        "schema_migrations",
+        reason="runtime DB migrations are unsupported; deploy only current schema",
+    )
 
 
 
@@ -181,8 +152,6 @@ def expire_stale_active_trade_intents(
 
 
 def read_trade_intent_cancel_request(conn, *, trade_intent_id: int) -> dict | None:
-    ensure_trade_intents_cancel_request_columns(conn)
-
     row = conn.execute(
         f"""
         SELECT

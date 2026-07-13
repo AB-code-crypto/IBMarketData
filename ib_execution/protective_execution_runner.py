@@ -57,11 +57,11 @@ from ib_execution.executable_price_reader import (
 from ib_execution.slot_loss_extension import (
     close_market_safely,
     find_snapshot,
-    run_slot_loss_extension_once,
 )
+from ib_execution.slot_loss_extension_runner import run_slot_loss_extension_once
 from ib_position_sync.position_store import sync_broker_positions_once
 from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG
-from ib_trader.trade_store import TRADE_INTENTS_TABLE_NAME
+from ib_trader.trade_schema import TRADE_INTENTS_TABLE_NAME
 
 setup_logging()
 logger = get_logger(__name__)
@@ -69,7 +69,7 @@ logger = get_logger(__name__)
 EXECUTION_LOOP_SLEEP_SECONDS = 1
 NEW_INTENTS_LIMIT = 20
 MAX_NEW_INTENT_AGE_SECONDS = int(
-    getattr(DEFAULT_SIGNAL_CONFIG, "decision_pipeline_max_age_seconds", 30)
+    DEFAULT_SIGNAL_CONFIG.decision_pipeline_max_age_seconds
 )
 EXECUTION_HEARTBEAT_INTERVAL_SECONDS = 60
 
@@ -132,34 +132,26 @@ def normalize_price_to_tick_ceiling(*, price: Decimal, price_tick: Decimal) -> f
     return float(steps * price_tick)
 
 
-def calculate_take_profit_price(*, instrument_code: str, position_side: str, avg_fill_price: float) -> float | None:
+def calculate_take_profit_price(
+        *,
+        instrument_code: str,
+        position_side: str,
+        avg_fill_price: float,
+) -> float | None:
     instrument_row = Instrument.get(str(instrument_code))
-
     if instrument_row is None:
         return None
-
-    take_profit_points = Decimal(str(instrument_row.get("take_profit_points", 0.0) or 0.0))
-
-    if take_profit_points <= Decimal("0"):
+    points = Decimal(str(instrument_row.get("take_profit_points", 0.0) or 0.0))
+    if points <= Decimal("0"):
         return None
-
-    avg_fill_price_decimal = Decimal(str(avg_fill_price))
-    position_side = str(position_side).upper()
-
-    if position_side == "LONG":
-        raw_take_profit_price = avg_fill_price_decimal + take_profit_points
-
-    elif position_side == "SHORT":
-        raw_take_profit_price = avg_fill_price_decimal - take_profit_points
-
-    else:
-        return None
-
-    price_tick = Decimal(str(instrument_row.get("price_tick", 0.0) or 0.0))
-    return normalize_price_to_tick_floor(
-        price=raw_take_profit_price,
-        price_tick=price_tick,
-    )
+    entry = Decimal(str(avg_fill_price))
+    tick = Decimal(str(instrument_row.get("price_tick", 0.0) or 0.0))
+    side = str(position_side).upper()
+    if side == "LONG":
+        return normalize_price_to_tick_floor(price=entry + points, price_tick=tick)
+    if side == "SHORT":
+        return normalize_price_to_tick_ceiling(price=entry - points, price_tick=tick)
+    return None
 
 
 def calculate_stop_loss_price(*, instrument_code: str, position_side: str, avg_fill_price: float) -> float | None:
@@ -357,22 +349,25 @@ async def cancel_protective_orders_before_position_change(*, conn, order_service
 
 
 def get_protective_order_accept_timeout_seconds() -> float:
-    return float(getattr(DEFAULT_SIGNAL_CONFIG, "protective_order_accept_timeout_seconds", 5.0))
+    value = float(DEFAULT_SIGNAL_CONFIG.protective_order_accept_timeout_seconds)
+    if value <= 0.0:
+        raise ValueError(f"protective_order_accept_timeout_seconds must be positive: {value}")
+    return value
 
 
 def is_protective_order_price_watchdog_enabled() -> bool:
-    return bool(getattr(DEFAULT_SIGNAL_CONFIG, "protective_order_price_watchdog_enabled", True))
+    return bool(DEFAULT_SIGNAL_CONFIG.protective_order_price_watchdog_enabled)
 
 
 def is_protective_order_stale_price_fail_safe_enabled() -> bool:
-    return bool(getattr(DEFAULT_SIGNAL_CONFIG, "protective_order_price_watchdog_stale_close_enabled", True))
+    return bool(DEFAULT_SIGNAL_CONFIG.protective_order_price_watchdog_stale_close_enabled)
 
 
 def get_protective_order_price_stale_max_seconds() -> int:
-    configured = getattr(DEFAULT_SIGNAL_CONFIG, "protective_order_price_stale_max_seconds", None)
-    if configured is not None:
-        return max(1, int(configured))
-    return max(1, int(getattr(DEFAULT_SIGNAL_CONFIG, "max_job_bar_lag_seconds", 15)))
+    value = int(DEFAULT_SIGNAL_CONFIG.protective_order_price_stale_max_seconds)
+    if value <= 0:
+        raise ValueError(f"protective_order_price_stale_max_seconds must be positive: {value}")
+    return value
 
 
 def apply_protective_order_safety_flags(
@@ -407,51 +402,25 @@ def describe_ib_error(error) -> str:
     return ", ".join(parts) if parts else str(error)
 
 
-def find_known_trade_order_status(order_service: OrderService, *, order_id: int) -> str | None:
+def find_known_trade_order_status(
+        order_service: OrderService,
+        *,
+        order_id: int,
+) -> str | None:
     order_id = int(order_id)
-
-    # Live-state берём только из openTrades(). Исторический trades() может
-    # содержать устаревший Submitted-status уже несуществующего order.
-    try:
-        open_trades = list(order_service.ib.openTrades() or [])
-    except Exception:
-        open_trades = []
-
-    for trade in open_trades:
+    for trade in list(order_service.ib.openTrades() or []):
         order = getattr(trade, "order", None)
-        if order is None:
-            continue
+        if order is not None and int(getattr(order, "orderId", 0) or 0) == order_id:
+            return str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
 
-        trade_order_id = int(getattr(order, "orderId", 0) or 0)
-        if trade_order_id != order_id:
-            continue
-
-        return str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
-
-    # Из trades() принимаем только терминальные статусы, нужные для cleanup.
-    try:
-        historical_trades = list(order_service.ib.trades() or [])
-    except Exception:
-        historical_trades = []
-
-    terminal_statuses = (
-        PROTECTIVE_EXIT_ORDER_FILLED_STATUSES
-        | PROTECTIVE_EXIT_ORDER_REJECTED_STATUSES
-    )
-
-    for trade in historical_trades:
+    terminal = PROTECTIVE_EXIT_ORDER_FILLED_STATUSES | PROTECTIVE_EXIT_ORDER_REJECTED_STATUSES
+    for trade in list(order_service.ib.trades() or []):
         order = getattr(trade, "order", None)
-        if order is None:
+        if order is None or int(getattr(order, "orderId", 0) or 0) != order_id:
             continue
-
-        trade_order_id = int(getattr(order, "orderId", 0) or 0)
-        if trade_order_id != order_id:
-            continue
-
         status = str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
-        if status in terminal_statuses:
+        if status in terminal:
             return status
-
     return None
 
 
@@ -992,8 +961,15 @@ async def place_protective_orders_after_entry(*, conn, order_service: OrderServi
                     status="CANCELLED",
                     error_text="cancelled after failed protective order placement",
                 )
-            except Exception:
-                pass
+            except Exception as cleanup_exc:
+                log_warning(
+                    logger,
+                    (
+                        f"{instrument_code}: failed to cancel partially placed protective order: "
+                        f"order_id={order_id}, {type(cleanup_exc).__name__}: {cleanup_exc}"
+                    ),
+                    to_telegram=True,
+                )
 
         conn.commit()
 
@@ -1098,10 +1074,7 @@ async def adopt_live_protective_orders_for_intent(
     expected_action = "SELL" if str(intent.target_side).upper() == "LONG" else "BUY"
     expected_quantity = int(float(intent.target_qty))
 
-    try:
-        open_trades = list(order_service.ib.openTrades() or [])
-    except Exception:
-        return False
+    open_trades = list(order_service.ib.openTrades() or [])
 
     matching_orders: list[dict[str, Any]] = []
 
@@ -1500,14 +1473,3 @@ async def reconcile_and_notify_protective_orders(
                 ),
                 to_telegram=False,
             )
-
-
-async def process_new_trade_intents_once(*args, **kwargs):
-    from ib_execution.execution_loop import process_new_trade_intents_once as implementation
-    return await implementation(*args, **kwargs)
-
-
-
-async def run_execution_loop(*args, **kwargs):
-    from ib_execution.execution_loop import run_execution_loop as implementation
-    return await implementation(*args, **kwargs)

@@ -24,11 +24,11 @@ from ib_position_sync.position_store import (
     sync_broker_positions_once,
 )
 from ib_trader.trade_models import PositionSide, TradeDecisionAction
-from ib_trader.trade_store import (
+from ib_trader.trade_intent_repository import write_trade_intent
+from ib_trader.trade_schema import (
     TradeIntentDraft,
     get_trade_db_connection,
     initialize_trade_db,
-    write_trade_intent,
 )
 
 

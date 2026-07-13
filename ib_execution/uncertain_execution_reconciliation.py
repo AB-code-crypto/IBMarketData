@@ -18,7 +18,7 @@ from ib_execution.execution_store import (
     initialize_execution_db,
     write_trade_intent_execution_result,
 )
-from ib_trader.trade_store import TRADE_INTENTS_TABLE_NAME
+from ib_trader.trade_schema import TRADE_INTENTS_TABLE_NAME
 
 
 UNCERTAIN_EXECUTION_LIMIT = 20
@@ -132,32 +132,19 @@ def find_known_trade(
         order_id: int | None,
         order_ref: str,
 ):
-    expected_order_id = None if order_id is None else int(order_id)
-    expected_order_ref = str(order_ref)
-
-    for method_name in ("openTrades", "trades"):
-        method = getattr(ib, method_name, None)
-        if method is None:
-            continue
-
-        try:
-            trades = list(method() or [])
-        except Exception:
-            continue
-
+    expected_id = None if order_id is None else int(order_id)
+    expected_ref = str(order_ref)
+    for trades in (list(ib.openTrades() or []), list(ib.trades() or [])):
         for trade in trades:
             order = getattr(trade, "order", None)
             if order is None:
                 continue
-
-            trade_order_id = _safe_int(getattr(order, "orderId", 0) or 0)
-            trade_order_ref = str(getattr(order, "orderRef", "") or "")
-
-            if expected_order_id is not None and trade_order_id == expected_order_id:
+            current_id = _safe_int(getattr(order, "orderId", 0) or 0)
+            current_ref = str(getattr(order, "orderRef", "") or "")
+            if expected_id is not None and current_id == expected_id:
                 return trade
-            if expected_order_ref and trade_order_ref == expected_order_ref:
+            if expected_ref and current_ref == expected_ref:
                 return trade
-
     return None
 
 
@@ -199,80 +186,28 @@ def find_known_order_status(
         order_id: int,
         order_ref: str,
 ) -> str:
-    expected_order_id = int(order_id)
-    expected_order_ref = str(order_ref)
-
-    # openTrades() is the source of truth for a live broker order.
-    try:
-        open_trades = list(ib.openTrades() or [])
-    except Exception:
-        open_trades = []
-
-    for trade in open_trades:
+    expected_id = int(order_id)
+    expected_ref = str(order_ref)
+    for trade in list(ib.openTrades() or []):
         order = getattr(trade, "order", None)
         if order is None:
             continue
-
-        trade_order_id = _safe_int(getattr(order, "orderId", 0) or 0)
-        trade_order_ref = str(getattr(order, "orderRef", "") or "")
-
-        if (
-                trade_order_id == expected_order_id
-                or (
-                    expected_order_ref
-                    and trade_order_ref == expected_order_ref
-                )
-        ):
-            return str(
-                getattr(
-                    getattr(trade, "orderStatus", None),
-                    "status",
-                    "",
-                ) or ""
-            )
-
-    # Historical trades() is allowed to prove only a terminal state.
-    # A stale historical Submitted status must not keep an intent ACCEPTED forever.
-    terminal_statuses = {
-        "Filled",
-        "Cancelled",
-        "ApiCancelled",
-        "Inactive",
-        "Rejected",
-    }
-
-    try:
-        historical_trades = list(ib.trades() or [])
-    except Exception:
-        historical_trades = []
-
-    for trade in historical_trades:
+        current_id = _safe_int(getattr(order, "orderId", 0) or 0)
+        current_ref = str(getattr(order, "orderRef", "") or "")
+        if current_id == expected_id or (expected_ref and current_ref == expected_ref):
+            return str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
+    terminal = {"Filled", "Cancelled", "ApiCancelled", "Inactive", "Rejected"}
+    for trade in list(ib.trades() or []):
         order = getattr(trade, "order", None)
         if order is None:
             continue
-
-        trade_order_id = _safe_int(getattr(order, "orderId", 0) or 0)
-        trade_order_ref = str(getattr(order, "orderRef", "") or "")
-
-        if not (
-                trade_order_id == expected_order_id
-                or (
-                    expected_order_ref
-                    and trade_order_ref == expected_order_ref
-                )
-        ):
+        current_id = _safe_int(getattr(order, "orderId", 0) or 0)
+        current_ref = str(getattr(order, "orderRef", "") or "")
+        if not (current_id == expected_id or (expected_ref and current_ref == expected_ref)):
             continue
-
-        status = str(
-            getattr(
-                getattr(trade, "orderStatus", None),
-                "status",
-                "",
-            ) or ""
-        )
-        if status in terminal_statuses:
+        status = str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
+        if status in terminal:
             return status
-
     return ""
 
 

@@ -350,7 +350,7 @@ def build_futures_daily_flat_trade_intent_draft(
     )
 
 def is_extreme_ma_zone_close_enabled() -> bool:
-    return bool(SIGNAL_RULE_SETTINGS.get("close_position_on_extreme_ma_zone_enabled", True))
+    return bool(SIGNAL_RULE_SETTINGS["close_position_on_extreme_ma_zone_enabled"])
 
 def get_long_position_extreme_close_ma_zone() -> int:
     return int(SIGNAL_RULES["long_position_extreme_close_ma_zone"])
@@ -449,7 +449,7 @@ def process_slot_close_once(conn, *, now_ts: int | None = None) -> list[TradeInt
     # Если включён second-chance механизм, штатным slot-close владеет ib_execution.
     # Это убирает race: trader не создаёт CLOSE_POSITION, пока execution решает
     # закрывать позицию сразу или переводить её в SLOT_LOSS_EXTENSION.
-    if bool(getattr(DEFAULT_SIGNAL_CONFIG, "slot_loss_extension_enabled", False)):
+    if bool(DEFAULT_SIGNAL_CONFIG.slot_loss_extension_enabled):
         return []
 
     close_context = get_slot_close_context(now_ts=now_ts)
