@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -20,6 +22,7 @@ from ib_execution.protective_order_store import (
     initialize_protective_order_db,
     read_active_protective_orders,
 )
+from ib_position_sync.position_store import sync_broker_positions_once
 from ib_trader.trade_store import TRADE_INTENTS_TABLE_NAME, build_time_text_fields_from_ts
 
 
@@ -36,6 +39,17 @@ PROTECTIVE_INTENT_SOURCES = {
 PROTECTIVE_REASONS = {
     PROTECTIVE_ORDER_ROLE_TAKE_PROFIT: "take_profit_filled",
     PROTECTIVE_ORDER_ROLE_STOP_LOSS: "stop_loss_filled",
+}
+
+OPEN_ORDER_REFRESH_SETTLE_SECONDS = 0.25
+BROKER_POSITION_SYNC_TIMEOUT_SECONDS = 8.0
+
+PROTECTIVE_LIVE_ORDER_STATUSES = {
+    "ApiPending",
+    "PendingSubmit",
+    "PreSubmitted",
+    "Submitted",
+    "PendingCancel",
 }
 
 
@@ -58,6 +72,42 @@ async def refresh_ib_executions_if_possible(order_service) -> None:
 
     except Exception:
         return
+
+
+async def refresh_ib_open_orders_if_possible(order_service) -> tuple[bool, str | None]:
+    ib = order_service.ib
+    errors: list[str] = []
+
+    for method_name in ("reqAllOpenOrdersAsync", "reqOpenOrdersAsync"):
+        method = getattr(ib, method_name, None)
+        if method is None:
+            continue
+
+        try:
+            await method()
+            await asyncio.sleep(float(OPEN_ORDER_REFRESH_SETTLE_SECONDS))
+            return True, None
+        except Exception as exc:
+            errors.append(f"{method_name}: {type(exc).__name__}: {exc}")
+
+    for method_name in ("reqAllOpenOrders", "reqOpenOrders"):
+        method = getattr(ib, method_name, None)
+        if method is None:
+            continue
+
+        try:
+            maybe_awaitable = method()
+            if inspect.isawaitable(maybe_awaitable):
+                await maybe_awaitable
+            await asyncio.sleep(float(OPEN_ORDER_REFRESH_SETTLE_SECONDS))
+            return True, None
+        except Exception as exc:
+            errors.append(f"{method_name}: {type(exc).__name__}: {exc}")
+
+    if not errors:
+        return False, "IB object has no reqAllOpenOrders/reqOpenOrders method"
+
+    return False, "; ".join(errors)
 
 
 def iter_known_ib_trades(order_service):
@@ -399,6 +449,140 @@ def mark_oca_siblings_cancelled_after_fill(
     ]
 
 
+def get_cached_broker_order_status(order_service, protective_order: dict[str, Any]) -> str:
+    # Для live-проверки используем только openTrades(). Исторический trades()
+    # может хранить старый Submitted-status уже несуществующего ордера.
+    try:
+        trades = list(order_service.ib.openTrades() or [])
+    except Exception:
+        return ""
+
+    order_id = int(protective_order["order_id"])
+    order_ref = str(protective_order.get("order_ref", "") or "")
+
+    for trade in trades:
+        order = getattr(trade, "order", None)
+        if order is None:
+            continue
+
+        trade_order_id = int(getattr(order, "orderId", 0) or 0)
+        trade_order_ref = str(getattr(order, "orderRef", "") or "")
+
+        if trade_order_id == order_id or (order_ref and trade_order_ref == order_ref):
+            return str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
+
+    return ""
+
+
+def is_cached_broker_order_live(order_service, protective_order: dict[str, Any]) -> bool:
+    return get_cached_broker_order_status(order_service, protective_order) in PROTECTIVE_LIVE_ORDER_STATUSES
+
+
+def mark_orphan_protective_cancelled(
+        conn,
+        *,
+        protective_order: dict[str, Any],
+        reason: str,
+) -> None:
+    now_ts = int(time.time())
+
+    conn.execute(
+        f"""
+        UPDATE {PROTECTIVE_ORDERS_TABLE_NAME}
+        SET
+            status = ?,
+            error_text = ?,
+            updated_at_ts = ?,
+            finished_at_ts = ?
+        WHERE order_id = ?
+          AND status = ?
+        """,
+        (
+            PROTECTIVE_ORDER_STATUS_CANCELLED,
+            str(reason),
+            now_ts,
+            now_ts,
+            int(protective_order["order_id"]),
+            PROTECTIVE_ORDER_STATUS_ACTIVE,
+        ),
+    )
+
+
+def build_reconciled_event(
+        *,
+        event: str,
+        protective_order: dict[str, Any],
+        synthetic_trade_intent_id: int | None = None,
+        filled_qty: float = 0.0,
+        avg_fill_price: float | None = None,
+        realized_pnl: float | None = None,
+) -> dict[str, Any]:
+    return {
+        "event": str(event).upper(),
+        "role": protective_order["role"],
+        "instrument_code": protective_order["instrument_code"],
+        "order_id": int(protective_order["order_id"]),
+        "parent_trade_intent_id": int(protective_order["parent_trade_intent_id"]),
+        "synthetic_trade_intent_id": synthetic_trade_intent_id,
+        "filled_qty": float(filled_qty),
+        "avg_fill_price": avg_fill_price,
+        "realized_pnl": realized_pnl,
+    }
+
+
+def reconcile_terminal_protective_order(
+        conn,
+        *,
+        protective_order: dict[str, Any],
+        statistics: dict[str, Any],
+) -> list[dict[str, Any]] | None:
+    if statistics["filled"]:
+        synthetic_trade_intent_id = create_protective_close_trade_intent(
+            conn,
+            protective_order=protective_order,
+            statistics=statistics,
+        )
+        sibling_cancelled_events = mark_oca_siblings_cancelled_after_fill(
+            conn,
+            protective_order=protective_order,
+            filled_order_id=int(protective_order["order_id"]),
+            filled_at_ts=int(statistics["filled_at_ts"]),
+        )
+        conn.commit()
+
+        return [
+            build_reconciled_event(
+                event="FILLED",
+                protective_order=protective_order,
+                synthetic_trade_intent_id=synthetic_trade_intent_id,
+                filled_qty=float(statistics["filled_qty"]),
+                avg_fill_price=statistics["avg_fill_price"],
+                realized_pnl=statistics["realized_pnl"],
+            ),
+            *sibling_cancelled_events,
+        ]
+
+    if statistics["cancelled"]:
+        mark_protective_cancelled(
+            conn,
+            protective_order=protective_order,
+            status_text=str(statistics["status"]),
+        )
+        conn.commit()
+
+        return [
+            build_reconciled_event(
+                event="CANCELLED",
+                protective_order=protective_order,
+                filled_qty=float(statistics["filled_qty"]),
+                avg_fill_price=statistics["avg_fill_price"],
+                realized_pnl=statistics["realized_pnl"],
+            )
+        ]
+
+    return None
+
+
 def create_protective_close_trade_intent(
         conn,
         *,
@@ -624,57 +808,108 @@ async def reconcile_protective_orders_once(*, order_service) -> list[dict[str, A
         await refresh_ib_executions_if_possible(order_service)
 
         reconciled: list[dict[str, Any]] = []
+        unresolved_orders: list[dict[str, Any]] = []
 
+        # Первый проход использует текущий IB cache. Не вызываем reqOpenOrders
+        # на каждой штатной итерации, когда все orders уже известны.
         for protective_order in active_orders:
             statistics = collect_protective_order_fill_statistics(order_service, protective_order)
+            terminal_events = reconcile_terminal_protective_order(
+                conn,
+                protective_order=protective_order,
+                statistics=statistics,
+            )
 
-            if statistics["filled"]:
-                synthetic_trade_intent_id = create_protective_close_trade_intent(
-                    conn,
-                    protective_order=protective_order,
-                    statistics=statistics,
-                )
-                sibling_cancelled_events = mark_oca_siblings_cancelled_after_fill(
-                    conn,
-                    protective_order=protective_order,
-                    filled_order_id=int(protective_order["order_id"]),
-                    filled_at_ts=int(statistics["filled_at_ts"]),
-                )
-                conn.commit()
-                reconciled.append({
-                    "event": "FILLED",
-                    "role": protective_order["role"],
-                    "instrument_code": protective_order["instrument_code"],
-                    "order_id": int(protective_order["order_id"]),
-                    "parent_trade_intent_id": int(protective_order["parent_trade_intent_id"]),
-                    "synthetic_trade_intent_id": synthetic_trade_intent_id,
-                    "filled_qty": float(statistics["filled_qty"]),
-                    "avg_fill_price": statistics["avg_fill_price"],
-                    "realized_pnl": statistics["realized_pnl"],
-                })
-                reconciled.extend(sibling_cancelled_events)
+            if terminal_events is not None:
+                reconciled.extend(terminal_events)
                 continue
 
-            if statistics["cancelled"]:
-                mark_protective_cancelled(
-                    conn,
+            if is_cached_broker_order_live(order_service, protective_order):
+                continue
+
+            unresolved_orders.append(protective_order)
+
+        if not unresolved_orders:
+            return reconciled
+
+        # Только для неразрешённых локальных ACTIVE записей явно обновляем
+        # broker open-orders snapshot и проверяем их второй раз.
+        open_orders_refreshed, _ = await refresh_ib_open_orders_if_possible(order_service)
+
+        if not open_orders_refreshed:
+            return reconciled
+
+        still_unresolved: list[dict[str, Any]] = []
+
+        for protective_order in unresolved_orders:
+            statistics = collect_protective_order_fill_statistics(order_service, protective_order)
+            terminal_events = reconcile_terminal_protective_order(
+                conn,
+                protective_order=protective_order,
+                statistics=statistics,
+            )
+
+            if terminal_events is not None:
+                reconciled.extend(terminal_events)
+                continue
+
+            if is_cached_broker_order_live(order_service, protective_order):
+                continue
+
+            still_unresolved.append(protective_order)
+
+        if not still_unresolved:
+            return reconciled
+
+        try:
+            snapshots = await asyncio.wait_for(
+                sync_broker_positions_once(order_service.ib),
+                timeout=float(BROKER_POSITION_SYNC_TIMEOUT_SECONDS),
+            )
+        except Exception:
+            # Без подтверждённой broker-позиции локальный order не гасим.
+            return reconciled
+
+        snapshots_by_instrument = {
+            str(snapshot.instrument_code): snapshot
+            for snapshot in snapshots
+        }
+
+        for protective_order in still_unresolved:
+            instrument_code = str(protective_order["instrument_code"])
+            snapshot = snapshots_by_instrument.get(instrument_code)
+
+            if snapshot is None:
+                continue
+
+            side = str(snapshot.side).upper()
+            quantity = float(snapshot.quantity)
+
+            if side in {"LONG", "SHORT"} and quantity > 0.0:
+                # Позиция открыта, но order не найден в refreshed IB cache.
+                # Не скрываем потенциально опасное состояние локальным CANCELLED.
+                continue
+
+            orphan_reason = (
+                "orphan protective order: absent from refreshed IB open orders "
+                "and broker position is FLAT"
+            )
+            mark_orphan_protective_cancelled(
+                conn,
+                protective_order=protective_order,
+                reason=orphan_reason,
+            )
+            conn.commit()
+            reconciled.append(
+                build_reconciled_event(
+                    event="ORPHANED",
                     protective_order=protective_order,
-                    status_text=str(statistics["status"]),
                 )
-                conn.commit()
-                reconciled.append({
-                    "event": "CANCELLED",
-                    "role": protective_order["role"],
-                    "instrument_code": protective_order["instrument_code"],
-                    "order_id": int(protective_order["order_id"]),
-                    "parent_trade_intent_id": int(protective_order["parent_trade_intent_id"]),
-                    "synthetic_trade_intent_id": None,
-                    "filled_qty": float(statistics["filled_qty"]),
-                    "avg_fill_price": statistics["avg_fill_price"],
-                    "realized_pnl": statistics["realized_pnl"],
-                })
+            )
 
         return reconciled
 
     finally:
         conn.close()
+
+

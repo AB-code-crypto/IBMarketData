@@ -27,7 +27,10 @@ from ib_execution.execution_store import (
     write_trade_intent_execution_result,
 )
 from ib_execution.order_service import OrderService
-from ib_execution.protective_order_reconciliation import reconcile_protective_orders_once
+from ib_execution.protective_order_reconciliation import (
+    reconcile_protective_orders_once,
+    refresh_ib_open_orders_if_possible,
+)
 from ib_execution.protective_order_store import (
     PROTECTIVE_ORDER_ROLE_STOP_LOSS,
     PROTECTIVE_ORDER_ROLE_TAKE_PROFIT,
@@ -231,9 +234,80 @@ async def cancel_protective_orders_before_position_change(*, conn, order_service
     if not active_orders:
         return
 
+    needs_open_order_refresh = any(
+        not find_known_trade_order_status(
+            order_service,
+            order_id=int(active_order["order_id"]),
+        )
+        for active_order in active_orders
+    )
+    open_orders_refreshed = False
+
+    if needs_open_order_refresh:
+        open_orders_refreshed, _ = await refresh_ib_open_orders_if_possible(order_service)
+
     for active_order in active_orders:
         order_id = int(active_order["order_id"])
         role_text = protective_role_text(str(active_order.get("role", "PROTECTIVE")))
+        known_status = find_known_trade_order_status(
+            order_service,
+            order_id=order_id,
+        )
+
+        # После явного refresh отсутствие order у IB означает локальный orphan.
+        # Не отправляем cancel по несуществующему id, чтобы не получать 10147.
+        if open_orders_refreshed and not known_status:
+            mark_protective_order_status(
+                conn,
+                order_id=order_id,
+                status="CANCELLED",
+                error_text=f"orphan protective order not found at broker before {action}",
+            )
+            log_info(
+                logger,
+                (
+                    f"{instrument_code}: orphan {role_text} cleared before {action}: "
+                    f"order_id={order_id}, broker_status=missing"
+                ),
+                to_telegram=False,
+            )
+            continue
+
+        # Первый cancel OCA-пары часто переводит sibling в PendingCancel.
+        # Повторный cancel создаёт benign warning 10148.
+        if known_status == "PendingCancel":
+            mark_protective_order_status(
+                conn,
+                order_id=order_id,
+                status="CANCELLED",
+                error_text=f"broker already PendingCancel before {action}",
+            )
+            log_info(
+                logger,
+                (
+                    f"{instrument_code}: {role_text} already pending cancel before {action}: "
+                    f"order_id={order_id}"
+                ),
+                to_telegram=False,
+            )
+            continue
+
+        if known_status in {"Cancelled", "ApiCancelled", "Inactive"}:
+            mark_protective_order_status(
+                conn,
+                order_id=order_id,
+                status="CANCELLED",
+                error_text=f"broker terminal status={known_status} before {action}",
+            )
+            log_info(
+                logger,
+                (
+                    f"{instrument_code}: {role_text} already terminal before {action}: "
+                    f"order_id={order_id}, broker_status={known_status}"
+                ),
+                to_telegram=False,
+            )
+            continue
 
         try:
             await order_service.cancel_order_id(order_id)
@@ -266,7 +340,6 @@ async def cancel_protective_orders_before_position_change(*, conn, order_service
             )
 
 
-
 def get_protective_order_accept_timeout_seconds() -> float:
     return float(getattr(DEFAULT_SIGNAL_CONFIG, "protective_order_accept_timeout_seconds", 5.0))
 
@@ -286,7 +359,14 @@ def get_protective_order_price_stale_max_seconds() -> int:
     return max(1, int(getattr(DEFAULT_SIGNAL_CONFIG, "max_job_bar_lag_seconds", 15)))
 
 
-def apply_protective_order_safety_flags(order) -> None:
+def apply_protective_order_safety_flags(order, *, instrument_code: str) -> None:
+    instrument_row = Instrument.get(str(instrument_code))
+
+    # Для CME futures IB игнорирует outsideRth и пишет warning 2109.
+    # Удаление флага не меняет фактическую доступность FUT protective orders.
+    if instrument_row is not None and str(instrument_row.get("secType", "")).upper() == "FUT":
+        return
+
     if hasattr(order, "outsideRth"):
         setattr(order, "outsideRth", True)
 
@@ -306,26 +386,47 @@ def describe_ib_error(error) -> str:
 def find_known_trade_order_status(order_service: OrderService, *, order_id: int) -> str | None:
     order_id = int(order_id)
 
-    for method_name in ("trades", "openTrades"):
-        method = getattr(order_service.ib, method_name, None)
-        if method is None:
+    # Live-state берём только из openTrades(). Исторический trades() может
+    # содержать устаревший Submitted-status уже несуществующего order.
+    try:
+        open_trades = list(order_service.ib.openTrades() or [])
+    except Exception:
+        open_trades = []
+
+    for trade in open_trades:
+        order = getattr(trade, "order", None)
+        if order is None:
             continue
 
-        try:
-            trades = list(method() or [])
-        except Exception:
+        trade_order_id = int(getattr(order, "orderId", 0) or 0)
+        if trade_order_id != order_id:
             continue
 
-        for trade in trades:
-            order = getattr(trade, "order", None)
-            if order is None:
-                continue
+        return str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
 
-            trade_order_id = int(getattr(order, "orderId", 0) or 0)
-            if trade_order_id != order_id:
-                continue
+    # Из trades() принимаем только терминальные статусы, нужные для cleanup.
+    try:
+        historical_trades = list(order_service.ib.trades() or [])
+    except Exception:
+        historical_trades = []
 
-            return str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
+    terminal_statuses = (
+        PROTECTIVE_EXIT_ORDER_FILLED_STATUSES
+        | PROTECTIVE_EXIT_ORDER_REJECTED_STATUSES
+    )
+
+    for trade in historical_trades:
+        order = getattr(trade, "order", None)
+        if order is None:
+            continue
+
+        trade_order_id = int(getattr(order, "orderId", 0) or 0)
+        if trade_order_id != order_id:
+            continue
+
+        status = str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
+        if status in terminal_statuses:
+            return status
 
     return None
 
@@ -716,7 +817,10 @@ async def place_protective_orders_after_entry(*, conn, order_service: OrderServi
                 stop_price=float(stop_loss_price),
                 time_in_force=PROTECTIVE_ORDER_TIME_IN_FORCE,
             )
-            apply_protective_order_safety_flags(stop_order)
+            apply_protective_order_safety_flags(
+                stop_order,
+                instrument_code=instrument_code,
+            )
             specs.append({
                 "role": PROTECTIVE_ORDER_ROLE_STOP_LOSS,
                 "order": stop_order,
@@ -734,7 +838,10 @@ async def place_protective_orders_after_entry(*, conn, order_service: OrderServi
                 limit_price=float(take_profit_price),
                 time_in_force=PROTECTIVE_ORDER_TIME_IN_FORCE,
             )
-            apply_protective_order_safety_flags(take_profit_order)
+            apply_protective_order_safety_flags(
+                take_profit_order,
+                instrument_code=instrument_code,
+            )
             specs.append({
                 "role": PROTECTIVE_ORDER_ROLE_TAKE_PROFIT,
                 "order": take_profit_order,
