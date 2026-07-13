@@ -156,6 +156,9 @@ def initialize_protective_order_db(conn) -> None:
         """
     )
 
+    from ib_execution.trade_db_migrations import run_trade_db_migrations
+    run_trade_db_migrations(conn)
+
 
 def validate_protective_order_role(role: str) -> str:
     role_value = str(role).upper()

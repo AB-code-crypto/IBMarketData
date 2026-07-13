@@ -18,33 +18,6 @@ def trade_intent_age_anchor_sql() -> str:
     )
 
 
-TAKE_PROFIT_ORDERS_TABLE_NAME = "take_profit_orders"
-TAKE_PROFIT_STATUS_ACTIVE = "ACTIVE"
-TAKE_PROFIT_STATUS_CANCELLED = "CANCELLED"
-
-
-def create_take_profit_orders_table_sql() -> str:
-    return f"""
-    CREATE TABLE IF NOT EXISTS {TAKE_PROFIT_ORDERS_TABLE_NAME} (
-        take_profit_order_id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-        instrument_code TEXT NOT NULL,
-        parent_trade_intent_id INTEGER NOT NULL,
-
-        order_ref TEXT NOT NULL,
-        order_id INTEGER NOT NULL UNIQUE,
-        order_action TEXT NOT NULL,
-        order_quantity INTEGER NOT NULL,
-        take_profit_price REAL NOT NULL,
-
-        status TEXT NOT NULL,
-        error_text TEXT,
-
-        created_at_ts INTEGER NOT NULL,
-        updated_at_ts INTEGER NOT NULL,
-        finished_at_ts INTEGER
-    );
-    """
 
 
 def table_columns(conn, table_name: str) -> set[str]:
@@ -89,150 +62,12 @@ def ensure_trade_intents_cancel_request_columns(conn) -> None:
 def initialize_execution_db(conn) -> None:
     initialize_trade_db(conn)
     ensure_trade_intents_cancel_request_columns(conn)
-    conn.execute(create_take_profit_orders_table_sql())
-    conn.execute(
-        f"""
-        CREATE INDEX IF NOT EXISTS idx_take_profit_orders_active_instrument
-        ON {TAKE_PROFIT_ORDERS_TABLE_NAME}(instrument_code, status, created_at_ts);
-        """
-    )
 
 
-def record_take_profit_order(
-        conn,
-        *,
-        instrument_code: str,
-        parent_trade_intent_id: int,
-        order_ref: str,
-        order_id: int,
-        order_action: str,
-        order_quantity: int,
-        take_profit_price: float,
-) -> None:
-    now_ts = int(time.time())
-
-    conn.execute(
-        f"""
-        INSERT INTO {TAKE_PROFIT_ORDERS_TABLE_NAME} (
-            instrument_code,
-            parent_trade_intent_id,
-            order_ref,
-            order_id,
-            order_action,
-            order_quantity,
-            take_profit_price,
-            status,
-            error_text,
-            created_at_ts,
-            updated_at_ts,
-            finished_at_ts
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)
-
-        ON CONFLICT(order_id) DO UPDATE SET
-            instrument_code = excluded.instrument_code,
-            parent_trade_intent_id = excluded.parent_trade_intent_id,
-            order_ref = excluded.order_ref,
-            order_action = excluded.order_action,
-            order_quantity = excluded.order_quantity,
-            take_profit_price = excluded.take_profit_price,
-            status = excluded.status,
-            error_text = NULL,
-            updated_at_ts = excluded.updated_at_ts,
-            finished_at_ts = NULL
-        """,
-        (
-            str(instrument_code),
-            int(parent_trade_intent_id),
-            str(order_ref),
-            int(order_id),
-            str(order_action).upper(),
-            int(order_quantity),
-            float(take_profit_price),
-            TAKE_PROFIT_STATUS_ACTIVE,
-            now_ts,
-            now_ts,
-        ),
-    )
 
 
-def read_active_take_profit_orders(conn, *, instrument_code: str) -> list[dict]:
-    rows = conn.execute(
-        f"""
-        SELECT
-            take_profit_order_id,
-            instrument_code,
-            parent_trade_intent_id,
-            order_ref,
-            order_id,
-            order_action,
-            order_quantity,
-            take_profit_price,
-            status,
-            error_text,
-            created_at_ts,
-            updated_at_ts,
-            finished_at_ts
-        FROM {TAKE_PROFIT_ORDERS_TABLE_NAME}
-        WHERE instrument_code = ?
-          AND status = ?
-        ORDER BY created_at_ts ASC, take_profit_order_id ASC
-        """,
-        (
-            str(instrument_code),
-            TAKE_PROFIT_STATUS_ACTIVE,
-        ),
-    ).fetchall()
-
-    return [
-        {
-            "take_profit_order_id": int(row[0]),
-            "instrument_code": str(row[1]),
-            "parent_trade_intent_id": int(row[2]),
-            "order_ref": str(row[3]),
-            "order_id": int(row[4]),
-            "order_action": str(row[5]),
-            "order_quantity": int(row[6]),
-            "take_profit_price": float(row[7]),
-            "status": str(row[8]),
-            "error_text": None if row[9] is None else str(row[9]),
-            "created_at_ts": int(row[10]),
-            "updated_at_ts": int(row[11]),
-            "finished_at_ts": None if row[12] is None else int(row[12]),
-        }
-        for row in rows
-    ]
 
 
-def mark_take_profit_order_status(
-        conn,
-        *,
-        order_id: int,
-        status: str,
-        error_text: str | None = None,
-) -> None:
-    now_ts = int(time.time())
-    status_value = str(status).upper()
-    finished_at_ts = now_ts if status_value != TAKE_PROFIT_STATUS_ACTIVE else None
-
-    conn.execute(
-        f"""
-        UPDATE {TAKE_PROFIT_ORDERS_TABLE_NAME}
-        SET
-            status = ?,
-            error_text = ?,
-            updated_at_ts = ?,
-            finished_at_ts = ?
-        WHERE order_id = ?
-        """,
-        (
-            status_value,
-            error_text,
-            now_ts,
-            finished_at_ts,
-            int(order_id),
-        ),
-    )
 
 
 def expire_stale_new_trade_intents(

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -14,19 +13,18 @@ from ib_execution.execution_store import (
     expire_stale_new_trade_intents,
     get_trade_db_connection,
     initialize_execution_db,
-    mark_take_profit_order_status,
     mark_trade_intent_order_submitted,
     mark_trade_intent_sending,
-    read_active_take_profit_orders,
     read_trade_intent_submission_state,
     write_trade_intent_execution_result,
 )
 from ib_execution.order_service import OrderService
+from ib_execution.position_close_service import (
+    cancel_exit_orders_for_instrument as cancel_all_exit_orders_for_instrument,
+)
 from ib_execution.slot_loss_extension_store import has_active_slot_loss_extension_for_instrument
-from ib_execution.take_profit_reconciliation import reconcile_take_profit_orders_once
 from ib_position_sync.position_models import BrokerPositionSnapshot
 from ib_position_sync.position_store import (
-    is_same_contract_for_instrument,
     sync_broker_positions_once,
 )
 from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG, SignalWindowMode
@@ -52,9 +50,7 @@ SLOT_CLOSE_RECOVERY_SIGNAL_STRENGTH = "SLOT_CLOSE_RECOVERY"
 CLOSE_CONFIGURED_BROKER_POSITIONS_WITHOUT_DB_ENTRY = True
 CLOSE_CONFIGURED_BROKER_POSITIONS_ON_DB_MISMATCH = True
 
-TAKE_PROFIT_ORDER_REF_SUFFIX = "_TP"
 EXECUTION_NEW_INTENT_MAX_AGE_SECONDS = 10
-OPEN_ORDER_REFRESH_SETTLE_SECONDS = 0.25
 
 
 @dataclass(frozen=True)
@@ -326,208 +322,41 @@ def expire_stale_execution_intents(conn, *, now_ts: int) -> None:
         now_ts=now_ts,
     )
 
-
-async def refresh_open_orders_for_recovery(
-        order_service: OrderService,
-) -> tuple[bool, str | None]:
-    return await order_service.broker_state.refresh_open_orders(
-        force=True,
-    )
-
-
-def collect_live_take_profit_orders(
+async def cancel_exit_orders_for_recovery(
         *,
         order_service: OrderService,
         instrument_code: str,
         now_ts: int,
-) -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
-    seen_order_ids: set[int] = set()
-
-    try:
-        trades = list(order_service.ib.openTrades() or [])
-    except Exception:
-        return result
-
-    for trade in trades:
-        order = getattr(trade, "order", None)
-
-        if order is None:
-            continue
-
-        order_ref = str(getattr(order, "orderRef", "") or "")
-
-        if not order_ref.endswith(TAKE_PROFIT_ORDER_REF_SUFFIX):
-            continue
-
-        contract = getattr(trade, "contract", None)
-
-        if contract is None:
-            continue
-
-        if not is_same_contract_for_instrument(
-                position_contract=contract,
-                instrument_code=instrument_code,
-                now_ts=now_ts,
-        ):
-            continue
-
-        order_id = int(getattr(order, "orderId", 0) or 0)
-
-        if order_id <= 0 or order_id in seen_order_ids:
-            continue
-
-        seen_order_ids.add(order_id)
-        result.append({
-            "order_id": order_id,
-            "order_ref": order_ref,
-        })
-
-    return result
-
-
-async def cancel_take_profit_orders_for_recovery(
-        *,
-        order_service: OrderService,
-        instrument_code: str,
-        now_ts: int,
-) -> list[SlotCloseRecoveryEvent]:
-    events: list[SlotCloseRecoveryEvent] = []
-    cancelled_order_ids: set[int] = set()
-
-    conn = get_trade_db_connection()
-
-    try:
-        initialize_execution_db(conn)
-        active_orders = read_active_take_profit_orders(
-            conn,
-            instrument_code=instrument_code,
-        )
-
-        for active_order in active_orders:
-            order_id = int(active_order["order_id"])
-
-            try:
-                await order_service.cancel_order_id(order_id)
-                cancelled_order_ids.add(order_id)
-
-                mark_take_profit_order_status(
-                    conn,
-                    order_id=order_id,
-                    status="CANCELLED",
-                    error_text="cancelled by slot-close recovery before market close",
-                )
-                conn.commit()
-
-                events.append(SlotCloseRecoveryEvent(
-                    instrument_code=instrument_code,
-                    event="TAKE_PROFIT_CANCELLED",
-                    message=f"{instrument_code}: recovery cancelled DB take-profit order_id={order_id}",
-                ))
-
-            except Exception as exc:
-                mark_take_profit_order_status(
-                    conn,
-                    order_id=order_id,
-                    status="ACTIVE",
-                    error_text=f"recovery cancel failed: {type(exc).__name__}: {exc}",
-                )
-                conn.commit()
-
-                events.append(SlotCloseRecoveryEvent(
-                    instrument_code=instrument_code,
-                    event="TAKE_PROFIT_CANCEL_FAILED",
-                    message=(
-                        f"{instrument_code}: recovery failed to cancel DB take-profit "
-                        f"order_id={order_id}: {type(exc).__name__}: {exc}"
-                    ),
-                    log_level="WARNING",
-                ))
-
-    finally:
-        conn.close()
-
-    refresh_ok, refresh_error = await refresh_open_orders_for_recovery(order_service)
-
-    if not refresh_ok:
-        events.append(SlotCloseRecoveryEvent(
-            instrument_code=instrument_code,
-            event="OPEN_ORDER_REFRESH_FAILED",
-            message=(
-                f"{instrument_code}: recovery could not refresh broker open orders before live TP cancel; "
-                f"market close must be skipped until refresh succeeds: {refresh_error}"
-            ),
-            log_level="WARNING",
-        ))
-        return events
-
-    live_take_profit_orders = collect_live_take_profit_orders(
+) -> tuple[bool, list[SlotCloseRecoveryEvent]]:
+    cleanup_ok, cleanup_events = await cancel_all_exit_orders_for_instrument(
         order_service=order_service,
         instrument_code=instrument_code,
         now_ts=now_ts,
+        reason="slot-close recovery before market close",
     )
 
-    for live_order in live_take_profit_orders:
-        order_id = int(live_order["order_id"])
-
-        if order_id in cancelled_order_ids:
-            continue
-
-        try:
-            await order_service.cancel_order_id(order_id)
-            cancelled_order_ids.add(order_id)
-
-            events.append(SlotCloseRecoveryEvent(
-                instrument_code=instrument_code,
-                event="LIVE_TAKE_PROFIT_CANCELLED",
-                message=(
-                    f"{instrument_code}: recovery cancelled live take-profit "
-                    f"order_id={order_id}, order_ref={live_order['order_ref']}"
-                ),
-            ))
-
-        except Exception as exc:
-            events.append(SlotCloseRecoveryEvent(
-                instrument_code=instrument_code,
-                event="LIVE_TAKE_PROFIT_CANCEL_FAILED",
-                message=(
-                    f"{instrument_code}: recovery failed to cancel live take-profit "
-                    f"order_id={order_id}, order_ref={live_order['order_ref']}: "
-                    f"{type(exc).__name__}: {exc}"
-                ),
-                log_level="WARNING",
-            ))
-
-    return events
+    events = [
+        SlotCloseRecoveryEvent(
+            instrument_code=str(event.instrument_code),
+            event=f"EXIT_CLEANUP_{str(event.event).upper()}",
+            message=str(event.message),
+            intent=event.intent,
+            result=event.result,
+            log_level=str(event.log_level),
+        )
+        for event in cleanup_events
+    ]
+    return bool(cleanup_ok), events
 
 
-def mark_local_take_profit_orders_without_live_order_cancelled(
-        *,
-        instrument_code: str,
-        live_order_ids: set[int],
-) -> None:
-    conn = get_trade_db_connection()
 
-    try:
-        initialize_execution_db(conn)
 
-        for active_order in read_active_take_profit_orders(conn, instrument_code=instrument_code):
-            order_id = int(active_order["order_id"])
 
-            if order_id in live_order_ids:
-                continue
 
-            mark_take_profit_order_status(
-                conn,
-                order_id=order_id,
-                status="CANCELLED",
-                error_text="marked cancelled by recovery after successful open-order refresh: no matching live TP order at broker",
-            )
 
-        conn.commit()
 
-    finally:
-        conn.close()
+
+
 
 
 def build_recovery_reason(
@@ -985,50 +814,21 @@ async def run_slot_close_recovery_once(*, order_service: OrderService) -> list[S
             log_level="WARNING",
         ))
 
-        events.extend(await cancel_take_profit_orders_for_recovery(
+        cleanup_ok, cleanup_events = await cancel_exit_orders_for_recovery(
             order_service=order_service,
             instrument_code=instrument_code,
             now_ts=now_ts,
-        ))
+        )
+        events.extend(cleanup_events)
 
-        try:
-            reconciled_take_profits = await reconcile_take_profit_orders_once(
-                order_service=order_service,
-            )
-        except Exception as exc:
-            events.append(SlotCloseRecoveryEvent(
-                instrument_code=instrument_code,
-                event="RECOVERY_TP_RECONCILIATION_FAILED",
-                message=(
-                    f"{instrument_code}: recovery skipped market close because "
-                    f"take-profit reconciliation failed after TP cancellation attempt: "
-                    f"{type(exc).__name__}: {exc}"
-                ),
-                log_level="WARNING",
-            ))
+        if not cleanup_ok:
             continue
 
-        for reconciled_take_profit in reconciled_take_profits:
-            if str(reconciled_take_profit.get("instrument_code")) != instrument_code:
-                continue
-
-            events.append(SlotCloseRecoveryEvent(
-                instrument_code=instrument_code,
-                event=f"TAKE_PROFIT_{str(reconciled_take_profit.get('event', '')).upper()}",
-                message=(
-                    f"{instrument_code}: recovery TP reconciliation event="
-                    f"{reconciled_take_profit.get('event')}, "
-                    f"order_id={reconciled_take_profit.get('order_id')}, "
-                    f"filled_qty={reconciled_take_profit.get('filled_qty')}, "
-                    f"avg_fill={reconciled_take_profit.get('avg_fill_price')}"
-                ),
-            ))
-
         snapshots_after_tp = await sync_broker_positions_once(
-                    order_service.ib,
-                    expected_account_id=order_service.account_id,
-                    force_refresh=True,
-                )
+            order_service.ib,
+            expected_account_id=order_service.account_id,
+            force_refresh=True,
+        )
         snapshot_after_tp = find_snapshot(
             snapshots_after_tp,
             instrument_code=instrument_code,
@@ -1040,46 +840,8 @@ async def run_slot_close_recovery_once(*, order_service: OrderService) -> list[S
                 event="RECOVERY_CLOSE_SKIPPED_ALREADY_FLAT",
                 message=(
                     f"{instrument_code}: recovery did not send market close because "
-                    f"broker position is already FLAT after TP cancellation/reconciliation"
+                    "broker position is already FLAT after exit-order cleanup"
                 ),
-            ))
-            continue
-
-        refresh_ok, refresh_error = await refresh_open_orders_for_recovery(order_service)
-
-        if not refresh_ok:
-            events.append(SlotCloseRecoveryEvent(
-                instrument_code=instrument_code,
-                event="RECOVERY_CLOSE_SKIPPED_OPEN_ORDER_REFRESH_FAILED",
-                message=(
-                    f"{instrument_code}: recovery skipped market close because broker open-order refresh failed; "
-                    f"cannot prove TP orders are gone: {refresh_error}"
-                ),
-                log_level="WARNING",
-            ))
-            continue
-
-        live_take_profit_orders = collect_live_take_profit_orders(
-            order_service=order_service,
-            instrument_code=instrument_code,
-            now_ts=now_ts,
-        )
-        live_take_profit_order_ids = {int(order["order_id"]) for order in live_take_profit_orders}
-
-        mark_local_take_profit_orders_without_live_order_cancelled(
-            instrument_code=instrument_code,
-            live_order_ids=live_take_profit_order_ids,
-        )
-
-        if live_take_profit_orders:
-            events.append(SlotCloseRecoveryEvent(
-                instrument_code=instrument_code,
-                event="RECOVERY_CLOSE_SKIPPED_LIVE_TP_STILL_OPEN",
-                message=(
-                    f"{instrument_code}: recovery skipped market close because live TP orders "
-                    f"are still open at broker after successful refresh: {live_take_profit_orders}"
-                ),
-                log_level="WARNING",
             ))
             continue
 

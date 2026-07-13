@@ -20,7 +20,7 @@ from core.logger import (
 )
 from core.service_instance_lock import service_instance_lock
 from core.telegram_sender import TelegramSender
-from ib_execution.protective_execution_runner import run_execution_loop
+from ib_execution.execution_loop import run_execution_loop
 from ib_execution.order_service import OrderService
 
 setup_logging()
