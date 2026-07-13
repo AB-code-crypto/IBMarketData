@@ -396,6 +396,12 @@ async def main():
     ib, ib_health = await connect_ib(settings)
 
     try:
+        log_info(
+            logger,
+            "IB подключён. Формирую startup context market-data: "
+            "server time, active contracts и базы данных.",
+            to_telegram=False,
+        )
         server_time_text = await get_ib_server_time_text(ib)
         active_instruments = build_active_instruments(server_time_text)
 
@@ -404,7 +410,17 @@ async def main():
             active_instruments=active_instruments,
         )
 
+        log_info(
+            logger,
+            "Active contracts определены. Инициализирую market-data базы.",
+            to_telegram=False,
+        )
         initialize_databases_sync(settings)
+        log_info(
+            logger,
+            "Market-data базы инициализированы. Запускаю history/realtime контур.",
+            to_telegram=False,
+        )
 
         background_tasks = _start_infrastructure_tasks(
             ib=ib,

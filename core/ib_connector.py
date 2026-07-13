@@ -24,6 +24,13 @@ CONNECTION_CHECK_INTERVAL_SECONDS = 1
 # Раз в сколько секунд слать heartbeat-сообщение.
 HEARTBEAT_INTERVAL_SECONDS = 60
 
+# reqCurrentTimeAsync не должен бессрочно блокировать startup market-data.
+IB_SERVER_TIME_REQUEST_TIMEOUT_SECONDS = 5.0
+
+# connect/reconnect/heartbeat уже получают IB time. Повторно используем свежий
+# sample вместо немедленного второго reqCurrentTimeAsync после connect.
+IB_SERVER_TIME_CACHE_MAX_AGE_SECONDS = 90
+
 
 def format_ib_clock_server_time(sample) -> str:
     return datetime.fromtimestamp(
@@ -34,7 +41,7 @@ def format_ib_clock_server_time(sample) -> str:
 
 async def sample_ib_clock_best_effort(ib, settings):
     try:
-        return await asyncio.wait_for(
+        sample = await asyncio.wait_for(
             sample_and_store_ib_clock(
                 ib,
                 source_client_id=getattr(
@@ -43,8 +50,10 @@ async def sample_ib_clock_best_effort(ib, settings):
                     None,
                 ),
             ),
-            timeout=5.0,
+            timeout=IB_SERVER_TIME_REQUEST_TIMEOUT_SECONDS,
         )
+        setattr(ib, "_ibmd_last_clock_sample", sample)
+        return sample
     except Exception as exc:
         log_warning(
             logger,
@@ -148,9 +157,39 @@ def disconnect_ib(ib):
 
 
 async def get_ib_server_time_text(ib):
-    """Что делает: запрашивает server time IB и возвращает строку без timezone suffix. Зачем нужна: это каноническое время для выбора active contract и логов."""
-    current_time = await ib.reqCurrentTimeAsync()
-    return str(current_time).split("+")[0]
+    """Возвращает IB server time без повторного зависающего запроса после connect."""
+    cached_sample = getattr(ib, "_ibmd_last_clock_sample", None)
+
+    if cached_sample is not None:
+        sample_age_seconds = max(
+            0,
+            int(time.time()) - int(cached_sample.sampled_at_ts),
+        )
+        if sample_age_seconds <= IB_SERVER_TIME_CACHE_MAX_AGE_SECONDS:
+            return datetime.fromtimestamp(
+                float(cached_sample.server_time_ts),
+                tz=timezone.utc,
+            ).strftime("%Y-%m-%d %H:%M:%S")
+
+    try:
+        sample = await asyncio.wait_for(
+            sample_and_store_ib_clock(
+                ib,
+                source_client_id=None,
+            ),
+            timeout=IB_SERVER_TIME_REQUEST_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError(
+            "IB reqCurrentTimeAsync timed out while resolving server time: "
+            f"timeout_seconds={IB_SERVER_TIME_REQUEST_TIMEOUT_SECONDS}"
+        ) from exc
+
+    setattr(ib, "_ibmd_last_clock_sample", sample)
+    return datetime.fromtimestamp(
+        float(sample.server_time_ts),
+        tz=timezone.utc,
+    ).strftime("%Y-%m-%d %H:%M:%S")
 
 
 async def monitor_ib_connection(ib, settings, ib_health):
