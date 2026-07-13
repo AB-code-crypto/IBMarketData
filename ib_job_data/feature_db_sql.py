@@ -148,6 +148,70 @@ def insert_new_mid_price_from_attached_price_db_sql(
     """
 
 
+def insert_missing_mid_price_from_attached_price_db_sql(
+        *,
+        attached_schema_name: str,
+        source_table_name: str,
+        price_digits: int,
+        mid_price_digits: int,
+) -> str:
+    """Builds an idempotent INSERT for new and late-backfilled complete bars."""
+    price_digits = int(price_digits)
+    mid_price_digits = int(mid_price_digits)
+
+    target_table_ref = quote_identifier(MID_PRICE_TABLE_NAME)
+    source_table_ref = (
+        f"{quote_identifier(attached_schema_name)}."
+        f"{quote_identifier(source_table_name)}"
+    )
+
+    return f"""
+    INSERT OR IGNORE INTO {target_table_ref} (
+        bar_time_ts,
+        bar_time,
+        bar_time_ct,
+        bar_time_msk,
+
+        mid_open,
+        mid_high,
+        mid_low,
+        mid_close,
+
+        spread_open,
+        spread_high,
+        spread_low,
+        spread_close
+    )
+    SELECT
+        bar_time_ts,
+        bar_time,
+        bar_time_ct,
+        bar_time_msk,
+
+        ROUND((bid_open + ask_open) / 2.0, {mid_price_digits}),
+        ROUND((bid_high + ask_high) / 2.0, {mid_price_digits}),
+        ROUND((bid_low + ask_low) / 2.0, {mid_price_digits}),
+        ROUND((bid_close + ask_close) / 2.0, {mid_price_digits}),
+
+        ROUND(ask_open - bid_open, {price_digits}),
+        ROUND(ask_high - bid_high, {price_digits}),
+        ROUND(ask_low - bid_low, {price_digits}),
+        ROUND(ask_close - bid_close, {price_digits})
+
+    FROM {source_table_ref}
+    WHERE bar_time_ts >= ?
+      AND bid_open IS NOT NULL
+      AND ask_open IS NOT NULL
+      AND bid_high IS NOT NULL
+      AND ask_high IS NOT NULL
+      AND bid_low IS NOT NULL
+      AND ask_low IS NOT NULL
+      AND bid_close IS NOT NULL
+      AND ask_close IS NOT NULL
+    ORDER BY bar_time_ts;
+    """
+
+
 def quote_identifier(value: str) -> str:
     """Что делает: экранирует SQLite identifier двойными кавычками. Зачем нужна: имена таблиц и схем безопасно вставляются в SQL."""
     return '"' + str(value).replace('"', '""') + '"'

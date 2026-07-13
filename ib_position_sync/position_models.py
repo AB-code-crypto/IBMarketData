@@ -10,3 +10,5 @@ class BrokerPositionSnapshot:
     quantity: float
     broker_contract: str | None
     broker_account: str | None
+    broker_con_id: int | None = None
+    contract_is_active: bool | None = None

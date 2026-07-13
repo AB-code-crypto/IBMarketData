@@ -3,6 +3,7 @@ import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 
+from ib_execution.broker_state_service import get_broker_state_service
 from ib_execution.execution_models import ExecutionResult, ExecutionStatus, TradeIntent
 from contracts import Instrument
 from core.time_utils import CT_TIMEZONE
@@ -13,6 +14,7 @@ from ib_execution.order_service import (
     OrderService,
     OrderTimeoutError,
 )
+from ib_position_sync.position_store import sync_broker_positions_once
 from ib_execution.execution_store import (
     get_trade_db_connection,
     initialize_execution_db,
@@ -241,27 +243,25 @@ def are_commission_reports_final_for_trade(trade) -> bool:
 
 
 async def refresh_ib_executions_if_possible(ib) -> bool:
-    try:
-        req_async = getattr(ib, "reqExecutionsAsync", None)
+    account_id = str(
+        getattr(
+            getattr(ib, "_ibmd_broker_state_service", None),
+            "account_id",
+            "",
+        )
+        or ""
+    ).strip()
 
-        if req_async is not None:
-            await req_async()
-            return True
-
-        req_sync = getattr(ib, "reqExecutions", None)
-
-        if req_sync is not None:
-            maybe_awaitable = req_sync()
-
-            if asyncio.iscoroutine(maybe_awaitable):
-                await maybe_awaitable
-
-            return True
-
-    except Exception:
+    if not account_id:
         return False
 
-    return False
+    service = get_broker_state_service(
+        ib,
+        account_id=account_id,
+    )
+    return await service.refresh_executions(
+        force=False,
+    )
 
 
 async def wait_for_commission_reports(
@@ -730,14 +730,161 @@ async def execute_limit_intent(
     )
 
 
+class LivePositionStateError(RuntimeError):
+    pass
+
+
+def find_live_position_snapshot(
+        snapshots,
+        *,
+        instrument_code: str,
+):
+    for snapshot in snapshots:
+        if str(snapshot.instrument_code) == str(instrument_code):
+            return snapshot
+    return None
+
+
+def require_integer_quantity(value: float, *, context: str) -> int:
+    quantity = abs(float(value))
+    if quantity <= 0.0 or quantity != int(quantity):
+        raise LivePositionStateError(
+            f"{context}: execution requires positive integer quantity, got {value}"
+        )
+    return int(quantity)
+
+
+async def resolve_live_execution_plan(
+        *,
+        order_service: OrderService,
+        intent: TradeIntent,
+):
+    """Resolves action/quantity/contract from the broker position at send time.
+
+    CLOSE_POSITION always targets the exact broker contract currently held.
+    A position on an old futures contract is therefore closed on that old
+    contract instead of accidentally trading the new active contract.
+    """
+    snapshots = await sync_broker_positions_once(
+        order_service.ib,
+        expected_account_id=order_service.account_id,
+        force_refresh=True,
+    )
+    snapshot = find_live_position_snapshot(
+        snapshots,
+        instrument_code=intent.instrument_code,
+    )
+    if snapshot is None:
+        raise LivePositionStateError(
+            f"No broker snapshot for {intent.instrument_code}"
+        )
+
+    action = str(intent.action).upper()
+    target_side = str(intent.target_side).upper()
+    current_side = str(snapshot.side).upper()
+    current_qty = float(snapshot.quantity)
+
+    if action == "OPEN_POSITION":
+        if current_side != "FLAT" or current_qty > 0.0:
+            raise LivePositionStateError(
+                f"{intent.instrument_code}: OPEN_POSITION requires broker FLAT, "
+                f"actual={current_side}/{current_qty:g}"
+            )
+
+        quantity = require_integer_quantity(
+            intent.target_qty,
+            context=f"{intent.instrument_code} OPEN_POSITION",
+        )
+        if target_side not in {"LONG", "SHORT"}:
+            raise LivePositionStateError(
+                f"Invalid OPEN target side: {target_side}"
+            )
+
+        contract = build_execution_contract(
+            instrument_code=intent.instrument_code,
+        )
+        return (
+            "BUY" if target_side == "LONG" else "SELL",
+            quantity,
+            contract,
+        )
+
+    if action == "CLOSE_POSITION":
+        if current_side not in {"LONG", "SHORT"} or current_qty <= 0.0:
+            raise LivePositionStateError(
+                f"{intent.instrument_code}: CLOSE_POSITION requires open broker position, "
+                f"actual={current_side}/{current_qty:g}"
+            )
+
+        quantity = require_integer_quantity(
+            current_qty,
+            context=f"{intent.instrument_code} CLOSE_POSITION",
+        )
+        contract = build_execution_contract(
+            instrument_code=intent.instrument_code,
+            broker_con_id=getattr(snapshot, "broker_con_id", None),
+            broker_local_symbol=getattr(snapshot, "broker_contract", None),
+        )
+        return (
+            "SELL" if current_side == "LONG" else "BUY",
+            quantity,
+            contract,
+        )
+
+    if action == "REVERSE_POSITION":
+        if current_side not in {"LONG", "SHORT"} or current_qty <= 0.0:
+            raise LivePositionStateError(
+                f"{intent.instrument_code}: REVERSE_POSITION requires open broker position, "
+                f"actual={current_side}/{current_qty:g}"
+            )
+
+        if getattr(snapshot, "contract_is_active", None) is False:
+            raise LivePositionStateError(
+                f"{intent.instrument_code}: reverse is blocked because broker position "
+                f"is on non-active contract {getattr(snapshot, 'broker_contract', None)}; "
+                "rollover close must execute first"
+            )
+
+        if target_side not in {"LONG", "SHORT"} or target_side == current_side:
+            raise LivePositionStateError(
+                f"{intent.instrument_code}: invalid reverse state "
+                f"current={current_side}, target={target_side}"
+            )
+
+        target_qty = require_integer_quantity(
+            intent.target_qty,
+            context=f"{intent.instrument_code} REVERSE target",
+        )
+        current_qty_int = require_integer_quantity(
+            current_qty,
+            context=f"{intent.instrument_code} REVERSE current",
+        )
+        contract = build_execution_contract(
+            instrument_code=intent.instrument_code,
+        )
+        return (
+            "BUY" if target_side == "LONG" else "SELL",
+            current_qty_int + target_qty,
+            contract,
+        )
+
+    order_action, quantity = calculate_order_delta(intent)
+    contract = build_execution_contract(
+        instrument_code=intent.instrument_code,
+    )
+    return order_action, quantity, contract
+
+
 async def execute_trade_intent(
         *,
         order_service: OrderService,
         intent: TradeIntent,
         order_submitted_callback: OrderSubmittedCallback | None = None,
 ) -> ExecutionResult:
-    order_action, quantity = calculate_order_delta(intent)
-    contract = build_execution_contract(instrument_code=intent.instrument_code)
+    order_action, quantity, contract = await resolve_live_execution_plan(
+        order_service=order_service,
+        intent=intent,
+    )
 
     if not intent.order_ref:
         raise ValueError(f"TradeIntent without order_ref: id={intent.trade_intent_id}")

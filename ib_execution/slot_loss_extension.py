@@ -25,6 +25,7 @@ from ib_execution.execution_store import (
     mark_trade_intent_order_submitted,
     mark_trade_intent_sending,
     read_active_take_profit_orders,
+    read_trade_intent_submission_state,
     write_trade_intent_execution_result,
 )
 from ib_execution.order_service import OrderService
@@ -406,37 +407,12 @@ def read_price_path_stats(
     )
 
 
-async def refresh_open_orders_for_extension(order_service: OrderService) -> tuple[bool, str | None]:
-    ib = order_service.ib
-    errors: list[str] = []
-
-    for method_name in ("reqAllOpenOrdersAsync", "reqOpenOrdersAsync"):
-        method = getattr(ib, method_name, None)
-        if method is None:
-            continue
-        try:
-            await method()
-            await asyncio.sleep(float(OPEN_ORDER_REFRESH_SETTLE_SECONDS))
-            return True, None
-        except Exception as exc:
-            errors.append(f"{method_name}: {type(exc).__name__}: {exc}")
-
-    for method_name in ("reqAllOpenOrders", "reqOpenOrders"):
-        method = getattr(ib, method_name, None)
-        if method is None:
-            continue
-        try:
-            maybe_awaitable = method()
-            if inspect.isawaitable(maybe_awaitable):
-                await maybe_awaitable
-            await asyncio.sleep(float(OPEN_ORDER_REFRESH_SETTLE_SECONDS))
-            return True, None
-        except Exception as exc:
-            errors.append(f"{method_name}: {type(exc).__name__}: {exc}")
-
-    if not errors:
-        return False, "IB object has no reqAllOpenOrders/reqOpenOrders method"
-    return False, "; ".join(errors)
+async def refresh_open_orders_for_extension(
+        order_service: OrderService,
+) -> tuple[bool, str | None]:
+    return await order_service.broker_state.refresh_open_orders(
+        force=True,
+    )
 
 
 def collect_live_exit_orders(
@@ -691,12 +667,30 @@ async def create_and_execute_market_close(
                 order_submitted_callback=on_order_submitted,
             )
         except Exception as exc:
+            submission_state = read_trade_intent_submission_state(
+                conn,
+                trade_intent_id=intent.trade_intent_id,
+            ) or {}
+            order_id = (
+                submission_state.get("order_id")
+                or getattr(exc, "order_id", None)
+            )
             result = ExecutionResult(
                 trade_intent_id=intent.trade_intent_id,
-                order_id=getattr(exc, "order_id", None),
-                order_action=None,
-                order_quantity=None,
-                status=ExecutionStatus.FAILED,
+                order_id=order_id,
+                order_action=(
+                    submission_state.get("order_action")
+                    or getattr(exc, "order_action", None)
+                ),
+                order_quantity=(
+                    submission_state.get("order_quantity")
+                    or getattr(exc, "order_quantity", None)
+                ),
+                status=(
+                    ExecutionStatus.RECONCILING
+                    if order_id is not None
+                    else ExecutionStatus.FAILED
+                ),
                 avg_fill_price=None,
                 total_commission=None,
                 realized_pnl=None,
@@ -755,7 +749,11 @@ async def close_market_safely(
         ))
         return events
 
-    snapshots = await sync_broker_positions_once(order_service.ib)
+    snapshots = await sync_broker_positions_once(
+                    order_service.ib,
+                    expected_account_id=order_service.account_id,
+                    force_refresh=True,
+                )
     current_snapshot = find_snapshot(snapshots, instrument_code=instrument_code)
     if current_snapshot is None or not is_open_snapshot(current_snapshot):
         events.append(SlotLossExtensionEvent(
@@ -1071,7 +1069,11 @@ async def start_slot_loss_extension(
         ))
         return events
 
-    snapshots = await sync_broker_positions_once(order_service.ib)
+    snapshots = await sync_broker_positions_once(
+                    order_service.ib,
+                    expected_account_id=order_service.account_id,
+                    force_refresh=True,
+                )
     current_snapshot = find_snapshot(snapshots, instrument_code=instrument_code)
     if current_snapshot is None or not is_open_snapshot(current_snapshot):
         events.append(SlotLossExtensionEvent(
@@ -1604,7 +1606,11 @@ async def process_active_slot_loss_extensions_once(
     if not active_extensions:
         return events
 
-    snapshots = await sync_broker_positions_once(order_service.ib)
+    snapshots = await sync_broker_positions_once(
+                    order_service.ib,
+                    expected_account_id=order_service.account_id,
+                    force_refresh=True,
+                )
 
     for extension in active_extensions:
         instrument_code = str(extension["instrument_code"])
@@ -1735,7 +1741,11 @@ async def process_slot_close_decisions_once(
     if close_context is None:
         return events
 
-    snapshots = await sync_broker_positions_once(order_service.ib)
+    snapshots = await sync_broker_positions_once(
+                    order_service.ib,
+                    expected_account_id=order_service.account_id,
+                    force_refresh=True,
+                )
     open_snapshots = [snapshot for snapshot in snapshots if is_open_snapshot(snapshot)]
     if not open_snapshots:
         return events

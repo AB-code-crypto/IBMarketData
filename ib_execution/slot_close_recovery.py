@@ -18,6 +18,7 @@ from ib_execution.execution_store import (
     mark_trade_intent_order_submitted,
     mark_trade_intent_sending,
     read_active_take_profit_orders,
+    read_trade_intent_submission_state,
     write_trade_intent_execution_result,
 )
 from ib_execution.order_service import OrderService
@@ -326,54 +327,12 @@ def expire_stale_execution_intents(conn, *, now_ts: int) -> None:
     )
 
 
-async def refresh_open_orders_for_recovery(order_service: OrderService) -> tuple[bool, str | None]:
-    """Принудительно обновляет open orders перед решением, что TP точно нет.
-
-    Если refresh не удался, market-close делать нельзя: скрытый TP может остаться у брокера
-    и после закрытия позиции открыть обратную сделку.
-    """
-
-    ib = order_service.ib
-
-    if not is_ib_connected(ib):
-        return False, "IB is not connected"
-
-    errors: list[str] = []
-
-    for method_name in ("reqAllOpenOrdersAsync", "reqOpenOrdersAsync"):
-        method = getattr(ib, method_name, None)
-
-        if method is None:
-            continue
-
-        try:
-            await method()
-            await asyncio.sleep(float(OPEN_ORDER_REFRESH_SETTLE_SECONDS))
-            return True, None
-        except Exception as exc:
-            errors.append(f"{method_name}: {type(exc).__name__}: {exc}")
-
-    for method_name in ("reqAllOpenOrders", "reqOpenOrders"):
-        method = getattr(ib, method_name, None)
-
-        if method is None:
-            continue
-
-        try:
-            maybe_awaitable = method()
-
-            if inspect.isawaitable(maybe_awaitable):
-                await maybe_awaitable
-
-            await asyncio.sleep(float(OPEN_ORDER_REFRESH_SETTLE_SECONDS))
-            return True, None
-        except Exception as exc:
-            errors.append(f"{method_name}: {type(exc).__name__}: {exc}")
-
-    if not errors:
-        return False, "IB object has no reqAllOpenOrders/reqOpenOrders method"
-
-    return False, "; ".join(errors)
+async def refresh_open_orders_for_recovery(
+        order_service: OrderService,
+) -> tuple[bool, str | None]:
+    return await order_service.broker_state.refresh_open_orders(
+        force=True,
+    )
 
 
 def collect_live_take_profit_orders(
@@ -713,12 +672,30 @@ async def create_and_execute_recovery_close(
             )
 
         except Exception as exc:
+            submission_state = read_trade_intent_submission_state(
+                conn,
+                trade_intent_id=intent.trade_intent_id,
+            ) or {}
+            order_id = (
+                submission_state.get("order_id")
+                or getattr(exc, "order_id", None)
+            )
             result = ExecutionResult(
                 trade_intent_id=intent.trade_intent_id,
-                order_id=getattr(exc, "order_id", None),
-                order_action=None,
-                order_quantity=None,
-                status=ExecutionStatus.FAILED,
+                order_id=order_id,
+                order_action=(
+                    submission_state.get("order_action")
+                    or getattr(exc, "order_action", None)
+                ),
+                order_quantity=(
+                    submission_state.get("order_quantity")
+                    or getattr(exc, "order_quantity", None)
+                ),
+                status=(
+                    ExecutionStatus.RECONCILING
+                    if order_id is not None
+                    else ExecutionStatus.FAILED
+                ),
                 avg_fill_price=None,
                 total_commission=None,
                 realized_pnl=None,
@@ -903,7 +880,11 @@ async def run_slot_close_recovery_once(*, order_service: OrderService) -> list[S
         conn.close()
 
     try:
-        snapshots = await sync_broker_positions_once(order_service.ib)
+        snapshots = await sync_broker_positions_once(
+                    order_service.ib,
+                    expected_account_id=order_service.account_id,
+                    force_refresh=True,
+                )
     except Exception as exc:
         if is_ib_not_connected_exception(exc):
             return [build_ib_disconnected_recovery_event(reason="broker position sync failed with transient disconnect")]
@@ -1043,7 +1024,11 @@ async def run_slot_close_recovery_once(*, order_service: OrderService) -> list[S
                 ),
             ))
 
-        snapshots_after_tp = await sync_broker_positions_once(order_service.ib)
+        snapshots_after_tp = await sync_broker_positions_once(
+                    order_service.ib,
+                    expected_account_id=order_service.account_id,
+                    force_refresh=True,
+                )
         snapshot_after_tp = find_snapshot(
             snapshots_after_tp,
             instrument_code=instrument_code,
@@ -1135,7 +1120,11 @@ async def run_slot_close_recovery_once(*, order_service: OrderService) -> list[S
         events.append(recovery_close_event)
 
         try:
-            snapshots_after_close = await sync_broker_positions_once(order_service.ib)
+            snapshots_after_close = await sync_broker_positions_once(
+                    order_service.ib,
+                    expected_account_id=order_service.account_id,
+                    force_refresh=True,
+                )
             snapshot_after_close = find_snapshot(
                 snapshots_after_close,
                 instrument_code=instrument_code,

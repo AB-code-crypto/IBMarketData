@@ -71,13 +71,32 @@ def update_job_dbs_once(instrument_codes: list[str]) -> None:
     """Что делает: один раз дописывает новые mid/spread-строки по всем готовым инструментам. Зачем нужна: выполняет инкрементальное обновление job DB в основном цикле."""
     for instrument_code in instrument_codes:
         try:
-            rows_written = append_new_mid_price_rows(instrument_code)
+            update_result = append_new_mid_price_rows(
+                instrument_code
+            )
 
-            if rows_written > 0:
+            if update_result.has_changes:
                 log_info(
                     logger,
-                    f"{instrument_code}: job DB обновлена, новых строк: {rows_written}",
+                    (
+                        f"{instrument_code}: job DB обновлена: "
+                        f"inserted={update_result.inserted_rows}, "
+                        f"new_tail={update_result.new_tail_rows}, "
+                        f"late_backfill={update_result.late_backfill_rows}"
+                    ),
                     to_telegram=False,
+                )
+
+            if update_result.late_backfill_rows > 0:
+                log_warning(
+                    logger,
+                    (
+                        f"{instrument_code}: repaired late price backfill in job DB: "
+                        f"rows={update_result.late_backfill_rows}, "
+                        f"earliest_bar_ts={update_result.earliest_repaired_bar_ts}; "
+                        "SMA/regime/ma_zone tail was rebuilt"
+                    ),
+                    to_telegram=True,
                 )
 
         except Exception as exc:

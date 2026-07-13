@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from config import settings_live as app_settings
 from contracts import Instrument
+from core.ib_clock import read_ib_clock_health
 from core.sqlite_utils import open_sqlite_connection
 from core.state_db import STATE_DB_PATH, initialize_state_db
 from core.time_utils import CT_TIMEZONE, MSK_TIMEZONE, SQLITE_DATETIME_FORMAT
@@ -42,6 +44,11 @@ FUTURES_DAILY_FLAT_REASON = "futures_daily_flat_before_no_trade_hour"
 EXTREME_MA_ZONE_CLOSE_SOURCE_SIGNAL_ID = -3
 EXTREME_MA_ZONE_CLOSE_INTENT_SOURCE = "EXTREME_MA_ZONE_CLOSE"
 EXTREME_MA_ZONE_CLOSE_REASON = "extreme_ma_zone_close_position"
+
+FUTURES_ROLLOVER_CLOSE_SOURCE_SIGNAL_ID = -11
+FUTURES_ROLLOVER_CLOSE_INTENT_SOURCE = "FUTURES_ROLLOVER_CLOSE"
+FUTURES_ROLLOVER_CLOSE_REASON = "close_non_active_futures_contract_before_new_trading"
+
 FUTURES_NO_NEW_TRADES_HOUR_CT = 15
 FUTURES_CLEARING_HOUR_CT = 16
 
@@ -96,6 +103,10 @@ def create_positions_latest_table_sql() -> str:
         instrument_code TEXT PRIMARY KEY,
         side TEXT NOT NULL,
         quantity REAL NOT NULL,
+        broker_contract TEXT,
+        broker_con_id INTEGER,
+        broker_account TEXT,
+        contract_is_active INTEGER,
         updated_at_ts INTEGER NOT NULL,
         updated_at_utc TEXT NOT NULL
     );
@@ -176,6 +187,33 @@ def ensure_table_column(conn, *, table_name: str, column_name: str, column_sql: 
     conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}")
 
 
+def ensure_positions_latest_runtime_columns(conn) -> None:
+    ensure_table_column(
+        conn,
+        table_name=POSITIONS_LATEST_TABLE_NAME,
+        column_name="broker_contract",
+        column_sql="broker_contract TEXT",
+    )
+    ensure_table_column(
+        conn,
+        table_name=POSITIONS_LATEST_TABLE_NAME,
+        column_name="broker_con_id",
+        column_sql="broker_con_id INTEGER",
+    )
+    ensure_table_column(
+        conn,
+        table_name=POSITIONS_LATEST_TABLE_NAME,
+        column_name="broker_account",
+        column_sql="broker_account TEXT",
+    )
+    ensure_table_column(
+        conn,
+        table_name=POSITIONS_LATEST_TABLE_NAME,
+        column_name="contract_is_active",
+        column_sql="contract_is_active INTEGER",
+    )
+
+
 def ensure_trade_intents_runtime_columns(conn) -> None:
     ensure_table_column(
         conn,
@@ -218,6 +256,7 @@ def ensure_trade_intents_runtime_columns(conn) -> None:
 def initialize_trade_db(conn) -> None:
     conn.execute(create_positions_latest_table_sql())
     conn.execute(create_trade_intents_table_sql())
+    ensure_positions_latest_runtime_columns(conn)
     ensure_trade_intents_runtime_columns(conn)
 
     conn.execute(
@@ -368,7 +407,13 @@ def read_position_snapshot(conn, *, instrument_code: str) -> PositionSnapshot:
 
     row = conn.execute(
         f"""
-        SELECT side, quantity
+        SELECT
+            side,
+            quantity,
+            broker_contract,
+            broker_con_id,
+            broker_account,
+            contract_is_active
         FROM {POSITIONS_LATEST_TABLE_NAME}
         WHERE instrument_code = ?
         """,
@@ -384,14 +429,39 @@ def read_position_snapshot(conn, *, instrument_code: str) -> PositionSnapshot:
 
     quantity = float(row[1])
     side = PositionSide(str(row[0]).upper())
+    snapshot = PositionSnapshot(
+        instrument_code=str(instrument_code),
+        side=side,
+        quantity=max(0.0, quantity),
+        broker_contract=None if row[2] is None else str(row[2]),
+        broker_con_id=None if row[3] is None else int(row[3]),
+        broker_account=None if row[4] is None else str(row[4]),
+        contract_is_active=None if row[5] is None else bool(int(row[5])),
+    )
 
     if side == PositionSide.UNKNOWN:
-        return PositionSnapshot(str(instrument_code), PositionSide.UNKNOWN, 0.0)
+        return PositionSnapshot(
+            instrument_code=str(instrument_code),
+            side=PositionSide.UNKNOWN,
+            quantity=0.0,
+            broker_contract=snapshot.broker_contract,
+            broker_con_id=snapshot.broker_con_id,
+            broker_account=snapshot.broker_account,
+            contract_is_active=snapshot.contract_is_active,
+        )
 
     if quantity <= 0.0:
-        return PositionSnapshot(str(instrument_code), PositionSide.FLAT, 0.0)
+        return PositionSnapshot(
+            instrument_code=str(instrument_code),
+            side=PositionSide.FLAT,
+            quantity=0.0,
+            broker_contract=snapshot.broker_contract,
+            broker_con_id=snapshot.broker_con_id,
+            broker_account=snapshot.broker_account,
+            contract_is_active=snapshot.contract_is_active,
+        )
 
-    return PositionSnapshot(str(instrument_code), side, quantity)
+    return snapshot
 
 
 def read_open_position_snapshots(conn) -> list[PositionSnapshot]:
@@ -399,7 +469,14 @@ def read_open_position_snapshots(conn) -> list[PositionSnapshot]:
 
     rows = conn.execute(
         f"""
-        SELECT instrument_code, side, quantity
+        SELECT
+            instrument_code,
+            side,
+            quantity,
+            broker_contract,
+            broker_con_id,
+            broker_account,
+            contract_is_active
         FROM {POSITIONS_LATEST_TABLE_NAME}
         WHERE side IN ('LONG', 'SHORT')
           AND quantity > 0
@@ -412,6 +489,10 @@ def read_open_position_snapshots(conn) -> list[PositionSnapshot]:
             instrument_code=str(row[0]),
             side=PositionSide(str(row[1]).upper()),
             quantity=float(row[2]),
+            broker_contract=None if row[3] is None else str(row[3]),
+            broker_con_id=None if row[4] is None else int(row[4]),
+            broker_account=None if row[5] is None else str(row[5]),
+            contract_is_active=None if row[6] is None else bool(int(row[6])),
         )
         for row in rows
     ]
@@ -740,7 +821,7 @@ def request_cancel_pending_entry_limit_for_opposite_signal(conn, *, signal: Trad
                 cancel_requested_at_ts = ?,
                 updated_at_ts = ?
             WHERE trade_intent_id = ?
-              AND status IN ('SENDING', 'ACCEPTED')
+              AND status IN ('SENDING', 'ACCEPTED', 'RECONCILING')
             """,
             (
                 reason,
@@ -936,6 +1017,15 @@ def build_signal_trade_intent_draft(
         return None
 
     signal_order_type = str(signal.order_type).upper()
+
+    # A futures position on a non-active quarterly contract must be closed
+    # by the dedicated rollover guard before any signal can open/reverse.
+    if (
+            position.side in {PositionSide.LONG, PositionSide.SHORT}
+            and position.quantity > 0.0
+            and position.contract_is_active is False
+    ):
+        return None
 
     if position.side == PositionSide.FLAT or position.quantity <= 0.0:
         action = TradeDecisionAction.OPEN_POSITION
@@ -1339,6 +1429,72 @@ def process_slot_close_once(conn, *, now_ts: int | None = None) -> list[TradeInt
     return created
 
 
+def build_futures_rollover_close_trade_intent_draft(
+        *,
+        position: PositionSnapshot,
+        now_ts: int,
+) -> TradeIntentDraft:
+    _, signal_time_ct, _ = build_time_text_fields_from_ts(now_ts)
+
+    return TradeIntentDraft(
+        source_signal_id=FUTURES_ROLLOVER_CLOSE_SOURCE_SIGNAL_ID,
+        instrument_code=position.instrument_code,
+        signal_bar_ts=int(now_ts),
+        signal_time_ct=signal_time_ct,
+        intent_source=FUTURES_ROLLOVER_CLOSE_INTENT_SOURCE,
+        action=TradeDecisionAction.CLOSE_POSITION,
+        reason=(
+            f"{FUTURES_ROLLOVER_CLOSE_REASON}; "
+            f"broker_contract={position.broker_contract}; "
+            f"broker_con_id={position.broker_con_id}"
+        ),
+        signal_direction="CLOSE",
+        entry_price=0.0,
+        potential_end_delta_points=0.0,
+        regime=None,
+        ma_zone=None,
+        signal_strength="FUTURES_ROLLOVER_CLOSE",
+        order_type="MARKET",
+        limit_price=None,
+        limit_offset_points=None,
+        ttl_seconds=None,
+        position_before_side=position.side,
+        position_before_qty=float(position.quantity),
+        position_after_side=PositionSide.FLAT,
+        position_after_qty=0.0,
+    )
+
+
+def process_futures_rollover_close_once(
+        conn,
+        *,
+        now_ts: int | None = None,
+) -> list[TradeIntentCreated]:
+    now_ts = int(time.time() if now_ts is None else now_ts)
+    created: list[TradeIntentCreated] = []
+
+    for position in read_open_position_snapshots(conn):
+        if not is_futures_instrument(position.instrument_code):
+            continue
+
+        if position.contract_is_active is not False:
+            continue
+
+        if has_unresolved_trade_intent_for_instrument(
+                conn,
+                instrument_code=position.instrument_code,
+        ):
+            continue
+
+        draft = build_futures_rollover_close_trade_intent_draft(
+            position=position,
+            now_ts=now_ts,
+        )
+        created.append(write_trade_intent_and_event(conn, draft))
+
+    return created
+
+
 def process_futures_daily_flat_once(conn, *, now_ts: int | None = None) -> list[TradeIntentCreated]:
     now_ts = int(time.time() if now_ts is None else now_ts)
     close_context = get_futures_daily_flat_context(now_ts=now_ts)
@@ -1370,6 +1526,11 @@ def process_futures_daily_flat_once(conn, *, now_ts: int | None = None) -> list[
 
 def process_signal_events_once(*, max_signal_age_seconds: int) -> TradeProcessResult:
     signals = read_latest_signal_events(max_signal_age_seconds=max_signal_age_seconds)
+    clock_health = read_ib_clock_health(
+        max_abs_offset_seconds=app_settings.ib_clock_max_abs_offset_seconds,
+        max_sample_age_seconds=app_settings.ib_clock_health_max_age_seconds,
+    )
+    guard_warnings: list[str] = []
 
     conn = get_trade_db_connection()
 
@@ -1381,9 +1542,14 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> TradeProcessRe
         # не успел забрать intent, trader сам гасит заявку и создаёт новую по следующему
         # сигналу, засоряя trade_intents пачкой FAILED записей без order_id.
         # Просрочку NEW/SENDING/ACCEPTED должен делать ib_execution через execution_store.
-        now_ts = int(time.time())
+        now_ts = (
+            clock_health.corrected_now_ts
+            if clock_health.sample is not None
+            else int(time.time())
+        )
         created: list[TradeIntentCreated] = []
         rejected: list[TradeIntentRejected] = []
+        created.extend(process_futures_rollover_close_once(conn, now_ts=now_ts))
         created.extend(process_futures_daily_flat_once(conn, now_ts=now_ts))
         created.extend(process_slot_close_once(conn, now_ts=now_ts))
         created.extend(process_extreme_ma_zone_close_once(conn, now_ts=now_ts))
@@ -1446,13 +1612,27 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> TradeProcessRe
                 )
                 continue
 
-            if is_risk_increasing_trade_action(draft.action) and not is_slot_entry_allowed_now(now_ts=now_ts):
-                continue
+            if is_risk_increasing_trade_action(draft.action):
+                if not clock_health.is_healthy:
+                    warning = (
+                        f"{signal.instrument_code}: risk-increasing trade blocked by IB clock guard; "
+                        f"reason={clock_health.reason}"
+                    )
+                    if warning not in guard_warnings:
+                        guard_warnings.append(warning)
+                    continue
+
+                if not is_slot_entry_allowed_now(now_ts=now_ts):
+                    continue
 
             created.append(write_trade_intent_and_event(conn, draft))
 
         conn.commit()
-        return TradeProcessResult(created=created, rejected=rejected)
+        return TradeProcessResult(
+            created=created,
+            rejected=rejected,
+            guard_warnings=guard_warnings,
+        )
 
     finally:
         conn.close()

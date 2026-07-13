@@ -4,6 +4,7 @@ import traceback
 from dataclasses import dataclass
 
 from config import settings_live as app_settings
+from core.ib_account import validate_ib_account_access
 from core.ib_connector import connect_ib, disconnect_ib
 from core.telegram_sender import TelegramSender
 from ib_execution.execution_logic import execute_trade_intent
@@ -12,6 +13,7 @@ from ib_execution.execution_store import (
     initialize_execution_db,
     mark_trade_intent_order_submitted,
     mark_trade_intent_sending,
+    read_trade_intent_submission_state,
     write_trade_intent_execution_result,
 )
 from ib_execution.order_service import OrderService
@@ -355,12 +357,30 @@ async def execute_manual_flat_intent(order_service: OrderService, intent: TradeI
             )
 
         except Exception as exc:
+            submission_state = read_trade_intent_submission_state(
+                conn,
+                trade_intent_id=intent.trade_intent_id,
+            ) or {}
+            order_id = (
+                submission_state.get("order_id")
+                or getattr(exc, "order_id", None)
+            )
             result = ExecutionResult(
                 trade_intent_id=intent.trade_intent_id,
-                order_id=getattr(exc, "order_id", None),
-                order_action=None,
-                order_quantity=None,
-                status=ExecutionStatus.FAILED,
+                order_id=order_id,
+                order_action=(
+                    submission_state.get("order_action")
+                    or getattr(exc, "order_action", None)
+                ),
+                order_quantity=(
+                    submission_state.get("order_quantity")
+                    or getattr(exc, "order_quantity", None)
+                ),
+                status=(
+                    ExecutionStatus.RECONCILING
+                    if order_id is not None
+                    else ExecutionStatus.FAILED
+                ),
                 avg_fill_price=None,
                 total_commission=None,
                 realized_pnl=None,
@@ -386,6 +406,10 @@ async def main() -> None:
 
     try:
         ib, _ = await connect_ib(ManualFlatIbSettings)
+        await validate_ib_account_access(
+            ib,
+            expected_account_id=app_settings.ib_account_id,
+        )
 
         positions, snapshots = await read_broker_open_positions(ib)
 
@@ -421,7 +445,10 @@ async def main() -> None:
             ),
         )
 
-        order_service = OrderService(ib)
+        order_service = OrderService(
+            ib,
+            account_id=app_settings.ib_account_id,
+        )
 
         results = []
 

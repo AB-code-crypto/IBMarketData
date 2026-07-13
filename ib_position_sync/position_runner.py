@@ -8,7 +8,7 @@ from ib_position_sync.position_store import sync_broker_positions_once
 setup_logging()
 logger = get_logger(__name__)
 
-POSITION_SYNC_LOOP_SLEEP_SECONDS = 1
+POSITION_SYNC_LOOP_SLEEP_SECONDS = 2
 POSITION_SYNC_HEARTBEAT_INTERVAL_SECONDS = 60
 
 # reqPositionsAsync иногда зависает после IB reconnect без исключения.
@@ -22,6 +22,8 @@ def format_snapshot_for_log(snapshot) -> str:
         f"{snapshot.instrument_code}: "
         f"{snapshot.side}/{snapshot.quantity:g} "
         f"contract={snapshot.broker_contract or 'n/a'} "
+        f"conId={snapshot.broker_con_id or 'n/a'} "
+        f"active_contract={snapshot.contract_is_active} "
         f"account={snapshot.broker_account or 'n/a'}"
     )
 

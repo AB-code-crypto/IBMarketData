@@ -12,6 +12,8 @@ from ib_execution.ib_order_api import (
     IBOrderApi,
     PlaceOrderReceipt,
 )
+from core.ib_account import normalize_account_id
+from ib_execution.broker_state_service import get_broker_state_service
 from ib_execution.order_monitor import AcceptanceResult, DoneResult, IBError, OrderMonitor
 
 log = logging.getLogger(__name__)
@@ -64,14 +66,33 @@ class OrderPlacement:
 class OrderService:
     """Верхний слой постановки ордеров: qualify, build, place, wait, cancel."""
 
-    def __init__(self, ib: IB, *, api: Optional[IBOrderApi] = None, monitor: Optional[OrderMonitor] = None) -> None:
+    def __init__(
+            self,
+            ib: IB,
+            *,
+            account_id: str,
+            api: Optional[IBOrderApi] = None,
+            monitor: Optional[OrderMonitor] = None,
+    ) -> None:
         self._ib = ib
-        self._api = api or IBOrderApi(ib)
+        self._account_id = normalize_account_id(account_id)
+        self._api = api or IBOrderApi(
+            ib,
+            account_id=self._account_id,
+        )
         self._monitor = monitor or OrderMonitor(ib)
+        self._broker_state = get_broker_state_service(
+            ib,
+            account_id=self._account_id,
+        )
 
     @property
     def ib(self) -> IB:
         return self._ib
+
+    @property
+    def account_id(self) -> str:
+        return self._account_id
 
     @property
     def api(self) -> IBOrderApi:
@@ -80,6 +101,10 @@ class OrderService:
     @property
     def monitor(self) -> OrderMonitor:
         return self._monitor
+
+    @property
+    def broker_state(self):
+        return self._broker_state
 
     async def qualify(self, contract: Contract) -> Contract:
         if getattr(contract, "conId", 0):

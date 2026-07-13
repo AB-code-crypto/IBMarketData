@@ -16,6 +16,8 @@ TRADER_MAX_SIGNAL_AGE_SECONDS = int(
 )
 TRADER_HEARTBEAT_INTERVAL_SECONDS = 60
 REPORTED_REJECTED_TRADE_INTENTS: set[tuple[str, int, str]] = set()
+REPORTED_GUARD_WARNING_AT: dict[str, int] = {}
+GUARD_WARNING_REPORT_INTERVAL_SECONDS = 300
 
 
 def format_rejected_trade_intent(rejected) -> str:
@@ -65,6 +67,17 @@ def should_report_rejected_trade_intent(rejected) -> bool:
     return True
 
 
+def should_report_guard_warning(message: str) -> bool:
+    now_ts = int(time.time())
+    last_ts = REPORTED_GUARD_WARNING_AT.get(str(message), 0)
+
+    if now_ts - last_ts < GUARD_WARNING_REPORT_INTERVAL_SECONDS:
+        return False
+
+    REPORTED_GUARD_WARNING_AT[str(message)] = now_ts
+    return True
+
+
 async def run_trader_loop() -> None:
     log_info(
         logger,
@@ -93,6 +106,21 @@ async def run_trader_loop() -> None:
                     format_rejected_trade_intent(rejected),
                     to_telegram=True,
                     message_thread_id=getattr(app_settings, "telegram_message_thread_id_error", None),
+                )
+
+            for guard_warning in result.guard_warnings:
+                if not should_report_guard_warning(guard_warning):
+                    continue
+
+                log_warning(
+                    logger,
+                    "⛔ TRADING CLOCK GUARD\n" + guard_warning,
+                    to_telegram=True,
+                    message_thread_id=getattr(
+                        app_settings,
+                        "telegram_message_thread_id_error",
+                        None,
+                    ),
                 )
 
             for intent in result.created:

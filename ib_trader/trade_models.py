@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 
@@ -62,6 +62,10 @@ class PositionSnapshot:
     instrument_code: str
     side: PositionSide
     quantity: float
+    broker_contract: str | None = None
+    broker_con_id: int | None = None
+    broker_account: str | None = None
+    contract_is_active: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -133,4 +137,5 @@ class TradeIntentRejected:
 class TradeProcessResult:
     created: list[TradeIntentCreated]
     rejected: list[TradeIntentRejected]
+    guard_warnings: list[str] = field(default_factory=list)
 

@@ -2,6 +2,7 @@ import asyncio
 import traceback
 
 from config import settings_live as app_settings
+from core.ib_account import validate_ib_account_access
 from core.ib_connector import (
     connect_ib,
     disconnect_ib,
@@ -66,11 +67,16 @@ async def main() -> None:
         await send_service_message(
             "\n===========\nСтарт ib_position_sync сервиса.\n"
             f"clientId={PositionSyncIbSettings.ib_client_id}\n"
+            f"account={app_settings.ib_account_id}\n"
             "mode=BROKER_POSITIONS_TO_TRADE_DB\n"
             "===========\n"
         )
 
         ib, ib_health = await connect_ib(PositionSyncIbSettings)
+        await validate_ib_account_access(
+            ib,
+            expected_account_id=app_settings.ib_account_id,
+        )
 
         monitor_task = asyncio.create_task(
             monitor_ib_connection(ib, PositionSyncIbSettings, ib_health),

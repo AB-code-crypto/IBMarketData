@@ -6,6 +6,7 @@ import time
 from types import SimpleNamespace
 from typing import Any
 
+from ib_execution.broker_state_service import get_broker_state_service
 from ib_execution.execution_logic import (
     are_commission_reports_final_for_fills,
     collect_trade_fill_statistics,
@@ -60,61 +61,15 @@ def normalize_protective_role(role: str) -> str:
 
 
 async def refresh_ib_executions_if_possible(order_service) -> bool:
-    try:
-        req_async = getattr(order_service.ib, "reqExecutionsAsync", None)
-
-        if req_async is not None:
-            await req_async()
-            return True
-
-        req_sync = getattr(order_service.ib, "reqExecutions", None)
-
-        if req_sync is not None:
-            maybe_awaitable = req_sync()
-            if inspect.isawaitable(maybe_awaitable):
-                await maybe_awaitable
-            return True
-
-    except Exception:
-        return False
-
-    return False
+    return await order_service.broker_state.refresh_executions(
+        force=False,
+    )
 
 
 async def refresh_ib_open_orders_if_possible(order_service) -> tuple[bool, str | None]:
-    ib = order_service.ib
-    errors: list[str] = []
-
-    for method_name in ("reqAllOpenOrdersAsync", "reqOpenOrdersAsync"):
-        method = getattr(ib, method_name, None)
-        if method is None:
-            continue
-
-        try:
-            await method()
-            await asyncio.sleep(float(OPEN_ORDER_REFRESH_SETTLE_SECONDS))
-            return True, None
-        except Exception as exc:
-            errors.append(f"{method_name}: {type(exc).__name__}: {exc}")
-
-    for method_name in ("reqAllOpenOrders", "reqOpenOrders"):
-        method = getattr(ib, method_name, None)
-        if method is None:
-            continue
-
-        try:
-            maybe_awaitable = method()
-            if inspect.isawaitable(maybe_awaitable):
-                await maybe_awaitable
-            await asyncio.sleep(float(OPEN_ORDER_REFRESH_SETTLE_SECONDS))
-            return True, None
-        except Exception as exc:
-            errors.append(f"{method_name}: {type(exc).__name__}: {exc}")
-
-    if not errors:
-        return False, "IB object has no reqAllOpenOrders/reqOpenOrders method"
-
-    return False, "; ".join(errors)
+    return await order_service.broker_state.refresh_open_orders(
+        force=True,
+    )
 
 
 def iter_known_ib_trades(order_service):
@@ -986,7 +941,11 @@ async def reconcile_protective_orders_once(*, order_service) -> list[dict[str, A
 
         try:
             snapshots = await asyncio.wait_for(
-                sync_broker_positions_once(order_service.ib),
+                sync_broker_positions_once(
+                    order_service.ib,
+                    expected_account_id=order_service.account_id,
+                    force_refresh=True,
+                ),
                 timeout=float(BROKER_POSITION_SYNC_TIMEOUT_SECONDS),
             )
         except Exception:

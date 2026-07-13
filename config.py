@@ -18,6 +18,16 @@ telegram_thread_id_deal_status_env = os.getenv("TELEGRAM_THREAD_ID_DEAL_STATUS")
 telegram_thread_id_error_env = os.getenv("TELEGRAM_THREAD_ID_ERROR")
 
 
+def require_env_text(name: str) -> str:
+    value = str(os.getenv(name, "") or "").strip()
+    if not value:
+        raise RuntimeError(
+            f"Required environment variable {name} is missing or empty. "
+            f"Add it to {ENV_PATH}."
+        )
+    return value
+
+
 @dataclass
 class Settings:
     # Имя робота для Telegram-сообщений и логической идентификации сервиса.
@@ -27,9 +37,20 @@ class Settings:
     ib_port: int = 7496  # 7497 - демо счёт, 7496 - реальный счёт
     ib_client_id: int = 200
 
+    # Обязательный account guard. На двух компьютерах здесь должны быть
+    # account ids соответствующих TWS-сессий.
+    ib_account_id: str = require_env_text("IB_ACCOUNT_ID")
+
+    # Clock guard: новые OPEN/REVERSE запрещены, если локальные часы
+    # сильно расходятся с IB server time или sample давно не обновлялся.
+    ib_clock_max_abs_offset_seconds: float = float(
+        os.getenv("IB_CLOCK_MAX_ABS_OFFSET_SECONDS", "3.0")
+    )
+    ib_clock_health_max_age_seconds: int = int(
+        os.getenv("IB_CLOCK_HEALTH_MAX_AGE_SECONDS", "180")
+    )
+
     # Каталог с SQLite-БД цен.
-    # Внутри него каждый логический инструмент хранится в своём файле:
-    # data/prices/MNQ.sqlite3, data/prices/MES.sqlite3 и т.д.
     price_db_dir: str = str(BASE_DIR / "data" / "prices")
 
     # Telegram-бот, группа и тема для сообщений о подключении/состоянии.
@@ -40,19 +61,16 @@ class Settings:
         if telegram_thread_id_connect_env
         else None
     )
-    # Тема для торговых сигналов и сделок.
     telegram_message_thread_id_deal: Optional[int] = (
         int(telegram_thread_id_deal_env)
         if telegram_thread_id_deal_env
         else None
     )
-    # Тема для технических статусов сделок: EXPIRED/CANCELLED/FAILED.
     telegram_message_thread_id_deal_status: Optional[int] = (
         int(telegram_thread_id_deal_status_env)
         if telegram_thread_id_deal_status_env
         else None
     )
-    # Тема для ошибок, которые требуют ручного внимания.
     telegram_message_thread_id_error: Optional[int] = (
         int(telegram_thread_id_error_env)
         if telegram_thread_id_error_env

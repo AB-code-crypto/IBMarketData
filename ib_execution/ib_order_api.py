@@ -1,5 +1,7 @@
 import asyncio
 import logging
+
+from core.ib_account import normalize_account_id
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Mapping, Optional, Sequence
@@ -51,8 +53,15 @@ class BracketOrders:
 class IBOrderApi:
     """Тонкий адаптер IB: сборка ордеров, placeOrder и cancelOrder без торговой логики."""
 
-    def __init__(self, ib: IB, logger: Optional[logging.Logger] = None) -> None:
+    def __init__(
+            self,
+            ib: IB,
+            *,
+            account_id: str,
+            logger: Optional[logging.Logger] = None,
+    ) -> None:
         self._ib = ib
+        self._account_id = normalize_account_id(account_id)
         self._log = logger or log
 
     @property
@@ -69,6 +78,14 @@ class IBOrderApi:
             raise ValueError("order_ref must be a non-empty string")
 
         order.orderRef = order_ref
+
+        existing_account = str(getattr(order, "account", "") or "").strip()
+        if existing_account and existing_account != self._account_id:
+            raise RuntimeError(
+                f"Order account mismatch: configured={self._account_id}, "
+                f"order.account={existing_account}, order_ref={order_ref}"
+            )
+        order.account = self._account_id
 
         placed_at = datetime.now(timezone.utc)
         trade: Trade = self._ib.placeOrder(contract, order)

@@ -2,6 +2,7 @@ import asyncio
 import traceback
 
 from config import settings_live as app_settings
+from core.ib_account import validate_ib_account_access
 from core.ib_connector import (
     connect_ib,
     disconnect_ib,
@@ -68,11 +69,16 @@ async def main() -> None:
         await send_service_message(
             "\n===========\nСтарт ib_execution сервиса.\n"
             f"clientId={ExecutionIbSettings.ib_client_id}\n"
+            f"account={app_settings.ib_account_id}\n"
             "mode=MARKET_FROM_TRADE_INTENTS\n"
             "===========\n"
         )
 
         ib, ib_health = await connect_ib(ExecutionIbSettings)
+        await validate_ib_account_access(
+            ib,
+            expected_account_id=app_settings.ib_account_id,
+        )
 
         monitor_task = asyncio.create_task(
             monitor_ib_connection(ib, ExecutionIbSettings, ib_health),
@@ -81,7 +87,10 @@ async def main() -> None:
             heartbeat_ib_connection(ib, ib_health),
         )
 
-        order_service = OrderService(ib)
+        order_service = OrderService(
+            ib,
+            account_id=app_settings.ib_account_id,
+        )
 
         try:
             await run_execution_loop(
@@ -124,7 +133,8 @@ if __name__ == "__main__":
     execution_instance_key = (
         f"{ExecutionIbSettings.ib_host}:"
         f"{ExecutionIbSettings.ib_port}:"
-        f"{ExecutionIbSettings.ib_client_id}"
+        f"{ExecutionIbSettings.ib_client_id}:"
+        f"{app_settings.ib_account_id}"
     )
 
     with service_instance_lock(

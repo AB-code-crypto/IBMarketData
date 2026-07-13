@@ -85,6 +85,9 @@ SLOT_LOSS_EXTENSION_TIMEOUT_SECONDS = 90.0
 SLOT_CLOSE_RECOVERY_TIMEOUT_SECONDS = 90.0
 EXECUTION_STATS_RECONCILE_TIMEOUT_SECONDS = 20.0
 UNCERTAIN_EXECUTION_RECONCILE_TIMEOUT_SECONDS = 20.0
+UNCERTAIN_EXECUTION_RECONCILE_INTERVAL_SECONDS = 2
+PROTECTIVE_RECONCILE_INTERVAL_SECONDS = 2
+EXECUTION_STATS_RECONCILE_INTERVAL_SECONDS = 30
 MARKET_INTENT_EXECUTION_TIMEOUT_SECONDS = 90.0
 LIMIT_INTENT_EXECUTION_TIMEOUT_EXTRA_SECONDS = 30.0
 DEFAULT_LIMIT_INTENT_EXECUTION_TIMEOUT_SECONDS = 630.0
@@ -584,7 +587,11 @@ async def emergency_close_position_after_protective_failure(
 
     try:
         snapshots = await asyncio.wait_for(
-            sync_broker_positions_once(order_service.ib),
+            sync_broker_positions_once(
+                    order_service.ib,
+                    expected_account_id=order_service.account_id,
+                    force_refresh=True,
+                ),
             timeout=float(PROTECTIVE_EMERGENCY_SYNC_TIMEOUT_SECONDS),
         )
 
@@ -1205,7 +1212,11 @@ async def restore_executed_entries_missing_protection(
         return
 
     snapshots = await asyncio.wait_for(
-        sync_broker_positions_once(order_service.ib),
+        sync_broker_positions_once(
+                    order_service.ib,
+                    expected_account_id=order_service.account_id,
+                    force_refresh=True,
+                ),
         timeout=float(PROTECTIVE_EMERGENCY_SYNC_TIMEOUT_SECONDS),
     )
 
@@ -1333,7 +1344,11 @@ async def reconcile_uncertain_executions_and_restore_protection(
             initialize_execution_db(conn)
 
             snapshots = await asyncio.wait_for(
-                sync_broker_positions_once(order_service.ib),
+                sync_broker_positions_once(
+                    order_service.ib,
+                    expected_account_id=order_service.account_id,
+                    force_refresh=True,
+                ),
                 timeout=float(PROTECTIVE_EMERGENCY_SYNC_TIMEOUT_SECONDS),
             )
             snapshot = find_snapshot(
@@ -1713,6 +1728,9 @@ async def run_execution_loop(
 
     next_heartbeat_ts = int(time.time()) + EXECUTION_HEARTBEAT_INTERVAL_SECONDS
     next_slot_close_recovery_ts = 0
+    next_uncertain_reconcile_ts = 0
+    next_protective_reconcile_ts = 0
+    next_execution_stats_reconcile_ts = 0
 
     while True:
         # NEW intents are the fastest path. They share one absolute 30-second
@@ -1724,37 +1742,43 @@ async def run_execution_loop(
             deal_status_message_thread_id=deal_status_message_thread_id,
         )
 
-        try:
-            await asyncio.wait_for(
-                reconcile_uncertain_executions_and_restore_protection(
-                    order_service=order_service,
-                ),
-                timeout=float(UNCERTAIN_EXECUTION_RECONCILE_TIMEOUT_SECONDS),
-            )
-        except Exception as exc:
-            log_warning(
-                logger,
-                f"uncertain execution reconciliation failed: "
-                f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}",
-                to_telegram=True,
-            )
+        now_ts = int(time.time())
+        if now_ts >= next_uncertain_reconcile_ts:
+            next_uncertain_reconcile_ts = now_ts + UNCERTAIN_EXECUTION_RECONCILE_INTERVAL_SECONDS
+            try:
+                await asyncio.wait_for(
+                    reconcile_uncertain_executions_and_restore_protection(
+                        order_service=order_service,
+                    ),
+                    timeout=float(UNCERTAIN_EXECUTION_RECONCILE_TIMEOUT_SECONDS),
+                )
+            except Exception as exc:
+                log_warning(
+                    logger,
+                    f"uncertain execution reconciliation failed: "
+                    f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}",
+                    to_telegram=True,
+                )
 
-        try:
-            await asyncio.wait_for(
-                reconcile_and_notify_protective_orders(
-                    order_service=order_service,
-                    deal_telegram_sender=deal_telegram_sender,
-                    deal_message_thread_id=deal_message_thread_id,
-                ),
-                timeout=float(PROTECTIVE_RECONCILE_TOTAL_TIMEOUT_SECONDS),
-            )
+        now_ts = int(time.time())
+        if now_ts >= next_protective_reconcile_ts:
+            next_protective_reconcile_ts = now_ts + PROTECTIVE_RECONCILE_INTERVAL_SECONDS
+            try:
+                await asyncio.wait_for(
+                    reconcile_and_notify_protective_orders(
+                        order_service=order_service,
+                        deal_telegram_sender=deal_telegram_sender,
+                        deal_message_thread_id=deal_message_thread_id,
+                    ),
+                    timeout=float(PROTECTIVE_RECONCILE_TOTAL_TIMEOUT_SECONDS),
+                )
 
-        except Exception as exc:
-            log_warning(
-                logger,
-                f"protective-order reconciliation failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
-                to_telegram=True,
-            )
+            except Exception as exc:
+                log_warning(
+                    logger,
+                    f"protective-order reconciliation failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
+                    to_telegram=True,
+                )
 
         try:
             await asyncio.wait_for(
@@ -1911,56 +1935,59 @@ async def run_execution_loop(
                     to_telegram=True,
                 )
 
-        try:
-            execution_stats_events = await asyncio.wait_for(
-                reconcile_missing_execution_stats_once(
-                    order_service=order_service,
-                ),
-                timeout=float(EXECUTION_STATS_RECONCILE_TIMEOUT_SECONDS),
-            )
-
-            for execution_stats_event in execution_stats_events:
-                if str(execution_stats_event.get("event", "")).upper() != "BACKFILLED":
-                    continue
-
-                log_info(
-                    logger,
-                    (
-                        f"{execution_stats_event['instrument_code']}: execution stats backfilled: "
-                        f"trade_intent_id={execution_stats_event['trade_intent_id']}, "
-                        f"order_id={execution_stats_event['order_id']}, "
-                        f"avg_fill={execution_stats_event.get('avg_fill_price')}, "
-                        f"commission={execution_stats_event.get('total_commission')}, "
-                        f"realized_pnl={execution_stats_event.get('realized_pnl')}"
+        now_ts = int(time.time())
+        if now_ts >= next_execution_stats_reconcile_ts:
+            next_execution_stats_reconcile_ts = now_ts + EXECUTION_STATS_RECONCILE_INTERVAL_SECONDS
+            try:
+                execution_stats_events = await asyncio.wait_for(
+                    reconcile_missing_execution_stats_once(
+                        order_service=order_service,
                     ),
-                    to_telegram=False,
+                    timeout=float(EXECUTION_STATS_RECONCILE_TIMEOUT_SECONDS),
                 )
 
-                if deal_telegram_sender is None:
-                    continue
+                for execution_stats_event in execution_stats_events:
+                    if str(execution_stats_event.get("event", "")).upper() != "BACKFILLED":
+                        continue
 
-                try:
-                    await deal_telegram_sender.send_text(
-                        format_backfilled_execution_stats_message(execution_stats_event),
-                        message_thread_id=deal_message_thread_id,
-                    )
-                except Exception as notification_exc:
-                    log_warning(
+                    log_info(
                         logger,
                         (
-                            f"execution-stats backfill notification failed "
-                            f"trade_intent={execution_stats_event['trade_intent_id']}: "
-                            f"{type(notification_exc).__name__}: {notification_exc}"
+                            f"{execution_stats_event['instrument_code']}: execution stats backfilled: "
+                            f"trade_intent_id={execution_stats_event['trade_intent_id']}, "
+                            f"order_id={execution_stats_event['order_id']}, "
+                            f"avg_fill={execution_stats_event.get('avg_fill_price')}, "
+                            f"commission={execution_stats_event.get('total_commission')}, "
+                            f"realized_pnl={execution_stats_event.get('realized_pnl')}"
                         ),
-                        to_telegram=True,
+                        to_telegram=False,
                     )
 
-        except Exception as exc:
-            log_warning(
-                logger,
-                f"execution-stats reconciliation failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
-                to_telegram=True,
-            )
+                    if deal_telegram_sender is None:
+                        continue
+
+                    try:
+                        await deal_telegram_sender.send_text(
+                            format_backfilled_execution_stats_message(execution_stats_event),
+                            message_thread_id=deal_message_thread_id,
+                        )
+                    except Exception as notification_exc:
+                        log_warning(
+                            logger,
+                            (
+                                f"execution-stats backfill notification failed "
+                                f"trade_intent={execution_stats_event['trade_intent_id']}: "
+                                f"{type(notification_exc).__name__}: {notification_exc}"
+                            ),
+                            to_telegram=True,
+                        )
+
+            except Exception as exc:
+                log_warning(
+                    logger,
+                    f"execution-stats reconciliation failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
+                    to_telegram=True,
+                )
 
         await process_new_trade_intents_once(
             order_service=order_service,

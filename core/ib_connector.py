@@ -1,8 +1,10 @@
 import asyncio
 import time
+from datetime import datetime, timezone
 
 from ib_async import IB
 
+from core.ib_clock import sample_and_store_ib_clock
 from core.ib_health import (
     IbConnectionHealth,
     build_ib_health_text,
@@ -20,7 +22,37 @@ RECONNECT_DELAY_SECONDS = 5
 CONNECTION_CHECK_INTERVAL_SECONDS = 1
 
 # Раз в сколько секунд слать heartbeat-сообщение.
-HEARTBEAT_INTERVAL_SECONDS = 600
+HEARTBEAT_INTERVAL_SECONDS = 60
+
+
+def format_ib_clock_server_time(sample) -> str:
+    return datetime.fromtimestamp(
+        float(sample.server_time_ts),
+        tz=timezone.utc,
+    ).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+async def sample_ib_clock_best_effort(ib, settings):
+    try:
+        return await asyncio.wait_for(
+            sample_and_store_ib_clock(
+                ib,
+                source_client_id=getattr(
+                    settings,
+                    "ib_client_id",
+                    None,
+                ),
+            ),
+            timeout=5.0,
+        )
+    except Exception as exc:
+        log_warning(
+            logger,
+            f"Не удалось обновить IB clock sample: "
+            f"{type(exc).__name__}: {exc}",
+            to_telegram=False,
+        )
+        return None
 
 
 async def connect_ib(settings):
@@ -74,6 +106,11 @@ async def connect_ib(settings):
                 logger,
                 f"Соединение с IB установлено после {connect_attempt} попыток за {connect_duration} сек",
                 to_telegram=False,
+            )
+
+            await sample_ib_clock_best_effort(
+                ib,
+                settings,
             )
 
             # Возвращаем и сам объект IB, и объект состояния здоровья.
@@ -143,12 +180,18 @@ async def monitor_ib_connection(ib, settings, ib_health):
                     f"Соединение с IB восстановлено после {reconnect_attempt} попыток за {reconnect_duration} сек",
                 )
 
-                # После восстановления сразу пробуем запросить серверное время.
-                try:
-                    server_time_text = await get_ib_server_time_text(ib)
-                    log_info(logger, f"Время сервера IB: {server_time_text}")
-                except Exception as e:
-                    log_warning(logger, f"Не удалось получить время сервера IB после восстановления: {e}")
+                clock_sample = await sample_ib_clock_best_effort(
+                    ib,
+                    settings,
+                )
+                if clock_sample is not None:
+                    log_info(
+                        logger,
+                        "Время сервера IB: "
+                        f"{format_ib_clock_server_time(clock_sample)}, "
+                        f"clock_offset={clock_sample.offset_seconds:+.3f}s, "
+                        f"rtt={clock_sample.round_trip_seconds:.3f}s",
+                    )
 
                 # Сбрасываем служебные переменные после успешного восстановления.
                 reconnect_started_at = None
@@ -221,15 +264,30 @@ async def heartbeat_ib_connection(ib, ib_health):
         if not ib.isConnected():
             continue
 
-        # Пытаемся получить живое серверное время у IB.
+        # Один запрос одновременно подтверждает backend и обновляет
+        # канонический clock sample для trader guard.
         server_time_text = ""
         server_time_ok = False
+        clock_sample = await sample_ib_clock_best_effort(
+            ib,
+            type(
+                "HeartbeatSettings",
+                (),
+                {
+                    "ib_client_id": None,
+                },
+            ),
+        )
 
-        try:
-            server_time_text = await get_ib_server_time_text(ib)
+        if clock_sample is not None:
+            server_time_text = (
+                f"{format_ib_clock_server_time(clock_sample)}, "
+                f"clock_offset={clock_sample.offset_seconds:+.3f}s, "
+                f"rtt={clock_sample.round_trip_seconds:.3f}s"
+            )
             server_time_ok = True
-        except Exception as e:
-            server_time_text = f"не получено ({e})"
+        else:
+            server_time_text = "не получено"
 
         # Полностью "здоровым" считаем состояние только если:
         # - локальный API-сокет жив;
