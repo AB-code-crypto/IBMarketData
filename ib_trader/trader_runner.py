@@ -4,13 +4,16 @@ import traceback
 
 from config import settings_live as app_settings
 from core.logger import get_logger, log_info, log_warning, setup_logging
+from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG
 from ib_trader.trade_store import process_signal_events_once
 
 setup_logging()
 logger = get_logger(__name__)
 
 TRADER_LOOP_SLEEP_SECONDS = 1
-TRADER_MAX_SIGNAL_AGE_SECONDS = 10
+TRADER_MAX_SIGNAL_AGE_SECONDS = int(
+    getattr(DEFAULT_SIGNAL_CONFIG, "decision_pipeline_max_age_seconds", 30)
+)
 TRADER_HEARTBEAT_INTERVAL_SECONDS = 60
 REPORTED_REJECTED_TRADE_INTENTS: set[tuple[str, int, str]] = set()
 

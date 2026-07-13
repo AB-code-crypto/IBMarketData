@@ -6,6 +6,7 @@ class ExecutionStatus(Enum):
     NEW = "NEW"
     SENDING = "SENDING"
     ACCEPTED = "ACCEPTED"
+    RECONCILING = "RECONCILING"
     EXECUTED = "EXECUTED"
     CANCELLED = "CANCELLED"
     EXPIRED = "EXPIRED"

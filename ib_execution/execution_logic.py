@@ -8,7 +8,11 @@ from contracts import Instrument
 from core.time_utils import CT_TIMEZONE
 from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG
 from ib_execution.contract_resolver import build_execution_contract
-from ib_execution.order_service import OrderService
+from ib_execution.order_service import (
+    OrderRejectedError,
+    OrderService,
+    OrderTimeoutError,
+)
 from ib_execution.execution_store import (
     get_trade_db_connection,
     initialize_execution_db,
@@ -17,6 +21,70 @@ from ib_execution.execution_store import (
 
 
 OrderSubmittedCallback = Callable[[int, str, int], Awaitable[None]]
+
+
+class SubmittedOrderPersistenceError(RuntimeError):
+    def __init__(
+            self,
+            *,
+            order_id: int,
+            order_action: str,
+            order_quantity: int,
+            cause: BaseException,
+    ) -> None:
+        super().__init__(
+            f"order was submitted to IB, but local submission persistence failed: "
+            f"order_id={order_id}, action={order_action}, qty={order_quantity}, "
+            f"{type(cause).__name__}: {cause}"
+        )
+        self.order_id = int(order_id)
+        self.order_action = str(order_action)
+        self.order_quantity = int(order_quantity)
+
+
+class OrderExecutionUncertainError(RuntimeError):
+    def __init__(
+            self,
+            *,
+            order_id: int,
+            order_action: str,
+            order_quantity: int,
+            broker_status: str,
+            filled_qty: float,
+    ) -> None:
+        super().__init__(
+            f"market order final result is uncertain: order_id={order_id}, "
+            f"action={order_action}, qty={order_quantity}, "
+            f"broker_status={broker_status}, filled_qty={filled_qty:g}"
+        )
+        self.order_id = int(order_id)
+        self.order_action = str(order_action)
+        self.order_quantity = int(order_quantity)
+
+
+async def persist_submitted_order(
+        callback: OrderSubmittedCallback | None,
+        *,
+        order_id: int,
+        order_action: str,
+        order_quantity: int,
+) -> None:
+    if callback is None:
+        return
+
+    try:
+        await callback(
+            int(order_id),
+            str(order_action),
+            int(order_quantity),
+        )
+    except Exception as exc:
+        raise SubmittedOrderPersistenceError(
+            order_id=int(order_id),
+            order_action=str(order_action),
+            order_quantity=int(order_quantity),
+            cause=exc,
+        ) from exc
 
 
 LIMIT_DONE_TIMEOUT_EXTRA_SECONDS = 10
@@ -172,13 +240,13 @@ def are_commission_reports_final_for_trade(trade) -> bool:
     )
 
 
-async def refresh_ib_executions_if_possible(ib) -> None:
+async def refresh_ib_executions_if_possible(ib) -> bool:
     try:
         req_async = getattr(ib, "reqExecutionsAsync", None)
 
         if req_async is not None:
             await req_async()
-            return
+            return True
 
         req_sync = getattr(ib, "reqExecutions", None)
 
@@ -188,8 +256,12 @@ async def refresh_ib_executions_if_possible(ib) -> None:
             if asyncio.iscoroutine(maybe_awaitable):
                 await maybe_awaitable
 
+            return True
+
     except Exception:
-        return
+        return False
+
+    return False
 
 
 async def wait_for_commission_reports(
@@ -369,30 +441,70 @@ async def execute_market_intent(
             contract=contract,
             quantity=quantity,
             order_ref=order_ref,
-            wait="done",
-            done_timeout=60.0,
+            wait="none",
         )
     else:
         placement = await order_service.sell_market(
             contract=contract,
             quantity=quantity,
             order_ref=order_ref,
-            wait="done",
-            done_timeout=60.0,
+            wait="none",
+        )
+
+    order_id = int(placement.receipt.order_id)
+    trade = placement.receipt.trade
+
+    await persist_submitted_order(
+        order_submitted_callback,
+        order_id=order_id,
+        order_action=order_action,
+        order_quantity=quantity,
+    )
+
+    done = await order_service.monitor.wait_for_done(
+        trade,
+        timeout=60.0,
+        poll_interval=0.10,
+    )
+
+    if not done.done:
+        raise OrderTimeoutError(
+            order_id=order_id,
+            stage="done",
+            status=done.status,
+        )
+
+    filled_qty = collect_trade_filled_qty(trade)
+    broker_status = str(done.status or "")
+
+    if broker_status in {"Cancelled", "ApiCancelled", "Inactive", "Rejected"} and filled_qty <= 0.0:
+        raise OrderRejectedError(
+            order_id=order_id,
+            status=broker_status,
+            error=order_service.monitor.last_error(order_id),
+        )
+
+    if broker_status != "Filled" or filled_qty < float(quantity):
+        raise OrderExecutionUncertainError(
+            order_id=order_id,
+            order_action=order_action,
+            order_quantity=quantity,
+            broker_status=broker_status,
+            filled_qty=filled_qty,
         )
 
     await wait_for_commission_reports(
         order_service,
-        placement.receipt.trade,
+        trade,
     )
 
     return build_execution_result(
         intent=intent,
-        order_id=placement.receipt.order_id,
+        order_id=order_id,
         order_action=order_action,
         order_quantity=quantity,
         status=ExecutionStatus.EXECUTED,
-        trade=placement.receipt.trade,
+        trade=trade,
         error_text=None,
     )
 
@@ -563,8 +675,12 @@ async def execute_limit_intent(
     order_id = placement.receipt.order_id
     trade = placement.receipt.trade
 
-    if order_submitted_callback is not None:
-        await order_submitted_callback(order_id, order_action, quantity)
+    await persist_submitted_order(
+        order_submitted_callback,
+        order_id=order_id,
+        order_action=order_action,
+        order_quantity=quantity,
+    )
     done, cancel_request = await wait_for_limit_done_or_cancel(
         order_service=order_service,
         intent=intent,

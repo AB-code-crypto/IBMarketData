@@ -12,6 +12,11 @@ from contracts import Instrument
 from core.sqlite_utils import open_sqlite_connection
 from ib_execution.contract_resolver import build_execution_contract
 from ib_execution.execution_logic import execute_trade_intent
+from ib_execution.executable_price_reader import (
+    read_executable_price_path_stats,
+    read_first_executable_level_touch_row,
+    read_latest_executable_bar,
+)
 from ib_execution.execution_models import ExecutionResult, ExecutionStatus, TradeIntent
 from ib_execution.execution_store import (
     get_trade_db_connection,
@@ -276,7 +281,7 @@ def has_unresolved_execution_intent_for_instrument(conn, *, instrument_code: str
         SELECT 1
         FROM {TRADE_INTENTS_TABLE_NAME}
         WHERE instrument_code = ?
-          AND status IN ('NEW', 'SENDING', 'ACCEPTED')
+          AND status IN ('NEW', 'SENDING', 'ACCEPTED', 'RECONCILING')
           AND COALESCE(cancel_requested, 0) = 0
         LIMIT 1
         """,
@@ -380,95 +385,25 @@ def read_price_path_stats(
         entry_ts: int,
         now_ts: int,
 ) -> PricePathStats | None:
-    instrument_row = Instrument.get(str(instrument_code))
-    if instrument_row is None:
+    values = read_executable_price_path_stats(
+        instrument_code=instrument_code,
+        position_side=position_side,
+        entry_price=entry_price,
+        entry_ts=entry_ts,
+        now_ts=now_ts,
+    )
+
+    if values is None:
         return None
 
-    feature_db_path = Path(get_instrument_feature_db_path(str(instrument_code), instrument_row))
-    if not feature_db_path.is_file():
-        return None
-
-    conn = open_sqlite_connection(str(feature_db_path), use_wal=True)
-
-    try:
-        latest = conn.execute(
-            f"""
-            SELECT bar_time_ts, mid_close, spread_close
-            FROM {MID_PRICE_TABLE_NAME}
-            WHERE bar_time_ts >= ?
-              AND bar_time_ts <= ?
-            ORDER BY bar_time_ts DESC
-            LIMIT 1
-            """,
-            (int(entry_ts), int(now_ts)),
-        ).fetchone()
-
-        if latest is None:
-            return None
-
-        side = str(position_side).upper()
-        entry = float(entry_price)
-
-        if side == PositionSide.LONG.value:
-            adverse_row = conn.execute(
-                f"""
-                SELECT MIN(mid_low - spread_high / 2.0)
-                FROM {MID_PRICE_TABLE_NAME}
-                WHERE bar_time_ts >= ?
-                  AND bar_time_ts <= ?
-                """,
-                (int(entry_ts), int(now_ts)),
-            ).fetchone()
-            if adverse_row is None or adverse_row[0] is None:
-                return None
-
-            current_exit_price = float(latest[1]) - float(latest[2]) / 2.0
-            max_adverse_price = float(adverse_row[0])
-            max_drawdown_points = max(0.0, entry - max_adverse_price)
-            current_drawdown_points = max(0.0, entry - current_exit_price)
-
-        elif side == PositionSide.SHORT.value:
-            adverse_row = conn.execute(
-                f"""
-                SELECT MAX(mid_high + spread_high / 2.0)
-                FROM {MID_PRICE_TABLE_NAME}
-                WHERE bar_time_ts >= ?
-                  AND bar_time_ts <= ?
-                """,
-                (int(entry_ts), int(now_ts)),
-            ).fetchone()
-            if adverse_row is None or adverse_row[0] is None:
-                return None
-
-            current_exit_price = float(latest[1]) + float(latest[2]) / 2.0
-            max_adverse_price = float(adverse_row[0])
-            max_drawdown_points = max(0.0, max_adverse_price - entry)
-            current_drawdown_points = max(0.0, current_exit_price - entry)
-
-        else:
-            return None
-
-        if max_drawdown_points <= 0.0:
-            return PricePathStats(
-                latest_bar_ts=int(latest[0]),
-                current_exit_price=current_exit_price,
-                max_adverse_price=max_adverse_price,
-                max_drawdown_points=max_drawdown_points,
-                current_drawdown_points=current_drawdown_points,
-                drawdown_ratio=0.0,
-            )
-
-        return PricePathStats(
-            latest_bar_ts=int(latest[0]),
-            current_exit_price=current_exit_price,
-            max_adverse_price=max_adverse_price,
-            max_drawdown_points=max_drawdown_points,
-            current_drawdown_points=current_drawdown_points,
-            drawdown_ratio=current_drawdown_points / max_drawdown_points,
-        )
-
-    finally:
-        conn.close()
+    return PricePathStats(
+        latest_bar_ts=int(values["latest_bar_ts"]),
+        current_exit_price=float(values["current_exit_price"]),
+        max_adverse_price=float(values["max_adverse_price"]),
+        max_drawdown_points=float(values["max_drawdown_points"]),
+        current_drawdown_points=float(values["current_drawdown_points"]),
+        drawdown_ratio=float(values["drawdown_ratio"]),
+    )
 
 
 async def refresh_open_orders_for_extension(order_service: OrderService) -> tuple[bool, str | None]:
@@ -1293,39 +1228,11 @@ def read_latest_feature_bar(
         start_ts: int,
         now_ts: int,
 ) -> dict[str, Any] | None:
-    instrument_row = Instrument.get(str(instrument_code))
-    if instrument_row is None:
-        return None
-
-    feature_db_path = Path(get_instrument_feature_db_path(str(instrument_code), instrument_row))
-    if not feature_db_path.is_file():
-        return None
-
-    conn = open_sqlite_connection(str(feature_db_path), use_wal=True)
-    try:
-        row = conn.execute(
-            f"""
-            SELECT bar_time_ts, mid_close, spread_close
-            FROM {MID_PRICE_TABLE_NAME}
-            WHERE bar_time_ts >= ?
-              AND bar_time_ts <= ?
-            ORDER BY bar_time_ts DESC
-            LIMIT 1
-            """,
-            (int(start_ts), int(now_ts)),
-        ).fetchone()
-
-        if row is None:
-            return None
-
-        return {
-            "bar_time_ts": int(row[0]),
-            "mid_close": float(row[1]),
-            "spread_close": float(row[2]),
-        }
-
-    finally:
-        conn.close()
+    return read_latest_executable_bar(
+        instrument_code=instrument_code,
+        start_ts=start_ts,
+        now_ts=now_ts,
+    )
 
 
 def read_first_level_touch_row(
@@ -1337,75 +1244,14 @@ def read_first_level_touch_row(
         start_ts: int,
         now_ts: int,
 ) -> dict[str, Any] | None:
-    instrument_row = Instrument.get(str(instrument_code))
-    if instrument_row is None:
-        return None
-
-    feature_db_path = Path(get_instrument_feature_db_path(str(instrument_code), instrument_row))
-    if not feature_db_path.is_file():
-        return None
-
-    side_value = str(side).upper()
-    level_kind_value = str(level_kind).upper()
-
-    if side_value == PositionSide.LONG.value and level_kind_value == "STOP":
-        trigger_expr = "(mid_low - spread_high / 2.0)"
-        condition_sql = f"{trigger_expr} <= ?"
-    elif side_value == PositionSide.LONG.value and level_kind_value == "TAKE_PROFIT":
-        trigger_expr = "(mid_high - spread_low / 2.0)"
-        condition_sql = f"{trigger_expr} >= ?"
-    elif side_value == PositionSide.SHORT.value and level_kind_value == "STOP":
-        trigger_expr = "(mid_high + spread_high / 2.0)"
-        condition_sql = f"{trigger_expr} >= ?"
-    elif side_value == PositionSide.SHORT.value and level_kind_value == "TAKE_PROFIT":
-        trigger_expr = "(mid_low + spread_low / 2.0)"
-        condition_sql = f"{trigger_expr} <= ?"
-    else:
-        return None
-
-    conn = open_sqlite_connection(str(feature_db_path), use_wal=True)
-    try:
-        row = conn.execute(
-            f"""
-            SELECT
-                bar_time_ts,
-                {trigger_expr} AS trigger_price,
-                mid_open,
-                mid_high,
-                mid_low,
-                mid_close,
-                spread_open,
-                spread_high,
-                spread_low,
-                spread_close
-            FROM {MID_PRICE_TABLE_NAME}
-            WHERE bar_time_ts >= ?
-              AND bar_time_ts <= ?
-              AND {condition_sql}
-            ORDER BY bar_time_ts ASC
-            LIMIT 1
-            """,
-            (int(start_ts), int(now_ts), float(level_price)),
-        ).fetchone()
-
-        if row is None:
-            return None
-
-        return {
-            "bar_time_ts": int(row[0]),
-            "trigger_price": float(row[1]),
-            "mid_open": float(row[2]),
-            "mid_high": float(row[3]),
-            "mid_low": float(row[4]),
-            "mid_close": float(row[5]),
-            "spread_open": float(row[6]),
-            "spread_high": float(row[7]),
-            "spread_low": float(row[8]),
-            "spread_close": float(row[9]),
-        }
-
-    finally:
-        conn.close()
+    return read_first_executable_level_touch_row(
+        instrument_code=instrument_code,
+        side=side,
+        level_kind=level_kind,
+        level_price=level_price,
+        start_ts=start_ts,
+        now_ts=now_ts,
+    )
 
 
 def build_watchdog_event_from_level_touch(

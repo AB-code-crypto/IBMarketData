@@ -11,6 +11,13 @@ from ib_execution.execution_models import ExecutionResult, ExecutionStatus, Trad
 STALE_NEW_INTENT_ERROR_TEXT = "stale trade_intent: older than execution max age"
 STALE_ACTIVE_INTENT_ERROR_TEXT = "stale active trade_intent: execution service is no longer tracking it"
 
+def trade_intent_age_anchor_sql() -> str:
+    return (
+        "CASE WHEN intent_source = 'SIGNAL' "
+        "THEN signal_bar_ts ELSE created_at_ts END"
+    )
+
+
 TAKE_PROFIT_ORDERS_TABLE_NAME = "take_profit_orders"
 TAKE_PROFIT_STATUS_ACTIVE = "ACTIVE"
 TAKE_PROFIT_STATUS_CANCELLED = "CANCELLED"
@@ -240,8 +247,8 @@ def expire_stale_new_trade_intents(
         return 0
 
     now_ts = int(time.time() if now_ts is None else now_ts)
-    min_created_at_ts = now_ts - max_age_seconds
-
+    min_anchor_ts = now_ts - max_age_seconds
+    age_anchor = trade_intent_age_anchor_sql()
     changes_before = conn.total_changes
 
     conn.execute(
@@ -253,14 +260,17 @@ def expire_stale_new_trade_intents(
             updated_at_ts = ?,
             finished_at_ts = ?
         WHERE status = 'NEW'
-          AND created_at_ts < ?
+          AND {age_anchor} < ?
         """,
         (
             ExecutionStatus.FAILED.value,
-            f"{STALE_NEW_INTENT_ERROR_TEXT}; max_age_seconds={max_age_seconds}",
+            (
+                f"{STALE_NEW_INTENT_ERROR_TEXT}; "
+                f"one_pipeline_budget_seconds={max_age_seconds}"
+            ),
             now_ts,
             now_ts,
-            min_created_at_ts,
+            min_anchor_ts,
         ),
     )
 
@@ -279,7 +289,6 @@ def expire_stale_active_trade_intents(
     default_limit_ttl_seconds = int(default_limit_ttl_seconds)
     limit_grace_seconds = int(limit_grace_seconds)
     market_max_age_seconds = int(market_max_age_seconds)
-
     changes_before = conn.total_changes
 
     conn.execute(
@@ -287,12 +296,16 @@ def expire_stale_active_trade_intents(
         UPDATE {TRADE_INTENTS_TABLE_NAME}
         SET
             status = CASE
+                WHEN status = 'SENDING' OR order_id IS NOT NULL THEN ?
                 WHEN order_type = 'LIMIT' THEN ?
                 ELSE ?
             END,
             error_text = ?,
             updated_at_ts = ?,
-            finished_at_ts = ?
+            finished_at_ts = CASE
+                WHEN status = 'SENDING' OR order_id IS NOT NULL THEN NULL
+                ELSE ?
+            END
         WHERE status IN ('SENDING', 'ACCEPTED')
           AND (
               (
@@ -309,10 +322,12 @@ def expire_stale_active_trade_intents(
           )
         """,
         (
+            ExecutionStatus.RECONCILING.value,
             ExecutionStatus.EXPIRED.value,
             ExecutionStatus.FAILED.value,
             (
                 f"{STALE_ACTIVE_INTENT_ERROR_TEXT}; "
+                f"submitted_orders_move_to_reconciling=1; "
                 f"default_limit_ttl_seconds={default_limit_ttl_seconds}; "
                 f"limit_grace_seconds={limit_grace_seconds}; "
                 f"market_max_age_seconds={market_max_age_seconds}"
@@ -381,7 +396,8 @@ def read_new_trade_intents(*, limit: int = 20, max_age_seconds: int = 10) -> lis
         )
         conn.commit()
 
-        min_created_at_ts = now_ts - max_age_seconds if max_age_seconds > 0 else now_ts
+        min_anchor_ts = now_ts - max_age_seconds if max_age_seconds > 0 else now_ts
+        age_anchor = trade_intent_age_anchor_sql()
 
         rows = conn.execute(
             f"""
@@ -408,11 +424,11 @@ def read_new_trade_intents(*, limit: int = 20, max_age_seconds: int = 10) -> lis
             FROM {TRADE_INTENTS_TABLE_NAME}
             WHERE status = 'NEW'
               AND COALESCE(cancel_requested, 0) = 0
-              AND created_at_ts >= ?
-            ORDER BY created_at_ts ASC, trade_intent_id ASC
+              AND {age_anchor} >= ?
+            ORDER BY {age_anchor} ASC, trade_intent_id ASC
             LIMIT ?
             """,
-            (min_created_at_ts, int(limit)),
+            (min_anchor_ts, int(limit)),
         ).fetchall()
 
         result: list[TradeIntent] = []
@@ -506,6 +522,40 @@ def mark_trade_intent_order_submitted(
             int(trade_intent_id),
         ),
     )
+
+
+def read_trade_intent_submission_state(
+        conn,
+        *,
+        trade_intent_id: int,
+) -> dict | None:
+    row = conn.execute(
+        f"""
+        SELECT
+            trade_intent_id,
+            status,
+            order_id,
+            order_action,
+            order_quantity,
+            error_text
+        FROM {TRADE_INTENTS_TABLE_NAME}
+        WHERE trade_intent_id = ?
+        LIMIT 1
+        """,
+        (int(trade_intent_id),),
+    ).fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "trade_intent_id": int(row[0]),
+        "status": str(row[1]).upper(),
+        "order_id": None if row[2] is None else int(row[2]),
+        "order_action": None if row[3] is None else str(row[3]).upper(),
+        "order_quantity": None if row[4] is None else int(row[4]),
+        "error_text": None if row[5] is None else str(row[5]),
+    }
 
 
 def write_trade_intent_execution_result(

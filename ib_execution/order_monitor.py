@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -67,6 +69,8 @@ class OrderMonitor:
     def __init__(self, ib: IB) -> None:
         self._ib = ib
         self._errors_by_id: dict[int, IBError] = {}
+        self._error_history_by_id: dict[int, deque[IBError]] = {}
+        self._cancel_requested_at: dict[int, float] = {}
         self._ib.errorEvent += self._on_error  # type: ignore[operator]
 
     @property
@@ -75,6 +79,39 @@ class OrderMonitor:
 
     def last_error(self, order_id: int) -> Optional[IBError]:
         return self._errors_by_id.get(int(order_id))
+
+    def find_error(self, order_id: int, *, code: int) -> Optional[IBError]:
+        history = self._error_history_by_id.get(int(order_id))
+        if not history:
+            return None
+
+        expected_code = int(code)
+        for error in reversed(history):
+            if int(error.code) == expected_code:
+                return error
+        return None
+
+    def note_cancel_requested(self, order_id: int) -> None:
+        self._cancel_requested_at[int(order_id)] = time.monotonic()
+
+    def clear_cancel_requested(self, order_id: int) -> None:
+        self._cancel_requested_at.pop(int(order_id), None)
+
+    def is_cancel_expected(
+            self,
+            order_id: int,
+            *,
+            max_age_seconds: float = 120.0,
+    ) -> bool:
+        requested_at = self._cancel_requested_at.get(int(order_id))
+        if requested_at is None:
+            return False
+
+        if time.monotonic() - requested_at > float(max_age_seconds):
+            self._cancel_requested_at.pop(int(order_id), None)
+            return False
+
+        return True
 
     def _on_error(self, *args) -> None:
         try:
@@ -98,13 +135,27 @@ class OrderMonitor:
             time_utc=datetime.now(timezone.utc),
         )
         self._errors_by_id[req_id] = error
+        history = self._error_history_by_id.setdefault(req_id, deque(maxlen=20))
+        history.append(error)
 
-        # Эти коды остаются доступны через last_error(), но не являются
-        # аварийными ошибками execution:
-        # 202   — подтверждение отмены ордера;
-        # 10148 — ордер уже находится в PendingCancel;
-        # 2109  — outsideRth проигнорирован для данного типа ордера.
-        if code in {202, 10148, 2109}:
+        if code == 2109:
+            return
+
+        # 202 и 10148 штатны только после cancel, отправленного нашим кодом.
+        if code == 202:
+            if self.is_cancel_expected(req_id):
+                self.clear_cancel_requested(req_id)
+                return
+
+            log.warning(
+                "Unexpected IB order cancellation: id=%s code=%s msg=%s",
+                req_id,
+                code,
+                msg,
+            )
+            return
+
+        if code == 10148 and self.is_cancel_expected(req_id):
             return
 
         log.warning("IB error: id=%s code=%s msg=%s", req_id, code, msg)

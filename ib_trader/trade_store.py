@@ -589,7 +589,7 @@ def has_unresolved_trade_intent_for_instrument(conn, *, instrument_code: str) ->
     if latest_intent is None:
         return False
 
-    if latest_intent["status"] in {"NEW", "SENDING", "ACCEPTED"}:
+    if latest_intent["status"] in {"NEW", "SENDING", "ACCEPTED", "RECONCILING"}:
         return True
 
     if latest_intent["status"] == "EXECUTED":
@@ -655,7 +655,7 @@ def read_pending_entry_limit_intent_for_opposite_signal(conn, *, signal: TraderS
         WHERE instrument_code = ?
           AND action = 'OPEN_POSITION'
           AND order_type = 'LIMIT'
-          AND status IN ('NEW', 'SENDING', 'ACCEPTED')
+          AND status IN ('NEW', 'SENDING', 'ACCEPTED', 'RECONCILING')
           AND target_side != ?
         ORDER BY trade_intent_id DESC
         LIMIT 1

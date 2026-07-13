@@ -245,10 +245,20 @@ class OrderService:
         )
 
     async def cancel_order_id(self, order_id: int) -> CancelOrderReceipt:
-        return await self._api.cancel_order(int(order_id))
+        order_id = int(order_id)
+        self._monitor.note_cancel_requested(order_id)
+
+        try:
+            return await self._api.cancel_order(order_id)
+        except Exception:
+            self._monitor.clear_cancel_requested(order_id)
+            raise
 
     async def cancel_order_ids(self, order_ids: list[int]) -> list[CancelOrderReceipt]:
-        return await self._api.cancel_orders([int(x) for x in order_ids])
+        receipts: list[CancelOrderReceipt] = []
+        for order_id in order_ids:
+            receipts.append(await self.cancel_order_id(int(order_id)))
+        return receipts
 
     def open_order_ids(self, *, order_ref: Optional[str] = None) -> list[int]:
         ids: list[int] = []
@@ -269,6 +279,8 @@ class OrderService:
         return await self.cancel_order_ids(ids)
 
     async def global_cancel(self) -> None:
+        for order_id in self.open_order_ids():
+            self._monitor.note_cancel_requested(order_id)
         self._ib.reqGlobalCancel()
         await asyncio.sleep(0)
 
@@ -321,7 +333,7 @@ class OrderService:
             return
 
         for placement in results:
-            await self._api.cancel_order(placement.receipt.order_id)
+            await self.cancel_order_id(placement.receipt.order_id)
 
         first_bad = bad[0]
         acceptance = first_bad.acceptance

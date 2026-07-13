@@ -24,9 +24,13 @@ from ib_execution.execution_store import (
     mark_trade_intent_order_submitted,
     mark_trade_intent_sending,
     read_new_trade_intents,
+    read_trade_intent_submission_state,
     write_trade_intent_execution_result,
 )
 from ib_execution.order_service import OrderService
+from ib_execution.uncertain_execution_reconciliation import (
+    reconcile_uncertain_trade_intents_once,
+)
 from ib_execution.protective_order_reconciliation import (
     reconcile_protective_orders_once,
     refresh_ib_open_orders_if_possible,
@@ -36,29 +40,37 @@ from ib_execution.protective_order_store import (
     PROTECTIVE_ORDER_ROLE_TAKE_PROFIT,
     PROTECTIVE_ORDER_STATUS_ACTIVE,
     mark_protective_order_status,
+    PROTECTIVE_ORDERS_TABLE_NAME,
+    initialize_protective_order_db,
     read_active_protective_orders,
     record_protective_order,
+    has_active_protective_stop_for_parent,
 )
 from ib_execution.slot_close_recovery import (
     SLOT_CLOSE_RECOVERY_INTERVAL_SECONDS,
     run_slot_close_recovery_once,
 )
+from ib_execution.executable_price_reader import (
+    read_first_executable_level_touch_row as read_first_level_touch_row,
+    read_latest_executable_bar as read_latest_feature_bar,
+)
 from ib_execution.slot_loss_extension import (
     close_market_safely,
     find_snapshot,
-    read_first_level_touch_row,
-    read_latest_feature_bar,
     run_slot_loss_extension_once,
 )
 from ib_position_sync.position_store import sync_broker_positions_once
 from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG
+from ib_trader.trade_store import TRADE_INTENTS_TABLE_NAME
 
 setup_logging()
 logger = get_logger(__name__)
 
 EXECUTION_LOOP_SLEEP_SECONDS = 1
 NEW_INTENTS_LIMIT = 20
-MAX_NEW_INTENT_AGE_SECONDS = 10
+MAX_NEW_INTENT_AGE_SECONDS = int(
+    getattr(DEFAULT_SIGNAL_CONFIG, "decision_pipeline_max_age_seconds", 30)
+)
 EXECUTION_HEARTBEAT_INTERVAL_SECONDS = 60
 
 # Hard safety timeouts: execution-loop не должен зависать из-за IB disconnect,
@@ -72,6 +84,7 @@ PROTECTIVE_EMERGENCY_CLOSE_TIMEOUT_SECONDS = 45.0
 SLOT_LOSS_EXTENSION_TIMEOUT_SECONDS = 90.0
 SLOT_CLOSE_RECOVERY_TIMEOUT_SECONDS = 90.0
 EXECUTION_STATS_RECONCILE_TIMEOUT_SECONDS = 20.0
+UNCERTAIN_EXECUTION_RECONCILE_TIMEOUT_SECONDS = 20.0
 MARKET_INTENT_EXECUTION_TIMEOUT_SECONDS = 90.0
 LIMIT_INTENT_EXECUTION_TIMEOUT_EXTRA_SECONDS = 30.0
 DEFAULT_LIMIT_INTENT_EXECUTION_TIMEOUT_SECONDS = 630.0
@@ -456,35 +469,33 @@ async def wait_for_protective_exit_order_working_or_done(
         status = str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
         role_value = str(role).lower()
         last_error = order_service.monitor.last_error(order_id)
+        held_until_rth_error = order_service.monitor.find_error(order_id, code=399)
 
         # code=399 для protective STOP означает, что ордер принят в PreSubmitted,
         # но будет реально выставлен только после начала RTH. Такая позиция сейчас
         # не защищена, поэтому это не benign warning.
         if (
                 role_value in {"stop-loss", "stop_loss"}
-                and last_error is not None
-                and int(getattr(last_error, "code", 0) or 0) == 399
+                and held_until_rth_error is not None
         ):
             raise RuntimeError(
                 f"protective {role} order is held until RTH by broker: "
                 f"order_id={order_id}, order_ref={order_ref}, status={status}, "
-                f"ib_error={describe_ib_error(last_error)}"
+                f"ib_error={describe_ib_error(held_until_rth_error)}"
             )
 
         if status in PROTECTIVE_EXIT_ORDER_ACCEPTED_STATUSES:
             # Даём errorEvent короткое время дойти после смены статуса.
             if role_value in {"stop-loss", "stop_loss"}:
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(0.50)
                 last_error = order_service.monitor.last_error(order_id)
+                held_until_rth_error = order_service.monitor.find_error(order_id, code=399)
 
-                if (
-                        last_error is not None
-                        and int(getattr(last_error, "code", 0) or 0) == 399
-                ):
+                if held_until_rth_error is not None:
                     raise RuntimeError(
                         f"protective {role} order is held until RTH by broker: "
                         f"order_id={order_id}, order_ref={order_ref}, status={status}, "
-                        f"ib_error={describe_ib_error(last_error)}"
+                        f"ib_error={describe_ib_error(held_until_rth_error)}"
                     )
 
             return status
@@ -656,6 +667,7 @@ async def run_protective_order_price_watchdog_once(*, order_service: OrderServic
     stop_orders = [
         order for order in active_orders
         if str(order.get("role", "")).upper() == PROTECTIVE_ORDER_ROLE_STOP_LOSS
+        and str(order.get("status", "")).upper() == "ACTIVE"
         and order.get("stop_price") is not None
     ]
 
@@ -994,6 +1006,403 @@ async def place_protective_orders_after_entry(*, conn, order_service: OrderServi
         )
 
 
+def read_executed_entries_missing_protective_stop() -> list[dict[str, Any]]:
+    conn = get_trade_db_connection()
+
+    try:
+        initialize_execution_db(conn)
+        initialize_protective_order_db(conn)
+        rows = conn.execute(
+            f"""
+            SELECT
+                ti.trade_intent_id,
+                ti.instrument_code,
+                ti.target_side,
+                ti.target_qty
+            FROM {TRADE_INTENTS_TABLE_NAME} AS ti
+            WHERE ti.status = 'EXECUTED'
+              AND ti.action IN ('OPEN_POSITION', 'REVERSE_POSITION')
+              AND ti.target_side IN ('LONG', 'SHORT')
+              AND ti.target_qty > 0
+              AND ti.trade_intent_id = (
+                  SELECT ti2.trade_intent_id
+                  FROM {TRADE_INTENTS_TABLE_NAME} AS ti2
+                  WHERE ti2.instrument_code = ti.instrument_code
+                    AND ti2.status = 'EXECUTED'
+                    AND ti2.action IN (
+                        'OPEN_POSITION',
+                        'REVERSE_POSITION',
+                        'CLOSE_POSITION'
+                    )
+                  ORDER BY
+                    COALESCE(
+                        ti2.finished_at_ts,
+                        ti2.sent_at_ts,
+                        ti2.updated_at_ts,
+                        ti2.created_at_ts
+                    ) DESC,
+                    ti2.trade_intent_id DESC
+                  LIMIT 1
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM {PROTECTIVE_ORDERS_TABLE_NAME} AS po
+                  WHERE po.parent_trade_intent_id = ti.trade_intent_id
+                    AND po.role = 'STOP_LOSS'
+                    AND po.status IN ('ACTIVE', 'UNPROTECTED')
+              )
+            ORDER BY ti.trade_intent_id
+            """
+        ).fetchall()
+
+        return [
+            {
+                "trade_intent_id": int(row[0]),
+                "instrument_code": str(row[1]),
+                "target_side": str(row[2]).upper(),
+                "target_qty": float(row[3]),
+            }
+            for row in rows
+        ]
+
+    finally:
+        conn.close()
+
+
+async def adopt_live_protective_orders_for_intent(
+        *,
+        conn,
+        order_service: OrderService,
+        intent,
+) -> bool:
+    """Adopt a live protective set only when a valid broker STOP exists.
+
+    A TP-only remainder is cancelled and confirmed before a fresh pair is placed;
+    otherwise a second TP could later open an unintended reverse position.
+    """
+    refresh_ok, _ = await refresh_ib_open_orders_if_possible(order_service)
+    if not refresh_ok:
+        return False
+
+    expected_refs = {
+        f"{intent.order_ref}{STOP_LOSS_ORDER_REF_SUFFIX}": PROTECTIVE_ORDER_ROLE_STOP_LOSS,
+        f"{intent.order_ref}{TAKE_PROFIT_ORDER_REF_SUFFIX}": PROTECTIVE_ORDER_ROLE_TAKE_PROFIT,
+    }
+    expected_action = "SELL" if str(intent.target_side).upper() == "LONG" else "BUY"
+    expected_quantity = int(float(intent.target_qty))
+
+    try:
+        open_trades = list(order_service.ib.openTrades() or [])
+    except Exception:
+        return False
+
+    matching_orders: list[dict[str, Any]] = []
+
+    for trade in open_trades:
+        order = getattr(trade, "order", None)
+        if order is None:
+            continue
+
+        order_ref = str(getattr(order, "orderRef", "") or "")
+        role = expected_refs.get(order_ref)
+        if role is None:
+            continue
+
+        status = str(
+            getattr(getattr(trade, "orderStatus", None), "status", "") or ""
+        )
+        if status not in PROTECTIVE_EXIT_ORDER_ACCEPTED_STATUSES:
+            continue
+
+        order_id = int(getattr(order, "orderId", 0) or 0)
+        quantity = int(float(getattr(order, "totalQuantity", 0) or 0))
+        order_action = str(getattr(order, "action", "") or "").upper()
+        if order_id <= 0 or quantity <= 0:
+            continue
+
+        matching_orders.append({
+            "trade": trade,
+            "role": role,
+            "order": order,
+            "order_ref": order_ref,
+            "order_id": order_id,
+            "quantity": quantity,
+            "order_action": order_action,
+            "is_valid": (
+                quantity == expected_quantity
+                and order_action == expected_action
+            ),
+        })
+
+    valid_stop_exists = any(
+        item["role"] == PROTECTIVE_ORDER_ROLE_STOP_LOSS
+        and bool(item["is_valid"])
+        for item in matching_orders
+    )
+
+    if not valid_stop_exists:
+        for item in matching_orders:
+            order_id = int(item["order_id"])
+            await order_service.cancel_order_id(order_id)
+            done = await order_service.monitor.wait_for_done(
+                item["trade"],
+                timeout=5.0,
+                poll_interval=0.10,
+            )
+            if not done.done or str(done.status) not in {"Cancelled", "ApiCancelled"}:
+                raise RuntimeError(
+                    f"could not confirm cancellation of leftover protective order: "
+                    f"order_id={order_id}, status={done.status}, timed_out={done.timed_out}"
+                )
+        return False
+
+    for item in matching_orders:
+        if not bool(item["is_valid"]):
+            continue
+
+        order = item["order"]
+        role = str(item["role"])
+        order_type = str(getattr(order, "orderType", "") or "").upper()
+        limit_price = getattr(order, "lmtPrice", None)
+        stop_price = getattr(order, "auxPrice", None)
+        oca_group = str(getattr(order, "ocaGroup", "") or "") or None
+
+        record_protective_order(
+            conn,
+            instrument_code=intent.instrument_code,
+            parent_trade_intent_id=int(intent.trade_intent_id),
+            role=role,
+            order_ref=str(item["order_ref"]),
+            order_id=int(item["order_id"]),
+            order_action=str(item["order_action"]),
+            order_quantity=int(item["quantity"]),
+            order_type=order_type or (
+                "STP" if role == PROTECTIVE_ORDER_ROLE_STOP_LOSS else "LIMIT"
+            ),
+            limit_price=(
+                None
+                if role == PROTECTIVE_ORDER_ROLE_STOP_LOSS
+                else float(limit_price)
+            ),
+            stop_price=(
+                float(stop_price)
+                if role == PROTECTIVE_ORDER_ROLE_STOP_LOSS
+                else None
+            ),
+            oca_group=oca_group,
+        )
+
+    conn.commit()
+    return True
+
+
+async def restore_executed_entries_missing_protection(
+        *,
+        order_service: OrderService,
+) -> None:
+    candidates = read_executed_entries_missing_protective_stop()
+    if not candidates:
+        return
+
+    snapshots = await asyncio.wait_for(
+        sync_broker_positions_once(order_service.ib),
+        timeout=float(PROTECTIVE_EMERGENCY_SYNC_TIMEOUT_SECONDS),
+    )
+
+    for candidate in candidates:
+        snapshot = find_snapshot(
+            snapshots,
+            instrument_code=candidate["instrument_code"],
+        )
+        snapshot_side = (
+            "FLAT"
+            if snapshot is None
+            else str(snapshot.side).upper()
+        )
+        snapshot_qty = (
+            0.0
+            if snapshot is None
+            else float(snapshot.quantity)
+        )
+
+        if (
+                snapshot_side != candidate["target_side"]
+                or abs(snapshot_qty - candidate["target_qty"]) > 1e-9
+        ):
+            continue
+
+        intent, result = read_executed_trade_intent_and_result_for_notification(
+            trade_intent_id=candidate["trade_intent_id"],
+        )
+        if intent is None or result is None:
+            continue
+
+        conn = get_trade_db_connection()
+        try:
+            initialize_execution_db(conn)
+
+            if has_active_protective_stop_for_parent(
+                    conn,
+                    parent_trade_intent_id=intent.trade_intent_id,
+            ):
+                continue
+
+            try:
+                adopted_stop = await adopt_live_protective_orders_for_intent(
+                    conn=conn,
+                    order_service=order_service,
+                    intent=intent,
+                )
+            except Exception as exc:
+                await emergency_close_position_after_protective_failure(
+                    order_service=order_service,
+                    instrument_code=intent.instrument_code,
+                    reason=(
+                        "missing_protection_recovery_could_not_clean_leftover_orders; "
+                        f"trade_intent_id={intent.trade_intent_id}; "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                )
+                continue
+
+            if adopted_stop:
+                log_info(
+                    logger,
+                    (
+                        f"{intent.instrument_code}: adopted live protective STOP after execution restart: "
+                        f"trade_intent_id={intent.trade_intent_id}"
+                    ),
+                    to_telegram=False,
+                )
+                continue
+
+            if result.avg_fill_price is None:
+                await emergency_close_position_after_protective_failure(
+                    order_service=order_service,
+                    instrument_code=intent.instrument_code,
+                    reason=(
+                        "executed_entry_missing_protection_and_avg_fill_market_close; "
+                        f"trade_intent_id={intent.trade_intent_id}; "
+                        f"order_id={result.order_id}"
+                    ),
+                )
+                continue
+
+            await place_protective_orders_after_entry(
+                conn=conn,
+                order_service=order_service,
+                intent=intent,
+                result=result,
+            )
+            conn.commit()
+            log_warning(
+                logger,
+                (
+                    f"{intent.instrument_code}: restored missing protective orders after execution restart: "
+                    f"trade_intent_id={intent.trade_intent_id}, order_id={result.order_id}"
+                ),
+                to_telegram=True,
+            )
+
+        finally:
+            conn.close()
+
+async def reconcile_uncertain_executions_and_restore_protection(
+        *,
+        order_service: OrderService,
+) -> None:
+    events = await reconcile_uncertain_trade_intents_once(
+        order_service=order_service,
+    )
+
+    for event in events:
+        if str(event.log_level).upper() == "WARNING":
+            log_warning(logger, event.message, to_telegram=True)
+        else:
+            log_info(logger, event.message, to_telegram=False)
+
+        if (
+                event.result is None
+                or event.result.status != ExecutionStatus.EXECUTED
+                or not event.needs_protection
+        ):
+            continue
+
+        conn = get_trade_db_connection()
+        try:
+            initialize_execution_db(conn)
+
+            snapshots = await asyncio.wait_for(
+                sync_broker_positions_once(order_service.ib),
+                timeout=float(PROTECTIVE_EMERGENCY_SYNC_TIMEOUT_SECONDS),
+            )
+            snapshot = find_snapshot(
+                snapshots,
+                instrument_code=event.intent.instrument_code,
+            )
+            snapshot_side = (
+                "FLAT"
+                if snapshot is None
+                else str(snapshot.side).upper()
+            )
+            snapshot_qty = (
+                0.0
+                if snapshot is None
+                else float(snapshot.quantity)
+            )
+
+            if (
+                    snapshot_side != str(event.intent.target_side).upper()
+                    or abs(snapshot_qty - float(event.intent.target_qty)) > 1e-9
+            ):
+                log_warning(
+                    logger,
+                    (
+                        f"{event.intent.instrument_code}: recovered execution will not receive "
+                        f"protective orders because broker position no longer matches target: "
+                        f"trade_intent_id={event.intent.trade_intent_id}, "
+                        f"target={event.intent.target_side}/{event.intent.target_qty:g}, "
+                        f"broker={snapshot_side}/{snapshot_qty:g}"
+                    ),
+                    to_telegram=True,
+                )
+                continue
+
+            if has_active_protective_stop_for_parent(
+                    conn,
+                    parent_trade_intent_id=event.intent.trade_intent_id,
+            ):
+                continue
+
+            if event.result.avg_fill_price is None:
+                await emergency_close_position_after_protective_failure(
+                    order_service=order_service,
+                    instrument_code=event.intent.instrument_code,
+                    reason=(
+                        "recovered_execution_missing_avg_fill_price_market_close; "
+                        f"trade_intent_id={event.intent.trade_intent_id}; "
+                        f"order_id={event.result.order_id}"
+                    ),
+                )
+                continue
+
+            await place_protective_orders_after_entry(
+                conn=conn,
+                order_service=order_service,
+                intent=event.intent,
+                result=event.result,
+            )
+            conn.commit()
+
+        finally:
+            conn.close()
+
+    # Covers the hard-kill window after EXECUTED commit but before TP/SL persistence.
+    await restore_executed_entries_missing_protection(
+        order_service=order_service,
+    )
+
+
 async def reconcile_and_notify_protective_orders(
         *,
         order_service: OrderService,
@@ -1024,6 +1433,17 @@ async def reconcile_and_notify_protective_orders(
             ),
             to_telegram=False,
         )
+
+        if bool(reconciled_protective_order.get("requires_market_close")):
+            await emergency_close_position_after_protective_failure(
+                order_service=order_service,
+                instrument_code=str(reconciled_protective_order["instrument_code"]),
+                reason=(
+                    str(reconciled_protective_order.get("reason") or "protective order unprotected")
+                    + f"; protective_order_id={reconciled_protective_order.get('order_id')}"
+                ),
+            )
+            continue
 
         if str(reconciled_protective_order.get("event", "")).upper() != "FILLED":
             continue
@@ -1067,6 +1487,213 @@ async def reconcile_and_notify_protective_orders(
             )
 
 
+async def process_new_trade_intents_once(
+        *,
+        order_service: OrderService,
+        deal_telegram_sender=None,
+        deal_message_thread_id=None,
+        deal_status_message_thread_id=None,
+) -> None:
+    try:
+        intents = read_new_trade_intents(
+            limit=NEW_INTENTS_LIMIT,
+            max_age_seconds=MAX_NEW_INTENT_AGE_SECONDS,
+        )
+
+    except Exception as exc:
+        log_warning(
+            logger,
+            f"read_new_trade_intents failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
+            to_telegram=True,
+        )
+        intents = []
+
+    if intents and not is_ib_api_connected(order_service):
+        log_warning(
+            logger,
+            (
+                f"ib_execution deferred {len(intents)} new trade_intent(s) because IB API is disconnected; "
+                f"they will be retried before max age or expired by read_new_trade_intents"
+            ),
+            to_telegram=False,
+        )
+        intents = []
+
+    for intent in intents:
+        if not is_ib_api_connected(order_service):
+            log_warning(
+                logger,
+                (
+                    f"ib_execution stops processing new intents because IB API disconnected before "
+                    f"trade_intent={intent.trade_intent_id}"
+                ),
+                to_telegram=False,
+            )
+            break
+
+        conn = get_trade_db_connection()
+        try:
+            initialize_execution_db(conn)
+
+            mark_trade_intent_sending(conn, trade_intent_id=intent.trade_intent_id)
+            conn.commit()
+
+            async def on_order_submitted(order_id: int, order_action: str, order_quantity: int) -> None:
+                mark_trade_intent_order_submitted(
+                    conn,
+                    trade_intent_id=intent.trade_intent_id,
+                    order_id=order_id,
+                    order_action=order_action,
+                    order_quantity=order_quantity,
+                )
+                conn.commit()
+
+            await cancel_protective_orders_before_position_change(
+                conn=conn,
+                order_service=order_service,
+                intent=intent,
+            )
+            conn.commit()
+
+            result = await asyncio.wait_for(
+                execute_trade_intent(
+                    order_service=order_service,
+                    intent=intent,
+                    order_submitted_callback=on_order_submitted,
+                ),
+                timeout=float(get_trade_intent_execution_timeout_seconds(intent)),
+            )
+
+            write_trade_intent_execution_result(conn, result=result)
+            conn.commit()
+
+            await place_protective_orders_after_entry(
+                conn=conn,
+                order_service=order_service,
+                intent=intent,
+                result=result,
+            )
+            conn.commit()
+
+            log_info(
+                logger,
+                (
+                    f"{intent.instrument_code}: executed trade_intent={intent.trade_intent_id}, "
+                    f"action={intent.action}, order_type={intent.order_type}, "
+                    f"order_id={result.order_id}, order_action={result.order_action}, "
+                    f"qty={result.order_quantity}, avg_fill={result.avg_fill_price}, "
+                    f"realized_pnl={result.realized_pnl}, commission={result.total_commission}"
+                ),
+                to_telegram=False,
+            )
+
+            try:
+                await send_executed_deal_notification(
+                    telegram_sender=deal_telegram_sender,
+                    message_thread_id=deal_message_thread_id,
+                    intent=intent,
+                    result=result,
+                )
+            except Exception as notification_exc:
+                log_warning(
+                    logger,
+                    (
+                        f"deal notification failed "
+                        f"trade_intent={intent.trade_intent_id}: "
+                        f"{type(notification_exc).__name__}: {notification_exc}"
+                    ),
+                    to_telegram=True,
+                )
+
+            try:
+                await send_deal_status_notification(
+                    telegram_sender=deal_telegram_sender,
+                    message_thread_id=deal_status_message_thread_id,
+                    intent=intent,
+                    result=result,
+                )
+            except Exception as notification_exc:
+                log_warning(
+                    logger,
+                    (
+                        f"deal status notification failed "
+                        f"trade_intent={intent.trade_intent_id}: "
+                        f"{type(notification_exc).__name__}: {notification_exc}"
+                    ),
+                    to_telegram=True,
+                )
+
+        except Exception as exc:
+            error_text = f"{type(exc).__name__}: {exc}"
+            submitted_order_id = getattr(exc, "order_id", None)
+            submitted_order_action = getattr(exc, "order_action", None)
+            submitted_order_quantity = getattr(exc, "order_quantity", None)
+
+            try:
+                submission_state = read_trade_intent_submission_state(
+                    conn,
+                    trade_intent_id=intent.trade_intent_id,
+                ) or {}
+
+                submitted_order_id = (
+                    submission_state.get("order_id")
+                    or submitted_order_id
+                )
+                submitted_order_action = (
+                    submission_state.get("order_action")
+                    or submitted_order_action
+                )
+                submitted_order_quantity = (
+                    submission_state.get("order_quantity")
+                    or submitted_order_quantity
+                )
+
+                result_status = (
+                    ExecutionStatus.RECONCILING
+                    if submitted_order_id is not None
+                    else ExecutionStatus.FAILED
+                )
+                failure_result = ExecutionResult(
+                    trade_intent_id=intent.trade_intent_id,
+                    order_id=submitted_order_id,
+                    order_action=submitted_order_action,
+                    order_quantity=submitted_order_quantity,
+                    status=result_status,
+                    avg_fill_price=None,
+                    total_commission=None,
+                    realized_pnl=None,
+                    error_text=error_text,
+                )
+                write_trade_intent_execution_result(
+                    conn,
+                    result=failure_result,
+                )
+                conn.commit()
+
+                await send_deal_status_notification(
+                    telegram_sender=deal_telegram_sender,
+                    message_thread_id=deal_status_message_thread_id,
+                    intent=intent,
+                    result=failure_result,
+                )
+            finally:
+                state_text = (
+                    "requires broker reconciliation"
+                    if submitted_order_id is not None
+                    else "failed before broker submission was recorded"
+                )
+                log_warning(
+                    logger,
+                    f"ib_execution trade_intent={intent.trade_intent_id} {state_text}: "
+                    f"{error_text}\n{traceback.format_exc()}",
+                    to_telegram=True,
+                )
+
+        finally:
+            conn.close()
+
+
+
 async def run_execution_loop(
         order_service: OrderService,
         *,
@@ -1088,6 +1715,30 @@ async def run_execution_loop(
     next_slot_close_recovery_ts = 0
 
     while True:
+        # NEW intents are the fastest path. They share one absolute 30-second
+        # deadline with signal generation and must not wait for broker recovery.
+        await process_new_trade_intents_once(
+            order_service=order_service,
+            deal_telegram_sender=deal_telegram_sender,
+            deal_message_thread_id=deal_message_thread_id,
+            deal_status_message_thread_id=deal_status_message_thread_id,
+        )
+
+        try:
+            await asyncio.wait_for(
+                reconcile_uncertain_executions_and_restore_protection(
+                    order_service=order_service,
+                ),
+                timeout=float(UNCERTAIN_EXECUTION_RECONCILE_TIMEOUT_SECONDS),
+            )
+        except Exception as exc:
+            log_warning(
+                logger,
+                f"uncertain execution reconciliation failed: "
+                f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}",
+                to_telegram=True,
+            )
+
         try:
             await asyncio.wait_for(
                 reconcile_and_notify_protective_orders(
@@ -1311,169 +1962,12 @@ async def run_execution_loop(
                 to_telegram=True,
             )
 
-        try:
-            intents = read_new_trade_intents(
-                limit=NEW_INTENTS_LIMIT,
-                max_age_seconds=MAX_NEW_INTENT_AGE_SECONDS,
-            )
-
-        except Exception as exc:
-            log_warning(
-                logger,
-                f"read_new_trade_intents failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
-                to_telegram=True,
-            )
-            intents = []
-
-        if intents and not is_ib_api_connected(order_service):
-            log_warning(
-                logger,
-                (
-                    f"ib_execution deferred {len(intents)} new trade_intent(s) because IB API is disconnected; "
-                    f"they will be retried before max age or expired by read_new_trade_intents"
-                ),
-                to_telegram=False,
-            )
-            intents = []
-
-        for intent in intents:
-            if not is_ib_api_connected(order_service):
-                log_warning(
-                    logger,
-                    (
-                        f"ib_execution stops processing new intents because IB API disconnected before "
-                        f"trade_intent={intent.trade_intent_id}"
-                    ),
-                    to_telegram=False,
-                )
-                break
-
-            conn = get_trade_db_connection()
-            try:
-                initialize_execution_db(conn)
-
-                mark_trade_intent_sending(conn, trade_intent_id=intent.trade_intent_id)
-                conn.commit()
-
-                async def on_order_submitted(order_id: int, order_action: str, order_quantity: int) -> None:
-                    mark_trade_intent_order_submitted(
-                        conn,
-                        trade_intent_id=intent.trade_intent_id,
-                        order_id=order_id,
-                        order_action=order_action,
-                        order_quantity=order_quantity,
-                    )
-                    conn.commit()
-
-                await cancel_protective_orders_before_position_change(
-                    conn=conn,
-                    order_service=order_service,
-                    intent=intent,
-                )
-                conn.commit()
-
-                result = await asyncio.wait_for(
-                    execute_trade_intent(
-                        order_service=order_service,
-                        intent=intent,
-                        order_submitted_callback=on_order_submitted,
-                    ),
-                    timeout=float(get_trade_intent_execution_timeout_seconds(intent)),
-                )
-
-                write_trade_intent_execution_result(conn, result=result)
-                conn.commit()
-
-                await place_protective_orders_after_entry(
-                    conn=conn,
-                    order_service=order_service,
-                    intent=intent,
-                    result=result,
-                )
-                conn.commit()
-
-                log_info(
-                    logger,
-                    (
-                        f"{intent.instrument_code}: executed trade_intent={intent.trade_intent_id}, "
-                        f"action={intent.action}, order_type={intent.order_type}, "
-                        f"order_id={result.order_id}, order_action={result.order_action}, "
-                        f"qty={result.order_quantity}, avg_fill={result.avg_fill_price}, "
-                        f"realized_pnl={result.realized_pnl}, commission={result.total_commission}"
-                    ),
-                    to_telegram=False,
-                )
-
-                try:
-                    await send_executed_deal_notification(
-                        telegram_sender=deal_telegram_sender,
-                        message_thread_id=deal_message_thread_id,
-                        intent=intent,
-                        result=result,
-                    )
-                except Exception as notification_exc:
-                    log_warning(
-                        logger,
-                        (
-                            f"deal notification failed "
-                            f"trade_intent={intent.trade_intent_id}: "
-                            f"{type(notification_exc).__name__}: {notification_exc}"
-                        ),
-                        to_telegram=True,
-                    )
-
-                try:
-                    await send_deal_status_notification(
-                        telegram_sender=deal_telegram_sender,
-                        message_thread_id=deal_status_message_thread_id,
-                        intent=intent,
-                        result=result,
-                    )
-                except Exception as notification_exc:
-                    log_warning(
-                        logger,
-                        (
-                            f"deal status notification failed "
-                            f"trade_intent={intent.trade_intent_id}: "
-                            f"{type(notification_exc).__name__}: {notification_exc}"
-                        ),
-                        to_telegram=True,
-                    )
-
-            except Exception as exc:
-                error_text = f"{type(exc).__name__}: {exc}"
-
-                try:
-                    failure_result = ExecutionResult(
-                        trade_intent_id=intent.trade_intent_id,
-                        order_id=getattr(exc, "order_id", None),
-                        order_action=None,
-                        order_quantity=None,
-                        status=ExecutionStatus.FAILED,
-                        avg_fill_price=None,
-                        total_commission=None,
-                        realized_pnl=None,
-                        error_text=error_text,
-                    )
-                    write_trade_intent_execution_result(conn, result=failure_result)
-                    conn.commit()
-
-                    await send_deal_status_notification(
-                        telegram_sender=deal_telegram_sender,
-                        message_thread_id=deal_status_message_thread_id,
-                        intent=intent,
-                        result=failure_result,
-                    )
-                finally:
-                    log_warning(
-                        logger,
-                        f"ib_execution failed trade_intent={intent.trade_intent_id}: {error_text}\n"
-                        f"{traceback.format_exc()}",
-                        to_telegram=True,
-                    )
-
-            finally:
-                conn.close()
+        await process_new_trade_intents_once(
+            order_service=order_service,
+            deal_telegram_sender=deal_telegram_sender,
+            deal_message_thread_id=deal_message_thread_id,
+            deal_status_message_thread_id=deal_status_message_thread_id,
+        )
 
         now_ts = int(time.time())
         if now_ts >= next_heartbeat_ts:

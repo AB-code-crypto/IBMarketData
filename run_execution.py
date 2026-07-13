@@ -17,6 +17,7 @@ from core.logger import (
     setup_telegram_logging,
     wait_telegram_logging,
 )
+from core.service_instance_lock import service_instance_lock
 from core.telegram_sender import TelegramSender
 from ib_execution.protective_execution_runner import run_execution_loop
 from ib_execution.order_service import OrderService
@@ -120,7 +121,17 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
+    execution_instance_key = (
+        f"{ExecutionIbSettings.ib_host}:"
+        f"{ExecutionIbSettings.ib_port}:"
+        f"{ExecutionIbSettings.ib_client_id}"
+    )
+
+    with service_instance_lock(
+        "ib_execution",
+        instance_key=execution_instance_key,
+    ):
+        try:
+            asyncio.run(main())
+        except KeyboardInterrupt:
+            pass

@@ -27,6 +27,10 @@ class SignalConfig:
 
     max_job_bar_lag_seconds: int = 60
 
+    # Единый абсолютный бюджет доставки решения:
+    # signal_bar -> signal_event -> trade_intent -> execution.
+    decision_pipeline_max_age_seconds: int = 30
+
     # ROLLING-режим.
     rolling_signal_step_seconds: int = 60  # считаем сигнал не на каждом баре, а через это кол-во секунд
     rolling_back_minutes: int = 90  # Смотрим на столько минут назад

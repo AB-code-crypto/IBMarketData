@@ -13,6 +13,12 @@ PROTECTIVE_ORDER_STATUS_ACTIVE = "ACTIVE"
 PROTECTIVE_ORDER_STATUS_CANCELLED = "CANCELLED"
 PROTECTIVE_ORDER_STATUS_FILLED = "FILLED"
 PROTECTIVE_ORDER_STATUS_FAILED = "FAILED"
+PROTECTIVE_ORDER_STATUS_UNPROTECTED = "UNPROTECTED"
+
+PROTECTIVE_ORDER_ACTIONABLE_STATUSES = {
+    PROTECTIVE_ORDER_STATUS_ACTIVE,
+    PROTECTIVE_ORDER_STATUS_UNPROTECTED,
+}
 
 
 PROTECTIVE_ORDER_ROLES = {
@@ -283,11 +289,14 @@ def read_active_protective_orders(conn, *, instrument_code: str | None = None) -
     params: tuple[Any, ...]
     where_instrument = ""
 
+    actionable_statuses = sorted(PROTECTIVE_ORDER_ACTIONABLE_STATUSES)
+    status_placeholders = ", ".join("?" for _ in actionable_statuses)
+
     if instrument_code is None:
-        params = (PROTECTIVE_ORDER_STATUS_ACTIVE,)
+        params = tuple(actionable_statuses)
     else:
         where_instrument = "AND instrument_code = ?"
-        params = (PROTECTIVE_ORDER_STATUS_ACTIVE, str(instrument_code))
+        params = (*actionable_statuses, str(instrument_code))
 
     rows = conn.execute(
         f"""
@@ -316,7 +325,7 @@ def read_active_protective_orders(conn, *, instrument_code: str | None = None) -
             updated_at_ts,
             finished_at_ts
         FROM {PROTECTIVE_ORDERS_TABLE_NAME}
-        WHERE status = ?
+        WHERE status IN ({status_placeholders})
           {where_instrument}
         ORDER BY created_at_ts ASC, protective_order_id ASC
         """,
@@ -324,6 +333,31 @@ def read_active_protective_orders(conn, *, instrument_code: str | None = None) -
     ).fetchall()
 
     return [row_to_protective_order(row) for row in rows]
+
+
+def has_active_protective_stop_for_parent(
+        conn,
+        *,
+        parent_trade_intent_id: int,
+) -> bool:
+    initialize_protective_order_db(conn)
+
+    row = conn.execute(
+        f"""
+        SELECT 1
+        FROM {PROTECTIVE_ORDERS_TABLE_NAME}
+        WHERE parent_trade_intent_id = ?
+          AND role = ?
+          AND status IN ('ACTIVE', 'UNPROTECTED')
+        LIMIT 1
+        """,
+        (
+            int(parent_trade_intent_id),
+            PROTECTIVE_ORDER_ROLE_STOP_LOSS,
+        ),
+    ).fetchone()
+
+    return row is not None
 
 
 def mark_protective_order_status(
@@ -336,7 +370,11 @@ def mark_protective_order_status(
     initialize_protective_order_db(conn)
     now_ts = int(time.time())
     status_value = str(status).upper()
-    finished_at_ts = now_ts if status_value != PROTECTIVE_ORDER_STATUS_ACTIVE else None
+    finished_at_ts = (
+        None
+        if status_value in PROTECTIVE_ORDER_ACTIONABLE_STATUSES
+        else now_ts
+    )
 
     conn.execute(
         f"""

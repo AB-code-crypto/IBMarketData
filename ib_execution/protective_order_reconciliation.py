@@ -18,6 +18,8 @@ from ib_execution.protective_order_store import (
     PROTECTIVE_ORDER_STATUS_ACTIVE,
     PROTECTIVE_ORDER_STATUS_CANCELLED,
     PROTECTIVE_ORDER_STATUS_FILLED,
+    PROTECTIVE_ORDER_STATUS_FAILED,
+    PROTECTIVE_ORDER_STATUS_UNPROTECTED,
     get_trade_db_connection,
     initialize_protective_order_db,
     read_active_protective_orders,
@@ -57,21 +59,26 @@ def normalize_protective_role(role: str) -> str:
     return str(role).upper()
 
 
-async def refresh_ib_executions_if_possible(order_service) -> None:
+async def refresh_ib_executions_if_possible(order_service) -> bool:
     try:
         req_async = getattr(order_service.ib, "reqExecutionsAsync", None)
 
         if req_async is not None:
             await req_async()
-            return
+            return True
 
         req_sync = getattr(order_service.ib, "reqExecutions", None)
 
         if req_sync is not None:
-            req_sync()
+            maybe_awaitable = req_sync()
+            if inspect.isawaitable(maybe_awaitable):
+                await maybe_awaitable
+            return True
 
     except Exception:
-        return
+        return False
+
+    return False
 
 
 async def refresh_ib_open_orders_if_possible(order_service) -> tuple[bool, str | None]:
@@ -266,6 +273,19 @@ def collect_protective_order_fill_statistics(order_service, protective_order: di
             return {
                 "filled": False,
                 "cancelled": True,
+                "status": status,
+                "avg_fill_price": avg_fill_price,
+                "total_commission": total_commission,
+                "realized_pnl": realized_pnl,
+                "filled_qty": filled_qty,
+                "filled_at_ts": filled_at_ts,
+            }
+
+        if status in {"Inactive", "Rejected"}:
+            return {
+                "filled": False,
+                "cancelled": False,
+                "rejected": True,
                 "status": status,
                 "avg_fill_price": avg_fill_price,
                 "total_commission": total_commission,
@@ -495,7 +515,7 @@ def mark_orphan_protective_cancelled(
             updated_at_ts = ?,
             finished_at_ts = ?
         WHERE order_id = ?
-          AND status = ?
+          AND status IN (?, ?)
         """,
         (
             PROTECTIVE_ORDER_STATUS_CANCELLED,
@@ -504,6 +524,45 @@ def mark_orphan_protective_cancelled(
             now_ts,
             int(protective_order["order_id"]),
             PROTECTIVE_ORDER_STATUS_ACTIVE,
+            PROTECTIVE_ORDER_STATUS_UNPROTECTED,
+        ),
+    )
+
+
+def mark_protective_runtime_state(
+        conn,
+        *,
+        protective_order: dict[str, Any],
+        status: str,
+        reason: str,
+) -> None:
+    now_ts = int(time.time())
+    status_value = str(status).upper()
+    finished_at_ts = (
+        None
+        if status_value in {
+            PROTECTIVE_ORDER_STATUS_ACTIVE,
+            PROTECTIVE_ORDER_STATUS_UNPROTECTED,
+        }
+        else now_ts
+    )
+
+    conn.execute(
+        f"""
+        UPDATE {PROTECTIVE_ORDERS_TABLE_NAME}
+        SET
+            status = ?,
+            error_text = ?,
+            updated_at_ts = ?,
+            finished_at_ts = ?
+        WHERE order_id = ?
+        """,
+        (
+            status_value,
+            str(reason),
+            now_ts,
+            finished_at_ts,
+            int(protective_order["order_id"]),
         ),
     )
 
@@ -516,6 +575,8 @@ def build_reconciled_event(
         filled_qty: float = 0.0,
         avg_fill_price: float | None = None,
         realized_pnl: float | None = None,
+        requires_market_close: bool = False,
+        reason: str | None = None,
 ) -> dict[str, Any]:
     return {
         "event": str(event).upper(),
@@ -527,6 +588,8 @@ def build_reconciled_event(
         "filled_qty": float(filled_qty),
         "avg_fill_price": avg_fill_price,
         "realized_pnl": realized_pnl,
+        "requires_market_close": bool(requires_market_close),
+        "reason": reason,
     }
 
 
@@ -577,6 +640,38 @@ def reconcile_terminal_protective_order(
                 filled_qty=float(statistics["filled_qty"]),
                 avg_fill_price=statistics["avg_fill_price"],
                 realized_pnl=statistics["realized_pnl"],
+            )
+        ]
+
+    if statistics.get("rejected"):
+        role = normalize_protective_role(protective_order["role"])
+        requires_market_close = role == PROTECTIVE_ORDER_ROLE_STOP_LOSS
+        target_status = (
+            PROTECTIVE_ORDER_STATUS_UNPROTECTED
+            if requires_market_close
+            else PROTECTIVE_ORDER_STATUS_FAILED
+        )
+        reason = (
+            f"broker protective order rejected/inactive: "
+            f"status={statistics.get('status') or 'missing'}"
+        )
+        mark_protective_runtime_state(
+            conn,
+            protective_order=protective_order,
+            status=target_status,
+            reason=reason,
+        )
+        conn.commit()
+
+        return [
+            build_reconciled_event(
+                event="UNPROTECTED" if requires_market_close else "FAILED",
+                protective_order=protective_order,
+                filled_qty=float(statistics.get("filled_qty") or 0.0),
+                avg_fill_price=statistics.get("avg_fill_price"),
+                realized_pnl=statistics.get("realized_pnl"),
+                requires_market_close=requires_market_close,
+                reason=reason,
             )
         ]
 
@@ -805,7 +900,7 @@ async def reconcile_protective_orders_once(*, order_service) -> list[dict[str, A
         if not active_orders:
             return []
 
-        await refresh_ib_executions_if_possible(order_service)
+        executions_refreshed = await refresh_ib_executions_if_possible(order_service)
 
         reconciled: list[dict[str, Any]] = []
         unresolved_orders: list[dict[str, Any]] = []
@@ -824,7 +919,21 @@ async def reconcile_protective_orders_once(*, order_service) -> list[dict[str, A
                 reconciled.extend(terminal_events)
                 continue
 
+            if (
+                    statistics.get("waiting_commission")
+                    or float(statistics.get("filled_qty") or 0.0) > 0.0
+            ):
+                continue
+
             if is_cached_broker_order_live(order_service, protective_order):
+                if str(protective_order.get("status", "")).upper() == PROTECTIVE_ORDER_STATUS_UNPROTECTED:
+                    mark_protective_runtime_state(
+                        conn,
+                        protective_order=protective_order,
+                        status=PROTECTIVE_ORDER_STATUS_ACTIVE,
+                        reason="broker protective order became live again",
+                    )
+                    conn.commit()
                 continue
 
             unresolved_orders.append(protective_order)
@@ -853,7 +962,21 @@ async def reconcile_protective_orders_once(*, order_service) -> list[dict[str, A
                 reconciled.extend(terminal_events)
                 continue
 
+            if (
+                    statistics.get("waiting_commission")
+                    or float(statistics.get("filled_qty") or 0.0) > 0.0
+            ):
+                continue
+
             if is_cached_broker_order_live(order_service, protective_order):
+                if str(protective_order.get("status", "")).upper() == PROTECTIVE_ORDER_STATUS_UNPROTECTED:
+                    mark_protective_runtime_state(
+                        conn,
+                        protective_order=protective_order,
+                        status=PROTECTIVE_ORDER_STATUS_ACTIVE,
+                        reason="broker protective order became live again",
+                    )
+                    conn.commit()
                 continue
 
             still_unresolved.append(protective_order)
@@ -884,10 +1007,39 @@ async def reconcile_protective_orders_once(*, order_service) -> list[dict[str, A
 
             side = str(snapshot.side).upper()
             quantity = float(snapshot.quantity)
+            role = normalize_protective_role(protective_order["role"])
 
             if side in {"LONG", "SHORT"} and quantity > 0.0:
-                # Позиция открыта, но order не найден в refreshed IB cache.
-                # Не скрываем потенциально опасное состояние локальным CANCELLED.
+                reason = (
+                    "protective order absent from refreshed IB open orders "
+                    "while broker position is open"
+                )
+                requires_market_close = role == PROTECTIVE_ORDER_ROLE_STOP_LOSS
+                target_status = (
+                    PROTECTIVE_ORDER_STATUS_UNPROTECTED
+                    if requires_market_close
+                    else PROTECTIVE_ORDER_STATUS_FAILED
+                )
+                mark_protective_runtime_state(
+                    conn,
+                    protective_order=protective_order,
+                    status=target_status,
+                    reason=reason,
+                )
+                conn.commit()
+                reconciled.append(
+                    build_reconciled_event(
+                        event="UNPROTECTED" if requires_market_close else "FAILED",
+                        protective_order=protective_order,
+                        requires_market_close=requires_market_close,
+                        reason=reason,
+                    )
+                )
+                continue
+
+            # Если executions refresh не подтвердился, FLAT ещё не означает orphan:
+            # TP/SL мог исполниться, но fill пока не попал в cache.
+            if not executions_refreshed:
                 continue
 
             orphan_reason = (
@@ -904,6 +1056,7 @@ async def reconcile_protective_orders_once(*, order_service) -> list[dict[str, A
                 build_reconciled_event(
                     event="ORPHANED",
                     protective_order=protective_order,
+                    reason=orphan_reason,
                 )
             )
 

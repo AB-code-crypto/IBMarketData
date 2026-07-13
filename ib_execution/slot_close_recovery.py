@@ -233,7 +233,7 @@ def read_unresolved_trade_intent_for_instrument(conn, *, instrument_code: str) -
             sent_at_ts
         FROM {TRADE_INTENTS_TABLE_NAME}
         WHERE instrument_code = ?
-          AND status IN ('NEW', 'SENDING', 'ACCEPTED')
+          AND status IN ('NEW', 'SENDING', 'ACCEPTED', 'RECONCILING')
         ORDER BY
             COALESCE(sent_at_ts, updated_at_ts, created_at_ts) DESC,
             trade_intent_id DESC
