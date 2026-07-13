@@ -6,6 +6,8 @@ from typing import Optional
 
 from ib_async import IB, Trade
 
+from core.ib_health import normalize_ib_message
+
 log = logging.getLogger(__name__)
 
 
@@ -80,11 +82,11 @@ class OrderMonitor:
                 err = args[0]
                 req_id = int(getattr(err, "id"))
                 code = int(getattr(err, "errorCode"))
-                msg = str(getattr(err, "errorString"))
+                msg = normalize_ib_message(str(getattr(err, "errorString")))
             else:
                 req_id = int(args[0])
                 code = int(args[1])
-                msg = str(args[2])
+                msg = normalize_ib_message(str(args[2]))
         except Exception:
             log.exception("Failed to parse IB errorEvent args=%r", args)
             return
@@ -96,6 +98,15 @@ class OrderMonitor:
             time_utc=datetime.now(timezone.utc),
         )
         self._errors_by_id[req_id] = error
+
+        # Эти коды остаются доступны через last_error(), но не являются
+        # аварийными ошибками execution:
+        # 202   — подтверждение отмены ордера;
+        # 10148 — ордер уже находится в PendingCancel;
+        # 2109  — outsideRth проигнорирован для данного типа ордера.
+        if code in {202, 10148, 2109}:
+            return
+
         log.warning("IB error: id=%s code=%s msg=%s", req_id, code, msg)
 
     async def wait_for_accept(

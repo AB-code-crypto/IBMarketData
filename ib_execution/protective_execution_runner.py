@@ -359,12 +359,20 @@ def get_protective_order_price_stale_max_seconds() -> int:
     return max(1, int(getattr(DEFAULT_SIGNAL_CONFIG, "max_job_bar_lag_seconds", 15)))
 
 
-def apply_protective_order_safety_flags(order, *, instrument_code: str) -> None:
+def apply_protective_order_safety_flags(
+        order,
+        *,
+        instrument_code: str,
+        role: str,
+) -> None:
     instrument_row = Instrument.get(str(instrument_code))
+    sec_type = "" if instrument_row is None else str(instrument_row.get("secType", "")).upper()
+    role_value = str(role).upper()
 
-    # Для CME futures IB игнорирует outsideRth и пишет warning 2109.
-    # Удаление флага не меняет фактическую доступность FUT protective orders.
-    if instrument_row is not None and str(instrument_row.get("secType", "")).upper() == "FUT":
+    # Для FUT outsideRth критичен для STOP: без него IB может удерживать стоп
+    # до начала RTH и присылать code=399. Для LIMIT take-profit этот флаг
+    # игнорируется IB и создаёт только benign code=2109, поэтому его не ставим.
+    if sec_type == "FUT" and role_value != PROTECTIVE_ORDER_ROLE_STOP_LOSS:
         return
 
     if hasattr(order, "outsideRth"):
@@ -446,8 +454,39 @@ async def wait_for_protective_exit_order_working_or_done(
 
     while True:
         status = str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
+        role_value = str(role).lower()
+        last_error = order_service.monitor.last_error(order_id)
+
+        # code=399 для protective STOP означает, что ордер принят в PreSubmitted,
+        # но будет реально выставлен только после начала RTH. Такая позиция сейчас
+        # не защищена, поэтому это не benign warning.
+        if (
+                role_value in {"stop-loss", "stop_loss"}
+                and last_error is not None
+                and int(getattr(last_error, "code", 0) or 0) == 399
+        ):
+            raise RuntimeError(
+                f"protective {role} order is held until RTH by broker: "
+                f"order_id={order_id}, order_ref={order_ref}, status={status}, "
+                f"ib_error={describe_ib_error(last_error)}"
+            )
 
         if status in PROTECTIVE_EXIT_ORDER_ACCEPTED_STATUSES:
+            # Даём errorEvent короткое время дойти после смены статуса.
+            if role_value in {"stop-loss", "stop_loss"}:
+                await asyncio.sleep(0.25)
+                last_error = order_service.monitor.last_error(order_id)
+
+                if (
+                        last_error is not None
+                        and int(getattr(last_error, "code", 0) or 0) == 399
+                ):
+                    raise RuntimeError(
+                        f"protective {role} order is held until RTH by broker: "
+                        f"order_id={order_id}, order_ref={order_ref}, status={status}, "
+                        f"ib_error={describe_ib_error(last_error)}"
+                    )
+
             return status
 
         if status in PROTECTIVE_EXIT_ORDER_FILLED_STATUSES:
@@ -820,6 +859,7 @@ async def place_protective_orders_after_entry(*, conn, order_service: OrderServi
             apply_protective_order_safety_flags(
                 stop_order,
                 instrument_code=instrument_code,
+                role=PROTECTIVE_ORDER_ROLE_STOP_LOSS,
             )
             specs.append({
                 "role": PROTECTIVE_ORDER_ROLE_STOP_LOSS,
@@ -841,6 +881,7 @@ async def place_protective_orders_after_entry(*, conn, order_service: OrderServi
             apply_protective_order_safety_flags(
                 take_profit_order,
                 instrument_code=instrument_code,
+                role=PROTECTIVE_ORDER_ROLE_TAKE_PROFIT,
             )
             specs.append({
                 "role": PROTECTIVE_ORDER_ROLE_TAKE_PROFIT,
