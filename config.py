@@ -1,59 +1,18 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
-ENV_PATH = BASE_DIR / ".env"
 
-# Загружаем .env рядом с config.py.
-# encoding="utf-8-sig" нужен на случай, если файл сохранён в Windows с BOM.
-load_dotenv(ENV_PATH, encoding="utf-8-sig")
+# В .env хранятся только чувствительные и зависящие от компьютера значения.
+load_dotenv(BASE_DIR / ".env", encoding="utf-8-sig")
 
-telegram_thread_id_connect_env = os.getenv("TELEGRAM_THREAD_ID_CONNECT")
-telegram_thread_id_deal_env = os.getenv("TELEGRAM_THREAD_ID_DEAL")
-telegram_thread_id_deal_status_env = os.getenv("TELEGRAM_THREAD_ID_DEAL_STATUS")
-telegram_thread_id_error_env = os.getenv("TELEGRAM_THREAD_ID_ERROR")
-
-
-def require_env_text(name: str) -> str:
-    value = str(os.getenv(name, "") or "").strip()
-    if not value:
-        raise RuntimeError(
-            f"Required environment variable {name} is missing or empty. "
-            f"Add it to {ENV_PATH}."
-        )
-    return value
-
-
-def read_env_bool(name: str, default: bool) -> bool:
-    raw = str(os.getenv(name, "") or "").strip().lower()
-    if not raw:
-        return bool(default)
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    raise RuntimeError(
-        f"Environment variable {name} must be true/false, got {raw!r}"
-    )
-
-
-def read_positive_env_float(name: str, default: float) -> float:
-    raw = str(os.getenv(name, str(default)) or "").strip()
-    try:
-        value = float(raw)
-    except ValueError as exc:
-        raise RuntimeError(
-            f"Environment variable {name} must be a number, got {raw!r}"
-        ) from exc
-    if value <= 0.0:
-        raise RuntimeError(
-            f"Environment variable {name} must be positive, got {value}"
-        )
-    return value
+telegram_thread_id_connect = os.getenv("TELEGRAM_THREAD_ID_CONNECT")
+telegram_thread_id_deal = os.getenv("TELEGRAM_THREAD_ID_DEAL")
+telegram_thread_id_deal_status = os.getenv("TELEGRAM_THREAD_ID_DEAL_STATUS")
+telegram_thread_id_error = os.getenv("TELEGRAM_THREAD_ID_ERROR")
 
 
 @dataclass
@@ -65,54 +24,42 @@ class Settings:
     ib_port: int = 7496  # 7497 - демо счёт, 7496 - реальный счёт
     ib_client_id: int = 200
 
-    # Обязательный account guard. На двух компьютерах здесь должны быть
-    # account ids соответствующих TWS-сессий.
-    ib_account_id: str = require_env_text("IB_ACCOUNT_ID")
+    # Чувствительный account id остаётся в .env.
+    ib_account_id: str = os.environ["IB_ACCOUNT_ID"].strip()
 
     # Clock guard: новые OPEN/REVERSE запрещены, если локальные часы
     # сильно расходятся с IB server time или sample давно не обновлялся.
-    ib_clock_max_abs_offset_seconds: float = float(
-        os.getenv("IB_CLOCK_MAX_ABS_OFFSET_SECONDS", "3.0")
-    )
-    ib_clock_health_max_age_seconds: int = int(
-        os.getenv("IB_CLOCK_HEALTH_MAX_AGE_SECONDS", "180")
-    )
+    ib_clock_max_abs_offset_seconds: float = 3.0
+    ib_clock_health_max_age_seconds: int = 180
 
-
-    # Account-wide robot daily take-profit. Day boundary: 00:00 Moscow time.
-    daily_take_profit_enabled: bool = read_env_bool(
-        "DAILY_TAKE_PROFIT_ENABLED",
-        True,
-    )
-    daily_take_profit_usd: float = read_positive_env_float(
-        "DAILY_TAKE_PROFIT_USD",
-        510.0,
-    )
+    # Дневной take-profit всего робота. Граница дня: 00:00 по Москве.
+    daily_take_profit_enabled: bool = True
+    daily_take_profit_usd: float = 510.0
 
     # Каталог с SQLite-БД цен.
     price_db_dir: str = str(BASE_DIR / "data" / "prices")
 
-    # Telegram-бот, группа и тема для сообщений о подключении/состоянии.
+    # Telegram-бот, группа и темы остаются в .env.
     telegram_bot_token: str = os.environ["TELEGRAM_BOT_TOKEN"].strip()
     telegram_chat_id_tech: int = int(os.environ["TELEGRAM_CHAT_ID"])
-    telegram_message_thread_id_tech: Optional[int] = (
-        int(telegram_thread_id_connect_env)
-        if telegram_thread_id_connect_env
+    telegram_message_thread_id_tech: int | None = (
+        int(telegram_thread_id_connect)
+        if telegram_thread_id_connect
         else None
     )
-    telegram_message_thread_id_deal: Optional[int] = (
-        int(telegram_thread_id_deal_env)
-        if telegram_thread_id_deal_env
+    telegram_message_thread_id_deal: int | None = (
+        int(telegram_thread_id_deal)
+        if telegram_thread_id_deal
         else None
     )
-    telegram_message_thread_id_deal_status: Optional[int] = (
-        int(telegram_thread_id_deal_status_env)
-        if telegram_thread_id_deal_status_env
+    telegram_message_thread_id_deal_status: int | None = (
+        int(telegram_thread_id_deal_status)
+        if telegram_thread_id_deal_status
         else None
     )
-    telegram_message_thread_id_error: Optional[int] = (
-        int(telegram_thread_id_error_env)
-        if telegram_thread_id_error_env
+    telegram_message_thread_id_error: int | None = (
+        int(telegram_thread_id_error)
+        if telegram_thread_id_error
         else None
     )
 
