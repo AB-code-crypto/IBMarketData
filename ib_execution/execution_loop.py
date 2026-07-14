@@ -372,6 +372,7 @@ async def process_new_trade_intents_once(
 
 async def run_execution_loop(
         order_service: OrderService,
+        ib_health,
         *,
         deal_telegram_sender=None,
         deal_message_thread_id=None,
@@ -393,8 +394,55 @@ async def run_execution_loop(
     next_protective_reconcile_ts = 0
     next_execution_stats_reconcile_ts = 0
     next_daily_cleanup_error_log_ts = 0
+    waiting_for_ib_backend = False
 
     while True:
+        backend_ready = (
+            is_ib_api_connected(order_service)
+            and bool(ib_health.ib_backend_ok)
+        )
+
+        if not backend_ready:
+            if not waiting_for_ib_backend:
+                order_service.broker_state.invalidate()
+                log_warning(
+                    logger,
+                    (
+                        "ib_execution paused broker actions: IB backend unavailable; "
+                        "new orders, reconciliation, watchdogs and forced closes are deferred"
+                    ),
+                    to_telegram=True,
+                )
+                waiting_for_ib_backend = True
+
+            now_ts = int(time.time())
+            if now_ts >= next_heartbeat_ts:
+                log_info(
+                    logger,
+                    (
+                        "ib_execution heartbeat: alive, "
+                        "broker_actions=PAUSED, ib_backend=DOWN, "
+                        f"new_intents_limit={NEW_INTENTS_LIMIT}, "
+                        f"max_new_intent_age_seconds={MAX_NEW_INTENT_AGE_SECONDS}"
+                    ),
+                    to_telegram=False,
+                )
+                next_heartbeat_ts = (
+                    now_ts + EXECUTION_HEARTBEAT_INTERVAL_SECONDS
+                )
+
+            await asyncio.sleep(EXECUTION_LOOP_SLEEP_SECONDS)
+            continue
+
+        if waiting_for_ib_backend:
+            order_service.broker_state.invalidate()
+            log_info(
+                logger,
+                "ib_execution resumed broker actions: IB backend restored",
+                to_telegram=True,
+            )
+            waiting_for_ib_backend = False
+
         daily_halt = read_current_daily_halt_for_order_service(order_service)
         if (
                 daily_halt is not None

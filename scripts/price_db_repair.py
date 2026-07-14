@@ -102,7 +102,7 @@ TARGET = "MNQ"
 # Форматы:
 #   "YYYY-MM-DD"
 #   "YYYY-MM-DD HH:MM:SS"
-CHECK_FROM_UTC = "2026-06-01 00:00:00"
+CHECK_FROM_UTC = "2026-07-01 00:00:00"
 
 # Ожидаемый шаг 5-секундных баров.
 EXPECTED_STEP_SECONDS = 5

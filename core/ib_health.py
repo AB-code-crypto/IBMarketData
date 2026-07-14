@@ -18,6 +18,9 @@ class IbConnectionHealth:
     # Если набор пустой, значит HMDS в норме.
     hmds_down_farms: set[str] = field(default_factory=set)
 
+    # 1101 означает потерю подписок, 1102 — сохранение подписок.
+    last_backend_restore_code: int | None = None
+
     @property
     def market_data_ok(self):
         """Что делает: возвращает True, если нет проблемных market data farm. Зачем нужна: loaders должны отличать локальное API-соединение от реальной доступности market data."""
@@ -91,6 +94,7 @@ def reset_ib_health_for_new_connect(ib_health):
     ib_health.ib_backend_ok = True
     ib_health.market_data_down_farms.clear()
     ib_health.hmds_down_farms.clear()
+    ib_health.last_backend_restore_code = None
 
 
 def register_ib_health_handlers(ib, ib_health):
@@ -110,12 +114,14 @@ def register_ib_health_handlers(ib, ib_health):
                 )
 
             ib_health.ib_backend_ok = False
+            ib_health.last_backend_restore_code = None
             return
 
         # 1101 / 1102 = связь TWS с backend IB восстановлена.
         if error_code in (1101, 1102):
             was_bad = not ib_health.ib_backend_ok
             ib_health.ib_backend_ok = True
+            ib_health.last_backend_restore_code = int(error_code)
 
             if was_bad:
                 log_info(

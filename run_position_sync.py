@@ -86,7 +86,7 @@ async def main() -> None:
         )
 
         try:
-            await run_position_sync_loop(ib)
+            await run_position_sync_loop(ib, ib_health)
         finally:
             monitor_task.cancel()
             heartbeat_task.cancel()

@@ -401,12 +401,22 @@ async def evaluate_and_trigger_daily_take_profit_once(
 
 async def run_daily_take_profit_monitor_loop(
         order_service: OrderService,
+        *,
+        ib_health,
 ) -> None:
     last_error_text = ""
     last_error_logged_at = 0.0
 
     while True:
         try:
+            if (
+                    not order_service.ib.isConnected()
+                    or not bool(ib_health.ib_backend_ok)
+            ):
+                raise ConnectionError(
+                    "IB backend unavailable; daily take-profit monitor paused"
+                )
+
             halt, snapshot, first_trigger = (
                 await evaluate_and_trigger_daily_take_profit_once(order_service)
             )

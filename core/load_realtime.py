@@ -41,7 +41,7 @@ REALTIME_WHAT_TO_SHOW_LIST = ("BID", "ASK")
 REALTIME_READY_WAIT_SECONDS = 1
 
 # Через сколько секунд без новых баров считаем realtime-поток подозрительно зависшим.
-REALTIME_STALL_WARNING_SECONDS = 30
+REALTIME_STALL_WARNING_SECONDS = 60
 
 # Через сколько секунд непрерывной недоступности realtime отправлять Telegram-предупреждение.
 # Короткие reconnect-всплески не должны засорять Telegram.
@@ -52,7 +52,7 @@ REALTIME_OK_TELEGRAM_INTERVAL_SECONDS = 600
 
 # Сколько секунд после восстановления соединения даём подпискам,
 # прежде чем считать отсутствие баров проблемой.
-REALTIME_RESUBSCRIBE_GRACE_SECONDS = 15
+REALTIME_RESUBSCRIBE_GRACE_SECONDS = 60
 
 # Через сколько секунд перезапускать realtime-задачу конкретного инструмента,
 # если она завершилась ошибкой.
@@ -482,14 +482,28 @@ async def load_realtime_instrument_task(
                     unavailable_telegram_sent = True
 
             elif not was_realtime_ready and realtime_ready_now:
-                log_info(
-                    logger,
-                    f"Realtime loader: соединение/market data восстановлены, "
-                    f"переподписываюсь на realtime {instrument_code}",
-                    to_telegram=unavailable_telegram_sent,
+                restore_code = getattr(
+                    ib_health,
+                    "last_backend_restore_code",
+                    None,
                 )
 
-                subscribe_all_realtime_streams()
+                if restore_code == 1102:
+                    log_info(
+                        logger,
+                        f"Realtime loader: IB восстановлен с code=1102; "
+                        f"данные сохранены, текущие подписки {instrument_code} оставляю активными",
+                        to_telegram=unavailable_telegram_sent,
+                    )
+                else:
+                    log_info(
+                        logger,
+                        f"Realtime loader: соединение/market data восстановлены, "
+                        f"переподписываюсь на realtime {instrument_code}; "
+                        f"restore_code={restore_code}",
+                        to_telegram=unavailable_telegram_sent,
+                    )
+                    subscribe_all_realtime_streams()
 
                 unavailable_since_monotonic = None
                 unavailable_telegram_sent = False

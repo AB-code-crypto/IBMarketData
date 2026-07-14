@@ -143,13 +143,17 @@ async def main() -> None:
             )
 
         daily_take_profit_task = asyncio.create_task(
-            run_daily_take_profit_monitor_loop(order_service),
+            run_daily_take_profit_monitor_loop(
+                order_service,
+                ib_health=ib_health,
+            ),
             name="daily_take_profit_monitor",
         )
 
         try:
             await run_execution_loop(
                 order_service,
+                ib_health,
                 deal_telegram_sender=telegram_sender,
                 deal_message_thread_id=app_settings.telegram_message_thread_id_deal,
                 deal_status_message_thread_id=app_settings.telegram_message_thread_id_deal_status,
