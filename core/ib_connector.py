@@ -32,6 +32,20 @@ IB_SERVER_TIME_REQUEST_TIMEOUT_SECONDS = 5.0
 IB_SERVER_TIME_CACHE_MAX_AGE_SECONDS = 90
 
 
+def build_ib_connect_kwargs(settings) -> dict:
+    kwargs = {
+        "host": settings.ib_host,
+        "port": settings.ib_port,
+        "clientId": settings.ib_client_id,
+    }
+    account_id = str(
+        getattr(settings, "ib_connect_account_id", "") or ""
+    ).strip()
+    if account_id:
+        kwargs["account"] = account_id
+    return kwargs
+
+
 def format_ib_clock_server_time(sample) -> str:
     return datetime.fromtimestamp(
         float(sample.server_time_ts),
@@ -97,9 +111,7 @@ async def connect_ib(settings):
 
             # Пытаемся открыть соединение с TWS / IB Gateway.
             await ib.connectAsync(
-                host=settings.ib_host,
-                port=settings.ib_port,
-                clientId=settings.ib_client_id,
+                **build_ib_connect_kwargs(settings)
             )
 
             # Дополнительная жёсткая проверка:
@@ -130,7 +142,7 @@ async def connect_ib(settings):
             raise
 
         except Exception as e:
-            error_text = str(e)
+            error_text = f"{type(e).__name__}: {e!r}"
 
             # При первой неудаче печатаем поясняющее сообщение.
             if connect_attempt == 1:
@@ -263,9 +275,7 @@ async def monitor_ib_connection(ib, settings, ib_health):
 
             # Пытаемся восстановить соединение.
             await ib.connectAsync(
-                host=settings.ib_host,
-                port=settings.ib_port,
-                clientId=settings.ib_client_id,
+                **build_ib_connect_kwargs(settings)
             )
 
             # Если подключились успешно, сразу идём на новую итерацию,
@@ -278,7 +288,7 @@ async def monitor_ib_connection(ib, settings, ib_health):
             raise
 
         except Exception as e:
-            error_text = str(e)
+            error_text = f"{type(e).__name__}: {e!r}"
 
             # Печатаем:
             # - первую ошибку;

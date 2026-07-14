@@ -396,12 +396,8 @@ def mark_oca_siblings_cancelled_after_fill(
 
 
 def get_cached_broker_order_status(order_service, protective_order: dict[str, Any]) -> str:
-    # Для live-проверки используем только openTrades(). Исторический trades()
-    # может хранить старый Submitted-status уже несуществующего ордера.
-    try:
-        trades = list(order_service.ib.openTrades() or [])
-    except Exception:
-        return ""
+    # A cache read failure is not equivalent to "order is missing".
+    trades = list(order_service.ib.openTrades() or [])
 
     order_id = int(protective_order["order_id"])
     order_ref = str(protective_order.get("order_ref", "") or "")
@@ -414,10 +410,20 @@ def get_cached_broker_order_status(order_service, protective_order: dict[str, An
         trade_order_id = int(getattr(order, "orderId", 0) or 0)
         trade_order_ref = str(getattr(order, "orderRef", "") or "")
 
-        if trade_order_id == order_id or (order_ref and trade_order_ref == order_ref):
-            return str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
+        if trade_order_id == order_id or (
+                order_ref and trade_order_ref == order_ref
+        ):
+            return str(
+                getattr(
+                    getattr(trade, "orderStatus", None),
+                    "status",
+                    "",
+                )
+                or ""
+            )
 
     return ""
+
 
 
 def is_cached_broker_order_live(order_service, protective_order: dict[str, Any]) -> bool:

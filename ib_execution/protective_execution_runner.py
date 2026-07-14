@@ -27,6 +27,10 @@ from ib_execution.execution_store import (
     read_trade_intent_submission_state,
     write_trade_intent_execution_result,
 )
+from ib_execution.order_cancellation import (
+    OrderFilledDuringCancellationError,
+    cancel_order_and_require_terminal,
+)
 from ib_execution.order_service import OrderService
 from ib_execution.uncertain_execution_reconciliation import (
     reconcile_uncertain_trade_intents_once,
@@ -228,124 +232,82 @@ def protective_role_text(role: str) -> str:
 
 async def cancel_protective_orders_before_position_change(*, conn, order_service: OrderService, intent) -> None:
     action = str(intent.action).upper()
-
-    # Перед OPEN_POSITION тоже чистим старые ACTIVE защитные ордера из прошлых запусков/сессий.
     if action not in {"OPEN_POSITION", "CLOSE_POSITION", "REVERSE_POSITION"}:
         return
 
     instrument_code = str(intent.instrument_code)
+
+    # Resolve a fill/cancel that arrived just before this position change.
+    pre_events = await reconcile_protective_orders_once(
+        order_service=order_service,
+    )
+    if any(str(event.get("event", "")).upper() == "FILLED" for event in pre_events):
+        raise RuntimeError(
+            f"{instrument_code}: protective order filled immediately before "
+            f"{action}; live broker position must be re-evaluated"
+        )
+
     active_orders = read_active_protective_orders(
         conn,
         instrument_code=instrument_code,
     )
-
     if not active_orders:
         return
 
-    needs_open_order_refresh = any(
-        not find_known_trade_order_status(
-            order_service,
-            order_id=int(active_order["order_id"]),
-        )
-        for active_order in active_orders
-    )
-    open_orders_refreshed = False
-
-    if needs_open_order_refresh:
-        open_orders_refreshed, _ = await refresh_ib_open_orders_if_possible(order_service)
-
     for active_order in active_orders:
         order_id = int(active_order["order_id"])
-        role_text = protective_role_text(str(active_order.get("role", "PROTECTIVE")))
-        known_status = find_known_trade_order_status(
-            order_service,
-            order_id=order_id,
+        role_text = protective_role_text(
+            str(active_order.get("role", "PROTECTIVE"))
+        )
+        context = (
+            f"{instrument_code} {role_text} before {action}"
         )
 
-        # После явного refresh отсутствие order у IB означает локальный orphan.
-        # Не отправляем cancel по несуществующему id, чтобы не получать 10147.
-        if open_orders_refreshed and not known_status:
-            mark_protective_order_status(
-                conn,
-                order_id=order_id,
-                status="CANCELLED",
-                error_text=f"orphan protective order not found at broker before {action}",
-            )
-            log_info(
-                logger,
-                (
-                    f"{instrument_code}: orphan {role_text} cleared before {action}: "
-                    f"order_id={order_id}, broker_status=missing"
-                ),
-                to_telegram=False,
-            )
-            continue
-
-        # Первый cancel OCA-пары часто переводит sibling в PendingCancel.
-        # Повторный cancel создаёт benign warning 10148.
-        if known_status == "PendingCancel":
-            mark_protective_order_status(
-                conn,
-                order_id=order_id,
-                status="CANCELLED",
-                error_text=f"broker already PendingCancel before {action}",
-            )
-            log_info(
-                logger,
-                (
-                    f"{instrument_code}: {role_text} already pending cancel before {action}: "
-                    f"order_id={order_id}"
-                ),
-                to_telegram=False,
-            )
-            continue
-
-        if known_status in {"Cancelled", "ApiCancelled", "Inactive"}:
-            mark_protective_order_status(
-                conn,
-                order_id=order_id,
-                status="CANCELLED",
-                error_text=f"broker terminal status={known_status} before {action}",
-            )
-            log_info(
-                logger,
-                (
-                    f"{instrument_code}: {role_text} already terminal before {action}: "
-                    f"order_id={order_id}, broker_status={known_status}"
-                ),
-                to_telegram=False,
-            )
-            continue
-
         try:
-            await order_service.cancel_order_id(order_id)
-            mark_protective_order_status(
-                conn,
+            cancellation = await cancel_order_and_require_terminal(
+                order_service,
                 order_id=order_id,
-                status="CANCELLED",
-                error_text=f"cancelled before {action}",
+                context=context,
             )
-            log_info(
-                logger,
-                f"{instrument_code}: {role_text} order cancelled before {action}: order_id={order_id}",
-                to_telegram=False,
+        except OrderFilledDuringCancellationError:
+            # Persist the fill/synthetic close before aborting this stale intent.
+            await reconcile_protective_orders_once(
+                order_service=order_service,
             )
-
+            raise
         except Exception as exc:
             mark_protective_order_status(
                 conn,
                 order_id=order_id,
                 status=PROTECTIVE_ORDER_STATUS_ACTIVE,
-                error_text=f"cancel failed before {action}: {type(exc).__name__}: {exc}",
-            )
-            log_warning(
-                logger,
-                (
-                    f"{instrument_code}: {role_text} cancel failed before {action}: "
-                    f"order_id={order_id}, {type(exc).__name__}: {exc}"
+                error_text=(
+                    f"cancel not confirmed before {action}: "
+                    f"{type(exc).__name__}: {exc}"
                 ),
-                to_telegram=False,
             )
+            conn.commit()
+            raise
+
+        mark_protective_order_status(
+            conn,
+            order_id=order_id,
+            status="CANCELLED",
+            error_text=(
+                f"broker terminal status={cancellation.terminal_status} "
+                f"before {action}"
+            ),
+        )
+        conn.commit()
+        log_info(
+            logger,
+            (
+                f"{instrument_code}: {role_text} order cancellation confirmed "
+                f"before {action}: order_id={order_id}, "
+                f"broker_status={cancellation.terminal_status}"
+            ),
+            to_telegram=False,
+        )
+
 
 
 def get_protective_order_accept_timeout_seconds() -> float:

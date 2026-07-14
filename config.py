@@ -28,6 +28,34 @@ def require_env_text(name: str) -> str:
     return value
 
 
+def read_env_bool(name: str, default: bool) -> bool:
+    raw = str(os.getenv(name, "") or "").strip().lower()
+    if not raw:
+        return bool(default)
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(
+        f"Environment variable {name} must be true/false, got {raw!r}"
+    )
+
+
+def read_positive_env_float(name: str, default: float) -> float:
+    raw = str(os.getenv(name, str(default)) or "").strip()
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Environment variable {name} must be a number, got {raw!r}"
+        ) from exc
+    if value <= 0.0:
+        raise RuntimeError(
+            f"Environment variable {name} must be positive, got {value}"
+        )
+    return value
+
+
 @dataclass
 class Settings:
     # Имя робота для Telegram-сообщений и логической идентификации сервиса.
@@ -48,6 +76,17 @@ class Settings:
     )
     ib_clock_health_max_age_seconds: int = int(
         os.getenv("IB_CLOCK_HEALTH_MAX_AGE_SECONDS", "180")
+    )
+
+
+    # Account-wide robot daily take-profit. Day boundary: 00:00 Moscow time.
+    daily_take_profit_enabled: bool = read_env_bool(
+        "DAILY_TAKE_PROFIT_ENABLED",
+        True,
+    )
+    daily_take_profit_usd: float = read_positive_env_float(
+        "DAILY_TAKE_PROFIT_USD",
+        510.0,
     )
 
     # Каталог с SQLite-БД цен.

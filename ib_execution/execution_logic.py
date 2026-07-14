@@ -582,22 +582,60 @@ def read_cancel_request_for_trade_intent(trade_intent_id: int) -> dict | None:
         conn.close()
 
 
+async def cancel_limit_order_and_require_terminal(
+        *,
+        order_service: OrderService,
+        trade,
+        order_id: int,
+        order_action: str,
+        order_quantity: int,
+):
+    try:
+        await order_service.cancel_order_id(order_id)
+    except Exception as exc:
+        raise OrderExecutionUncertainError(
+            order_id=order_id,
+            order_action=order_action,
+            order_quantity=order_quantity,
+            broker_status=f"cancel_failed:{type(exc).__name__}:{exc}",
+            filled_qty=collect_trade_filled_qty(trade),
+        ) from exc
+
+    done = await order_service.monitor.wait_for_done(
+        trade,
+        timeout=float(LIMIT_CANCEL_CONFIRM_TIMEOUT_SECONDS),
+        poll_interval=0.10,
+    )
+    if not done.done:
+        raise OrderExecutionUncertainError(
+            order_id=order_id,
+            order_action=order_action,
+            order_quantity=order_quantity,
+            broker_status=f"cancel_not_terminal:{done.status}",
+            filled_qty=collect_trade_filled_qty(trade),
+        )
+    return done
+
+
 async def wait_for_limit_done_or_cancel(
         *,
         order_service: OrderService,
         intent: TradeIntent,
         trade,
         order_id: int,
+        order_action: str,
+        order_quantity: int,
         timeout_seconds: float,
 ):
-    loop_time = __import__("asyncio").get_running_loop().time
+    loop_time = asyncio.get_running_loop().time
     deadline = loop_time() + float(timeout_seconds)
-    cancel_request = None
-    last_done = None
 
     while True:
         remaining_seconds = max(0.0, deadline - loop_time())
-        poll_timeout = min(float(LIMIT_CANCEL_CHECK_INTERVAL_SECONDS), remaining_seconds)
+        poll_timeout = min(
+            float(LIMIT_CANCEL_CHECK_INTERVAL_SECONDS),
+            remaining_seconds,
+        )
 
         if poll_timeout <= 0.0:
             done = await order_service.monitor.wait_for_done(
@@ -605,35 +643,31 @@ async def wait_for_limit_done_or_cancel(
                 timeout=0.0,
                 poll_interval=0.10,
             )
-            return done, cancel_request
+            return done, None
 
         done = await order_service.monitor.wait_for_done(
             trade,
             timeout=poll_timeout,
             poll_interval=0.10,
         )
-        last_done = done
-
         if done.done:
-            return done, cancel_request
+            return done, None
 
-        cancel_request = read_cancel_request_for_trade_intent(intent.trade_intent_id)
-
+        cancel_request = read_cancel_request_for_trade_intent(
+            intent.trade_intent_id
+        )
         if cancel_request is None:
             continue
 
-        try:
-            await order_service.cancel_order_id(order_id)
-        except Exception:
-            # Даже если cancel_order_id упал, ещё раз проверим терминальный статус ниже.
-            pass
-
-        done = await order_service.monitor.wait_for_done(
-            trade,
-            timeout=float(LIMIT_CANCEL_CONFIRM_TIMEOUT_SECONDS),
-            poll_interval=0.10,
+        done = await cancel_limit_order_and_require_terminal(
+            order_service=order_service,
+            trade=trade,
+            order_id=order_id,
+            order_action=order_action,
+            order_quantity=order_quantity,
         )
         return done, cancel_request
+
 
 
 async def execute_limit_intent(
@@ -646,12 +680,15 @@ async def execute_limit_intent(
         order_ref: str,
         order_submitted_callback: OrderSubmittedCallback | None = None,
 ) -> ExecutionResult:
-    """Что делает: ставит LIMIT и ждёт финал до ttl_seconds + запас.
-    Зачем нужна: trade_intents не должны навечно зависать в ACCEPTED после отмены/expiry."""
+    """Never returns terminal locally while the broker LIMIT may still be live."""
     if intent.limit_price is None:
-        raise ValueError(f"LIMIT intent without limit_price: id={intent.trade_intent_id}")
+        raise ValueError(
+            f"LIMIT intent without limit_price: id={intent.trade_intent_id}"
+        )
 
-    effective_ttl_seconds = clamp_limit_ttl_seconds_for_futures_cutoff(intent)
+    effective_ttl_seconds = clamp_limit_ttl_seconds_for_futures_cutoff(
+        intent
+    )
 
     if order_action == "BUY":
         placement = await order_service.buy_limit(
@@ -672,7 +709,7 @@ async def execute_limit_intent(
             wait="none",
         )
 
-    order_id = placement.receipt.order_id
+    order_id = int(placement.receipt.order_id)
     trade = placement.receipt.trade
 
     await persist_submitted_order(
@@ -681,41 +718,67 @@ async def execute_limit_intent(
         order_action=order_action,
         order_quantity=quantity,
     )
+
     done, cancel_request = await wait_for_limit_done_or_cancel(
         order_service=order_service,
         intent=intent,
         trade=trade,
         order_id=order_id,
-        timeout_seconds=float((effective_ttl_seconds or DEFAULT_LIMIT_DONE_TIMEOUT_SECONDS) + LIMIT_DONE_TIMEOUT_EXTRA_SECONDS),
+        order_action=order_action,
+        order_quantity=quantity,
+        timeout_seconds=float(
+            (effective_ttl_seconds or DEFAULT_LIMIT_DONE_TIMEOUT_SECONDS)
+            + LIMIT_DONE_TIMEOUT_EXTRA_SECONDS
+        ),
     )
+    timed_out = bool(done.timed_out)
+
+    if timed_out:
+        done = await cancel_limit_order_and_require_terminal(
+            order_service=order_service,
+            trade=trade,
+            order_id=order_id,
+            order_action=order_action,
+            order_quantity=quantity,
+        )
 
     if collect_trade_filled_qty(trade) > 0.0:
         await wait_for_commission_reports(order_service, trade)
 
-    avg_fill_price, total_commission, realized_pnl, filled_qty = collect_trade_fill_statistics(trade)
+    (
+        avg_fill_price,
+        total_commission,
+        realized_pnl,
+        filled_qty,
+    ) = collect_trade_fill_statistics(trade)
 
-    if cancel_request is not None and filled_qty <= 0.0 and str(done.status) in {"Cancelled", "ApiCancelled"}:
+    if (
+            cancel_request is not None
+            and filled_qty <= 0.0
+            and str(done.status) in {"Cancelled", "ApiCancelled"}
+    ):
         status = ExecutionStatus.CANCELLED
-        error_text = cancel_request.get("cancel_reason") or "limit order cancelled by cancel request"
+        error_text = (
+            cancel_request.get("cancel_reason")
+            or "limit order cancelled by cancel request"
+        )
     else:
         status, error_text = classify_limit_terminal_status(
             intent=intent,
             ib_status=done.status,
-            timed_out=done.timed_out,
+            timed_out=timed_out,
             filled_qty=filled_qty,
             expected_qty=quantity,
         )
-
         if cancel_request is not None:
-            cancel_text = cancel_request.get("cancel_reason") or "cancel requested"
-            error_text = f"{error_text}; {cancel_text}" if error_text else cancel_text
-
-    if done.timed_out:
-        try:
-            await order_service.cancel_order_id(order_id)
-        except Exception as exc:
-            cancel_error = f"cancel after timeout failed: {type(exc).__name__}: {exc}"
-            error_text = f"{error_text}; {cancel_error}" if error_text else cancel_error
+            cancel_text = (
+                cancel_request.get("cancel_reason") or "cancel requested"
+            )
+            error_text = (
+                f"{error_text}; {cancel_text}"
+                if error_text
+                else cancel_text
+            )
 
     return ExecutionResult(
         trade_intent_id=intent.trade_intent_id,
@@ -728,6 +791,7 @@ async def execute_limit_intent(
         realized_pnl=realized_pnl,
         error_text=error_text,
     )
+
 
 
 class LivePositionStateError(RuntimeError):

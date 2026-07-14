@@ -20,6 +20,12 @@ from core.logger import (
 )
 from core.service_instance_lock import service_instance_lock
 from core.telegram_sender import TelegramSender
+from ib_execution.daily_take_profit import (
+    evaluate_and_trigger_daily_take_profit_once,
+    format_daily_take_profit_startup_text,
+    mark_daily_take_profit_monitor_health,
+    run_daily_take_profit_monitor_loop,
+)
 from ib_execution.execution_loop import run_execution_loop
 from ib_execution.order_service import OrderService
 
@@ -36,6 +42,7 @@ class ExecutionIbSettings:
     ib_host = app_settings.ib_host
     ib_port = app_settings.ib_port
     ib_client_id = app_settings.ib_client_id + 40
+    ib_connect_account_id = app_settings.ib_account_id
 
 
 async def send_service_message(message: str) -> None:
@@ -64,6 +71,7 @@ async def shutdown_app(shutdown_message: str, ib=None) -> None:
 async def main() -> None:
     shutdown_message = "\n===========\nСтоп ib_execution сервиса.\n===========\n"
     ib = None
+    daily_take_profit_task = None
 
     try:
         await send_service_message(
@@ -71,6 +79,7 @@ async def main() -> None:
             f"clientId={ExecutionIbSettings.ib_client_id}\n"
             f"account={app_settings.ib_account_id}\n"
             "mode=MARKET_FROM_TRADE_INTENTS\n"
+            f"{format_daily_take_profit_startup_text()}\n"
             "===========\n"
         )
 
@@ -93,6 +102,52 @@ async def main() -> None:
         )
 
         try:
+            initial_halt, initial_snapshot, first_trigger = (
+                await evaluate_and_trigger_daily_take_profit_once(
+                    order_service
+                )
+            )
+            mark_daily_take_profit_monitor_health(
+                account_id=order_service.account_id,
+                ready=True,
+                error_text=None,
+            )
+            if (
+                    first_trigger
+                    and initial_halt is not None
+                    and initial_snapshot is not None
+            ):
+                log_warning(
+                    logger,
+                    (
+                        "DAILY TAKE PROFIT reached during execution startup: "
+                        f"day={initial_snapshot.moscow_day}, "
+                        f"realized={initial_snapshot.realized_pnl_usd:+.2f}, "
+                        f"unrealized={initial_snapshot.unrealized_pnl_usd:+.2f}, "
+                        f"total={initial_snapshot.total_pnl_usd:+.2f}"
+                    ),
+                    to_telegram=True,
+                )
+        except Exception as exc:
+            error_text = f"{type(exc).__name__}: {exc}"
+            mark_daily_take_profit_monitor_health(
+                account_id=order_service.account_id,
+                ready=False,
+                error_text=error_text,
+            )
+            log_warning(
+                logger,
+                f"initial daily take-profit evaluation failed; "
+                f"risk-increasing intents remain blocked: {error_text}",
+                to_telegram=False,
+            )
+
+        daily_take_profit_task = asyncio.create_task(
+            run_daily_take_profit_monitor_loop(order_service),
+            name="daily_take_profit_monitor",
+        )
+
+        try:
             await run_execution_loop(
                 order_service,
                 deal_telegram_sender=telegram_sender,
@@ -100,6 +155,8 @@ async def main() -> None:
                 deal_status_message_thread_id=app_settings.telegram_message_thread_id_deal_status,
             )
         finally:
+            if daily_take_profit_task is not None:
+                daily_take_profit_task.cancel()
             monitor_task.cancel()
             heartbeat_task.cancel()
 

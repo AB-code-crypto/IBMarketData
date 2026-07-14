@@ -24,6 +24,13 @@ from ib_execution.execution_store import (
     read_trade_intent_submission_state,
     write_trade_intent_execution_result,
 )
+from ib_execution.order_cancellation import (
+    OrderFilledDuringCancellationError,
+    cancel_order_and_require_terminal,
+)
+from ib_execution.protective_order_reconciliation import (
+    reconcile_protective_orders_once,
+)
 from ib_execution.order_service import OrderService
 from ib_execution.protective_order_store import (
     PROTECTIVE_ORDER_ROLE_STOP_LOSS,
@@ -464,52 +471,111 @@ async def cancel_exit_orders_for_instrument(
     events: list[SlotLossExtensionEvent] = []
     cancelled_order_ids: set[int] = set()
 
+    # Reconcile any fill that arrived just before cancellation started.
+    pre_events = await reconcile_protective_orders_once(
+        order_service=order_service,
+    )
+    if any(str(event.get("event", "")).upper() == "FILLED" for event in pre_events):
+        events.append(SlotLossExtensionEvent(
+            instrument_code=instrument_code,
+            event="EXIT_ORDER_FILLED_BEFORE_CANCEL",
+            message=(
+                f"{instrument_code}: an exit order filled before cancellation; "
+                "broker position must be re-read before another close action"
+            ),
+            log_level="WARNING",
+        ))
+        return False, events
+
     conn = get_trade_db_connection()
     try:
         initialize_execution_db(conn)
         initialize_protective_order_db(conn)
+        active_orders = read_active_protective_orders(
+            conn,
+            instrument_code=instrument_code,
+        )
 
-        for protective_order in read_active_protective_orders(conn, instrument_code=instrument_code):
+        for protective_order in active_orders:
             order_id = int(protective_order["order_id"])
             try:
-                await order_service.cancel_order_id(order_id)
-                cancelled_order_ids.add(order_id)
-                mark_protective_order_status(
-                    conn,
+                cancellation = await cancel_order_and_require_terminal(
+                    order_service,
                     order_id=order_id,
-                    status=PROTECTIVE_ORDER_STATUS_CANCELLED,
-                    error_text=reason,
+                    context=(
+                        f"{instrument_code} local protective cleanup: {reason}"
+                    ),
+                )
+            except OrderFilledDuringCancellationError as exc:
+                await reconcile_protective_orders_once(
+                    order_service=order_service,
                 )
                 events.append(SlotLossExtensionEvent(
                     instrument_code=instrument_code,
-                    event="EXIT_ORDER_CANCELLED",
-                    message=f"{instrument_code}: slot-loss extension cancelled protective order_id={order_id}: {reason}",
+                    event="EXIT_ORDER_FILLED_DURING_CANCEL",
+                    message=(
+                        f"{instrument_code}: protective order filled during cancel; "
+                        f"order_id={order_id}, error={exc}"
+                    ),
+                    log_level="WARNING",
                 ))
+                return False, events
             except Exception as exc:
                 mark_protective_order_status(
                     conn,
                     order_id=order_id,
                     status=PROTECTIVE_ORDER_STATUS_ACTIVE,
-                    error_text=f"cancel failed: {type(exc).__name__}: {exc}",
+                    error_text=(
+                        f"cancel not confirmed: {type(exc).__name__}: {exc}"
+                    ),
                 )
+                conn.commit()
                 events.append(SlotLossExtensionEvent(
                     instrument_code=instrument_code,
                     event="EXIT_ORDER_CANCEL_FAILED",
-                    message=f"{instrument_code}: failed to cancel protective order_id={order_id}: {type(exc).__name__}: {exc}",
+                    message=(
+                        f"{instrument_code}: failed to confirm protective cancel "
+                        f"order_id={order_id}: {type(exc).__name__}: {exc}"
+                    ),
                     log_level="WARNING",
                 ))
+                return False, events
 
-        conn.commit()
+            mark_protective_order_status(
+                conn,
+                order_id=order_id,
+                status=PROTECTIVE_ORDER_STATUS_CANCELLED,
+                error_text=(
+                    f"{reason}; broker_status="
+                    f"{cancellation.terminal_status}"
+                ),
+            )
+            conn.commit()
+            cancelled_order_ids.add(order_id)
+            events.append(SlotLossExtensionEvent(
+                instrument_code=instrument_code,
+                event="EXIT_ORDER_CANCELLED",
+                message=(
+                    f"{instrument_code}: protective cancellation confirmed "
+                    f"order_id={order_id}, "
+                    f"broker_status={cancellation.terminal_status}: {reason}"
+                ),
+            ))
 
     finally:
         conn.close()
 
-    refresh_ok, refresh_error = await refresh_open_orders_for_extension(order_service)
+    refresh_ok, refresh_error = await refresh_open_orders_for_extension(
+        order_service
+    )
     if not refresh_ok:
         events.append(SlotLossExtensionEvent(
             instrument_code=instrument_code,
             event="OPEN_ORDER_REFRESH_FAILED",
-            message=f"{instrument_code}: cannot refresh broker open orders before slot-loss extension action: {refresh_error}",
+            message=(
+                f"{instrument_code}: cannot refresh broker open orders before "
+                f"exit cleanup: {refresh_error}"
+            ),
             log_level="WARNING",
         ))
         return False, events
@@ -525,30 +591,62 @@ async def cancel_exit_orders_for_instrument(
         if order_id in cancelled_order_ids:
             continue
         try:
-            await order_service.cancel_order_id(order_id)
+            cancellation = await cancel_order_and_require_terminal(
+                order_service,
+                order_id=order_id,
+                context=(
+                    f"{instrument_code} broker-only exit cleanup: {reason}"
+                ),
+            )
             cancelled_order_ids.add(order_id)
             events.append(SlotLossExtensionEvent(
                 instrument_code=instrument_code,
                 event="LIVE_EXIT_ORDER_CANCELLED",
-                message=f"{instrument_code}: slot-loss extension cancelled live exit order_id={order_id}, order_ref={live_order['order_ref']}",
+                message=(
+                    f"{instrument_code}: live exit cancellation confirmed "
+                    f"order_id={order_id}, order_ref={live_order['order_ref']}, "
+                    f"broker_status={cancellation.terminal_status}"
+                ),
             ))
+        except OrderFilledDuringCancellationError as exc:
+            await reconcile_protective_orders_once(
+                order_service=order_service,
+            )
+            events.append(SlotLossExtensionEvent(
+                instrument_code=instrument_code,
+                event="LIVE_EXIT_ORDER_FILLED_DURING_CANCEL",
+                message=(
+                    f"{instrument_code}: live exit filled during cancel; "
+                    f"order_id={order_id}, order_ref={live_order['order_ref']}, "
+                    f"error={exc}"
+                ),
+                log_level="WARNING",
+            ))
+            return False, events
         except Exception as exc:
             events.append(SlotLossExtensionEvent(
                 instrument_code=instrument_code,
                 event="LIVE_EXIT_ORDER_CANCEL_FAILED",
                 message=(
-                    f"{instrument_code}: failed to cancel live exit order_id={order_id}, "
-                    f"order_ref={live_order['order_ref']}: {type(exc).__name__}: {exc}"
+                    f"{instrument_code}: failed to confirm live exit cancel "
+                    f"order_id={order_id}, order_ref={live_order['order_ref']}: "
+                    f"{type(exc).__name__}: {exc}"
                 ),
                 log_level="WARNING",
             ))
+            return False, events
 
-    refresh_ok, refresh_error = await refresh_open_orders_for_extension(order_service)
+    refresh_ok, refresh_error = await refresh_open_orders_for_extension(
+        order_service
+    )
     if not refresh_ok:
         events.append(SlotLossExtensionEvent(
             instrument_code=instrument_code,
             event="OPEN_ORDER_REFRESH_AFTER_CANCEL_FAILED",
-            message=f"{instrument_code}: cannot refresh broker open orders after exit-order cancel: {refresh_error}",
+            message=(
+                f"{instrument_code}: cannot refresh broker open orders after "
+                f"exit-order cancel: {refresh_error}"
+            ),
             log_level="WARNING",
         ))
         return False, events
@@ -562,12 +660,16 @@ async def cancel_exit_orders_for_instrument(
         events.append(SlotLossExtensionEvent(
             instrument_code=instrument_code,
             event="LIVE_EXIT_ORDERS_STILL_OPEN",
-            message=f"{instrument_code}: live exit orders are still open; market close/extension is blocked: {remaining_live_orders}",
+            message=(
+                f"{instrument_code}: live exit orders are still open; "
+                f"market close/extension is blocked: {remaining_live_orders}"
+            ),
             log_level="WARNING",
         ))
         return False, events
 
     return True, events
+
 
 
 async def create_and_execute_market_close(

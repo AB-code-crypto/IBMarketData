@@ -4,6 +4,16 @@ import asyncio
 import time
 import traceback
 
+from core.daily_trading_guard import DAILY_GUARD_STATUS_HALTED
+from ib_execution.daily_take_profit import (
+    DailyTakeProfitEvent,
+    evaluate_and_trigger_daily_take_profit_once,
+    get_daily_take_profit_monitor_error,
+    is_daily_take_profit_monitor_ready,
+    mark_daily_take_profit_monitor_health,
+    read_current_daily_halt_for_order_service,
+    run_daily_take_profit_cleanup_once,
+)
 from ib_execution.protective_execution_runner import (
     EXECUTION_HEARTBEAT_INTERVAL_SECONDS,
     EXECUTION_LOOP_SLEEP_SECONDS,
@@ -47,6 +57,53 @@ from ib_execution.protective_execution_runner import (
     write_trade_intent_execution_result,
 )
 
+async def handle_daily_take_profit_events(
+        events: tuple[DailyTakeProfitEvent, ...],
+        *,
+        deal_telegram_sender=None,
+        deal_message_thread_id=None,
+        deal_status_message_thread_id=None,
+) -> None:
+    for event in events:
+        if str(event.log_level).upper() == "WARNING":
+            log_warning(logger, event.message, to_telegram=True)
+        else:
+            log_info(logger, event.message, to_telegram=False)
+
+        if event.intent is None or event.result is None:
+            continue
+
+        try:
+            await send_executed_deal_notification(
+                telegram_sender=deal_telegram_sender,
+                message_thread_id=deal_message_thread_id,
+                intent=event.intent,
+                result=event.result,
+            )
+        except Exception as exc:
+            log_warning(
+                logger,
+                f"daily take-profit deal notification failed: "
+                f"{type(exc).__name__}: {exc}",
+                to_telegram=False,
+            )
+
+        try:
+            await send_deal_status_notification(
+                telegram_sender=deal_telegram_sender,
+                message_thread_id=deal_status_message_thread_id,
+                intent=event.intent,
+                result=event.result,
+            )
+        except Exception as exc:
+            log_warning(
+                logger,
+                f"daily take-profit status notification failed: "
+                f"{type(exc).__name__}: {exc}",
+                to_telegram=False,
+            )
+
+
 async def process_new_trade_intents_once(
         *,
         order_service: OrderService,
@@ -54,6 +111,9 @@ async def process_new_trade_intents_once(
         deal_message_thread_id=None,
         deal_status_message_thread_id=None,
 ) -> None:
+    if read_current_daily_halt_for_order_service(order_service) is not None:
+        return
+
     try:
         intents = read_new_trade_intents(
             limit=NEW_INTENTS_LIMIT,
@@ -80,6 +140,64 @@ async def process_new_trade_intents_once(
         intents = []
 
     for intent in intents:
+        if read_current_daily_halt_for_order_service(order_service) is not None:
+            break
+
+        risk_increasing = (
+            str(intent.action).upper()
+            in {"OPEN_POSITION", "REVERSE_POSITION"}
+        )
+        if risk_increasing:
+            try:
+                risk_halt, risk_snapshot, risk_first_trigger = (
+                    await evaluate_and_trigger_daily_take_profit_once(
+                        order_service
+                    )
+                )
+                mark_daily_take_profit_monitor_health(
+                    account_id=order_service.account_id,
+                    ready=True,
+                    error_text=None,
+                )
+            except Exception as exc:
+                error_text = f"{type(exc).__name__}: {exc}"
+                mark_daily_take_profit_monitor_health(
+                    account_id=order_service.account_id,
+                    ready=False,
+                    error_text=error_text,
+                )
+                log_warning(
+                    logger,
+                    "daily take-profit pre-trade evaluation failed; "
+                    f"trade_intent={intent.trade_intent_id} remains blocked: "
+                    f"{error_text}",
+                    to_telegram=False,
+                )
+                continue
+
+            if risk_halt is not None:
+                if (
+                        risk_first_trigger
+                        and risk_snapshot is not None
+                ):
+                    log_warning(
+                        logger,
+                        (
+                            "DAILY TAKE PROFIT reached immediately before "
+                            "risk-increasing execution; trading halt persisted: "
+                            f"account={order_service.account_id}, "
+                            f"moscow_day={risk_snapshot.moscow_day}, "
+                            f"realized={risk_snapshot.realized_pnl_usd:+.2f}, "
+                            f"unrealized={risk_snapshot.unrealized_pnl_usd:+.2f}, "
+                            f"total={risk_snapshot.total_pnl_usd:+.2f}"
+                        ),
+                        to_telegram=True,
+                    )
+                break
+
+            if not is_daily_take_profit_monitor_ready(order_service):
+                continue
+
         if not is_ib_api_connected(order_service):
             log_warning(
                 logger,
@@ -274,16 +392,47 @@ async def run_execution_loop(
     next_uncertain_reconcile_ts = 0
     next_protective_reconcile_ts = 0
     next_execution_stats_reconcile_ts = 0
+    next_daily_cleanup_error_log_ts = 0
 
     while True:
-        # NEW intents are the fastest path. They share one absolute 30-second
-        # deadline with signal generation and must not wait for broker recovery.
-        await process_new_trade_intents_once(
-            order_service=order_service,
-            deal_telegram_sender=deal_telegram_sender,
-            deal_message_thread_id=deal_message_thread_id,
-            deal_status_message_thread_id=deal_status_message_thread_id,
-        )
+        daily_halt = read_current_daily_halt_for_order_service(order_service)
+        if (
+                daily_halt is not None
+                and daily_halt.state.status != DAILY_GUARD_STATUS_HALTED
+        ):
+            try:
+                cleanup_result = await asyncio.wait_for(
+                    run_daily_take_profit_cleanup_once(
+                        order_service,
+                        halt=daily_halt,
+                    ),
+                    timeout=90.0,
+                )
+                await handle_daily_take_profit_events(
+                    cleanup_result.events,
+                    deal_telegram_sender=deal_telegram_sender,
+                    deal_message_thread_id=deal_message_thread_id,
+                    deal_status_message_thread_id=deal_status_message_thread_id,
+                )
+            except Exception as exc:
+                now_error_ts = int(time.time())
+                if now_error_ts >= next_daily_cleanup_error_log_ts:
+                    log_warning(
+                        logger,
+                        f"daily take-profit cleanup failed: "
+                        f"{type(exc).__name__}: {exc}\n"
+                        f"{traceback.format_exc()}",
+                        to_telegram=True,
+                    )
+                    next_daily_cleanup_error_log_ts = now_error_ts + 60
+
+        if read_current_daily_halt_for_order_service(order_service) is None:
+            await process_new_trade_intents_once(
+                order_service=order_service,
+                deal_telegram_sender=deal_telegram_sender,
+                deal_message_thread_id=deal_message_thread_id,
+                deal_status_message_thread_id=deal_status_message_thread_id,
+            )
 
         now_ts = int(time.time())
         if now_ts >= next_uncertain_reconcile_ts:
@@ -532,21 +681,46 @@ async def run_execution_loop(
                     to_telegram=True,
                 )
 
-        await process_new_trade_intents_once(
-            order_service=order_service,
-            deal_telegram_sender=deal_telegram_sender,
-            deal_message_thread_id=deal_message_thread_id,
-            deal_status_message_thread_id=deal_status_message_thread_id,
-        )
+        if read_current_daily_halt_for_order_service(order_service) is None:
+            await process_new_trade_intents_once(
+                order_service=order_service,
+                deal_telegram_sender=deal_telegram_sender,
+                deal_message_thread_id=deal_message_thread_id,
+                deal_status_message_thread_id=deal_status_message_thread_id,
+            )
 
         now_ts = int(time.time())
         if now_ts >= next_heartbeat_ts:
+            heartbeat_halt = read_current_daily_halt_for_order_service(
+                order_service
+            )
+            daily_status = (
+                "RUNNING"
+                if heartbeat_halt is None
+                else (
+                    f"{heartbeat_halt.state.status}/"
+                    f"{heartbeat_halt.state.moscow_day}"
+                )
+            )
+            daily_monitor_ready = is_daily_take_profit_monitor_ready(
+                order_service
+            )
+            daily_monitor_error = get_daily_take_profit_monitor_error(
+                order_service
+            )
+            daily_monitor_status = (
+                "READY"
+                if daily_monitor_ready
+                else f"BLOCKED:{daily_monitor_error or 'not_initialized'}"
+            )
             log_info(
                 logger,
                 (
                     "ib_execution heartbeat: alive, "
                     f"new_intents_limit={NEW_INTENTS_LIMIT}, "
-                    f"max_new_intent_age_seconds={MAX_NEW_INTENT_AGE_SECONDS}"
+                    f"max_new_intent_age_seconds={MAX_NEW_INTENT_AGE_SECONDS}, "
+                    f"daily_take_profit_status={daily_status}, "
+                    f"daily_pnl_monitor={daily_monitor_status}"
                 ),
                 to_telegram=False,
             )

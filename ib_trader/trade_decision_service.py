@@ -7,6 +7,11 @@ from datetime import datetime, timezone
 from config import settings_live as app_settings
 from contracts import Instrument
 from core.ib_clock import read_ib_clock_health
+from core.daily_trading_guard import (
+    format_daily_halt_warning,
+    get_moscow_day_context,
+    read_effective_daily_trading_halt,
+)
 from core.time_utils import CT_TIMEZONE
 from ib_execution.slot_loss_extension_store import (
     has_active_slot_loss_extension_for_instrument,
@@ -37,6 +42,7 @@ from ib_trader.trade_position_repository import (
     read_position_snapshot_freshness,
 )
 from ib_trader.trade_schema import (
+    TRADE_INTENTS_TABLE_NAME,
     TradeIntentDraft,
     build_time_text_fields_from_ts,
     get_trade_db_connection,
@@ -567,7 +573,53 @@ def process_futures_daily_flat_once(conn, *, now_ts: int | None = None) -> list[
 
     return created
 
+def has_pending_daily_execution_stats(
+        *,
+        now_ts: int,
+) -> bool:
+    day = get_moscow_day_context(now_ts)
+    conn = get_trade_db_connection()
+    try:
+        initialize_trade_db(conn)
+        event_ts = (
+            "COALESCE(finished_at_ts, sent_at_ts, "
+            "updated_at_ts, created_at_ts)"
+        )
+        row = conn.execute(
+            f"""
+            SELECT 1
+            FROM {TRADE_INTENTS_TABLE_NAME}
+            WHERE status = 'EXECUTED'
+              AND order_id IS NOT NULL
+              AND {event_ts} >= ?
+              AND {event_ts} < ?
+              AND (
+                    realized_pnl IS NULL
+                    OR (
+                        action = 'OPEN_POSITION'
+                        AND total_commission IS NULL
+                    )
+              )
+            LIMIT 1
+            """,
+            (day.start_ts, day.end_ts),
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
 def process_signal_events_once(*, max_signal_age_seconds: int) -> TradeProcessResult:
+    daily_halt = read_effective_daily_trading_halt(
+        account_id=app_settings.ib_account_id,
+    )
+    if daily_halt is not None:
+        return TradeProcessResult(
+            created=[],
+            rejected=[],
+            guard_warnings=[format_daily_halt_warning(daily_halt)],
+        )
+
     signals = read_latest_signal_events(max_signal_age_seconds=max_signal_age_seconds)
     clock_health = read_ib_clock_health(
         max_abs_offset_seconds=app_settings.ib_clock_max_abs_offset_seconds,
@@ -589,6 +641,9 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> TradeProcessRe
             clock_health.corrected_now_ts
             if clock_health.sample is not None
             else int(time.time())
+        )
+        pending_daily_execution_stats = has_pending_daily_execution_stats(
+            now_ts=now_ts,
         )
         created: list[TradeIntentCreated] = []
         rejected: list[TradeIntentRejected] = []
@@ -656,6 +711,16 @@ def process_signal_events_once(*, max_signal_age_seconds: int) -> TradeProcessRe
                 continue
 
             if is_risk_increasing_trade_action(draft.action):
+                if pending_daily_execution_stats:
+                    warning = (
+                        f"{signal.instrument_code}: risk-increasing trade blocked "
+                        "while current Moscow-day execution PnL/commission "
+                        "is still pending reconciliation"
+                    )
+                    if warning not in guard_warnings:
+                        guard_warnings.append(warning)
+                    continue
+
                 if not clock_health.is_healthy:
                     warning = (
                         f"{signal.instrument_code}: risk-increasing trade blocked by IB clock guard; "

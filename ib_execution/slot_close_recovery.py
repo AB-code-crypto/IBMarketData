@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from core.daily_trading_guard import read_effective_daily_trading_halt
 from core.logger import get_logger, log_info, log_warning
 from ib_execution.execution_logic import execute_trade_intent
 from ib_execution.execution_models import ExecutionResult, ExecutionStatus, TradeIntent
@@ -675,6 +676,12 @@ def build_recovery_decision(
 async def run_slot_close_recovery_once(*, order_service: OrderService) -> list[SlotCloseRecoveryEvent]:
     now_ts = int(time.time())
     events: list[SlotCloseRecoveryEvent] = []
+
+    if read_effective_daily_trading_halt(
+            account_id=order_service.account_id,
+            now_ts=now_ts,
+    ) is not None:
+        return events
 
     if DEFAULT_SIGNAL_CONFIG.signal_window_mode != SignalWindowMode.SLOT:
         return events
