@@ -33,17 +33,148 @@ IB_SERVER_TIME_CACHE_MAX_AGE_SECONDS = 90
 
 
 def build_ib_connect_kwargs(settings) -> dict:
-    kwargs = {
+    account_id = str(settings.ib_account_id or "").strip()
+    if not account_id:
+        raise RuntimeError("IB account id is empty")
+
+    return {
         "host": settings.ib_host,
         "port": settings.ib_port,
         "clientId": settings.ib_client_id,
+        "account": account_id,
     }
-    account_id = str(
-        getattr(settings, "ib_connect_account_id", "") or ""
-    ).strip()
-    if account_id:
-        kwargs["account"] = account_id
-    return kwargs
+
+
+IB_ACCOUNT_UPDATES_REQUEST_TIMEOUT_SECONDS = 15.0
+IB_ACCOUNT_UPDATES_REFRESH_MIN_INTERVAL_SECONDS = 10.0
+
+
+async def refresh_ib_account_updates(
+        ib,
+        *,
+        account_id: str,
+        force: bool = False,
+) -> tuple[int, int]:
+    """Ensure the selected account's account/portfolio cache is live."""
+    account = str(account_id or "").strip()
+    if not account:
+        raise RuntimeError("IB account updates require a non-empty account id")
+
+    try:
+        connected = bool(ib.isConnected())
+    except Exception:
+        connected = False
+    if not connected:
+        raise ConnectionError("IB API is not connected")
+
+    managed_accounts = {
+        str(value or "").strip()
+        for value in list(ib.managedAccounts() or [])
+        if str(value or "").strip()
+    }
+    if managed_accounts and account not in managed_accounts:
+        raise RuntimeError(
+            "configured account is absent from IB managed accounts: "
+            f"account={account}, managed_accounts={sorted(managed_accounts)}"
+        )
+
+    def read_cache() -> tuple[list, list]:
+        try:
+            account_values = list(ib.accountValues(account) or [])
+            portfolio_items = list(ib.portfolio(account) or [])
+        except Exception as exc:
+            raise RuntimeError(
+                "cannot read IB account/portfolio cache: "
+                f"account={account}, {type(exc).__name__}: {exc}"
+            ) from exc
+        return account_values, portfolio_items
+
+    account_values, portfolio_items = read_cache()
+    if account_values and not force:
+        setattr(ib, "_ibmd_account_updates_ready_account", account)
+        setattr(
+            ib,
+            "_ibmd_account_updates_ready_monotonic",
+            time.monotonic(),
+        )
+        return len(account_values), len(portfolio_items)
+
+    lock = getattr(ib, "_ibmd_account_updates_refresh_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        setattr(ib, "_ibmd_account_updates_refresh_lock", lock)
+
+    async with lock:
+        account_values, portfolio_items = read_cache()
+        if account_values and not force:
+            return len(account_values), len(portfolio_items)
+
+        now_mono = time.monotonic()
+        last_attempt = float(
+            getattr(
+                ib,
+                "_ibmd_account_updates_refresh_attempt_monotonic",
+                0.0,
+            )
+            or 0.0
+        )
+        if (
+                force
+                and last_attempt > 0.0
+                and now_mono - last_attempt
+                < IB_ACCOUNT_UPDATES_REFRESH_MIN_INTERVAL_SECONDS
+        ):
+            return len(account_values), len(portfolio_items)
+
+        setattr(
+            ib,
+            "_ibmd_account_updates_refresh_attempt_monotonic",
+            now_mono,
+        )
+        try:
+            await asyncio.wait_for(
+                ib.reqAccountUpdatesAsync(account),
+                timeout=IB_ACCOUNT_UPDATES_REQUEST_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            setattr(
+                ib,
+                "_ibmd_account_updates_refresh_attempt_monotonic",
+                0.0,
+            )
+            raise RuntimeError(
+                "cannot refresh IB account/portfolio data: "
+                f"account={account}, {type(exc).__name__}: {exc}"
+            ) from exc
+
+        account_values, portfolio_items = read_cache()
+        if not account_values:
+            setattr(
+                ib,
+                "_ibmd_account_updates_refresh_attempt_monotonic",
+                0.0,
+            )
+            raise RuntimeError(
+                "IB account updates completed without account values: "
+                f"account={account}"
+            )
+
+        setattr(ib, "_ibmd_account_updates_ready_account", account)
+        setattr(
+            ib,
+            "_ibmd_account_updates_ready_monotonic",
+            time.monotonic(),
+        )
+        log_info(
+            logger,
+            (
+                "IB account/portfolio data refreshed: "
+                f"account={account}, account_values={len(account_values)}, "
+                f"portfolio_items={len(portfolio_items)}"
+            ),
+            to_telegram=False,
+        )
+        return len(account_values), len(portfolio_items)
 
 
 def format_ib_clock_server_time(sample) -> str:
@@ -119,6 +250,12 @@ async def connect_ib(settings):
             # но соединение реально не активно, считаем это ошибкой.
             if not ib.isConnected():
                 raise RuntimeError("IB вернул connectAsync без активного соединения")
+
+            await refresh_ib_account_updates(
+                ib,
+                account_id=settings.ib_account_id,
+                force=False,
+            )
 
             # Считаем, сколько секунд заняло подключение.
             connect_duration = int(time.monotonic() - connect_started_at)
@@ -281,6 +418,11 @@ async def monitor_ib_connection(ib, settings, ib_health):
             # Если подключились успешно, сразу идём на новую итерацию,
             # чтобы без лишней паузы зафиксировать восстановление.
             if ib.isConnected():
+                await refresh_ib_account_updates(
+                    ib,
+                    account_id=settings.ib_account_id,
+                    force=False,
+                )
                 continue
 
         except asyncio.CancelledError:

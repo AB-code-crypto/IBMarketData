@@ -18,6 +18,7 @@ from core.daily_trading_guard import (
     update_daily_guard_runtime_state,
     upsert_daily_guard_monitoring,
 )
+from core.ib_connector import refresh_ib_account_updates
 from core.instrument_filters import get_trading_enabled_instrument_codes
 from core.logger import get_logger, log_warning
 from ib_execution.execution_models import ExecutionResult, TradeIntent
@@ -234,16 +235,9 @@ def _find_portfolio_item(
     return None
 
 
-def read_unrealized_pnl_from_portfolio(
-        order_service: OrderService,
-        *,
-        open_positions: list[BrokerPositionSnapshot],
-) -> float:
-    if not open_positions:
-        return 0.0
-
+def _read_live_portfolio_items(order_service: OrderService) -> list[Any]:
     try:
-        portfolio_items = list(
+        return list(
             order_service.ib.portfolio(order_service.account_id) or []
         )
     except Exception as exc:
@@ -251,6 +245,48 @@ def read_unrealized_pnl_from_portfolio(
             "cannot read live IB portfolio for daily take-profit: "
             f"{type(exc).__name__}: {exc}"
         ) from exc
+
+
+async def read_unrealized_pnl_from_portfolio(
+        order_service: OrderService,
+        *,
+        open_positions: list[BrokerPositionSnapshot],
+) -> float:
+    if not open_positions:
+        return 0.0
+
+    portfolio_items = _read_live_portfolio_items(order_service)
+    missing_snapshots = [
+        snapshot
+        for snapshot in open_positions
+        if _find_portfolio_item(
+            portfolio_items,
+            snapshot=snapshot,
+            account_id=order_service.account_id,
+        ) is None
+    ]
+
+    if missing_snapshots:
+        try:
+            await refresh_ib_account_updates(
+                order_service.ib,
+                account_id=order_service.account_id,
+                force=True,
+            )
+        except Exception as exc:
+            missing_text = ", ".join(
+                f"{snapshot.broker_contract}/{snapshot.broker_con_id}"
+                for snapshot in missing_snapshots
+            )
+            raise RuntimeError(
+                "live IB portfolio is missing open broker position and "
+                "account refresh failed: "
+                f"account={order_service.account_id}, "
+                f"missing={missing_text}, "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+        portfolio_items = _read_live_portfolio_items(order_service)
 
     total = 0.0
     for snapshot in open_positions:
@@ -261,7 +297,8 @@ def read_unrealized_pnl_from_portfolio(
         )
         if item is None:
             raise RuntimeError(
-                "open broker position has no matching live portfolio item: "
+                "open broker position has no matching live portfolio item "
+                "after account refresh: "
                 f"instrument={snapshot.instrument_code}, "
                 f"contract={snapshot.broker_contract}, "
                 f"conId={snapshot.broker_con_id}, "
@@ -322,7 +359,7 @@ async def read_current_daily_pnl_snapshot(
         if str(snapshot.side).upper() in {"LONG", "SHORT"}
         and float(snapshot.quantity) > 0.0
     ]
-    unrealized_pnl = read_unrealized_pnl_from_portfolio(
+    unrealized_pnl = await read_unrealized_pnl_from_portfolio(
         order_service,
         open_positions=open_positions,
     )
