@@ -78,7 +78,12 @@ from core.contract_utils import (
     get_contract_storage_name,
 )
 from core.history_segment_loader import load_quotes_segment
-from core.ib_connector import connect_ib, disconnect_ib
+from core.ib_connector import (
+    connect_ib,
+    disconnect_ib,
+    monitor_ib_connection,
+)
+from core.service_instance_lock import service_instance_lock
 from core.instrument_db import get_instrument_db_path, get_instrument_table_name
 from core.logger import get_logger, log_warning, setup_logging
 from core.market_sessions import should_load_history_chunk
@@ -121,6 +126,20 @@ PRINT_INTERVALS = True
 
 # Если True — пытаемся не считать дырками известные неторговые окна.
 IGNORE_EXPECTED_MARKET_PAUSES = True
+
+# Даже при MODE="REPAIR" запись начинается только после явного подтверждения.
+REQUIRE_REPAIR_CONFIRMATION = True
+REPAIR_CONFIRMATION_TEXT = "REPAIR"
+
+
+class PriceDbRepairIbSettings:
+    """Отдельный clientId для ремонта, не конфликтующий с market-data."""
+
+    ib_host = settings.ib_host
+    ib_port = settings.ib_port
+    ib_client_id = settings.ib_client_id + 100
+    ib_account_id = settings.ib_account_id
+
 
 setup_logging()
 logger = get_logger(__name__)
@@ -849,6 +868,97 @@ def limit_intervals(intervals: list[dict]) -> list[dict]:
 # РЕМОНТ
 # ============================================================
 
+async def cancel_background_task(task: asyncio.Task | None) -> None:
+    if task is None:
+        return
+
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:
+        print(
+            "price_db_repair: background task завершилась ошибкой при shutdown: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
+def count_repair_loads(*, intervals: list[dict], instrument_row) -> int:
+    return sum(
+        len(
+            build_repair_load_intervals(
+                instrument_row=instrument_row,
+                contract_name=interval["contract_name"],
+                hole_start_ts=interval["start_ts"],
+                hole_end_ts_exclusive=interval["end_ts_exclusive"],
+            )
+        )
+        for interval in intervals
+    )
+
+
+def require_repair_confirmation(*, intervals: list[dict], instrument_row) -> None:
+    if not intervals:
+        return
+
+    loads_count = count_repair_loads(
+        intervals=intervals,
+        instrument_row=instrument_row,
+    )
+    print()
+    print(
+        f"REPAIR запишет данные в price DB: intervals={len(intervals)}, "
+        f"hour_loads={loads_count}, "
+        f"historical_requests≈{loads_count * 2} (BID + ASK)."
+    )
+
+    if not REQUIRE_REPAIR_CONFIRMATION:
+        return
+
+    value = input(
+        f"Для запуска ремонта введи {REPAIR_CONFIRMATION_TEXT}: "
+    ).strip()
+    if value != REPAIR_CONFIRMATION_TEXT:
+        raise RuntimeError("Ремонт отменён пользователем")
+
+
+def intervals_overlap(left: dict, right: dict) -> bool:
+    return (
+        str(left["contract_name"]) == str(right["contract_name"])
+        and max(int(left["start_ts"]), int(right["start_ts"]))
+        < min(int(left["end_ts_exclusive"]), int(right["end_ts_exclusive"]))
+    )
+
+
+def rescan_repair_intervals(
+        *,
+        db_path: str,
+        table_name: str,
+        instrument_code: str,
+        instrument_row,
+        start_ts: int,
+) -> list[dict]:
+    conn = open_sqlite_connection(
+        db_path,
+        require_existing_file=True,
+        use_wal=False,
+    )
+    conn.row_factory = sqlite3.Row
+
+    try:
+        ensure_table_exists(conn, db_path, table_name)
+        return find_repair_intervals(
+            conn=conn,
+            table_name=table_name,
+            instrument_code=instrument_code,
+            instrument_row=instrument_row,
+            start_ts=start_ts,
+        )["merged_intervals"]
+    finally:
+        conn.close()
+
+
 async def repair_interval(
         ib,
         ib_health,
@@ -920,7 +1030,11 @@ async def repair_intervals(
         print("Нет интервалов для ремонта.")
         return 0
 
-    ib, ib_health = await connect_ib(settings)
+    ib, ib_health = await connect_ib(PriceDbRepairIbSettings)
+    monitor_task = asyncio.create_task(
+        monitor_ib_connection(ib, PriceDbRepairIbSettings, ib_health),
+        name="price_db_repair_ib_monitor",
+    )
     total_rows_written = 0
 
     try:
@@ -954,6 +1068,7 @@ async def repair_intervals(
             print(f"  записано строк: {rows_written}")
 
     finally:
+        await cancel_background_task(monitor_task)
         disconnect_ib(ib)
 
     return total_rows_written
@@ -997,6 +1112,13 @@ def collect_intervals_for_scan(
         f"merged={len(result['merged_intervals'])}"
     )
 
+    if result["rows_count"] == 0:
+        raise RuntimeError(
+            "В price DB нет строк начиная с CHECK_FROM_UTC. "
+            "Проверь дату; пустую/обрезанную БД восстанавливает основной "
+            "history-loader, а не поиск внутренних дырок."
+        )
+
     return result["merged_intervals"]
 
 
@@ -1005,8 +1127,17 @@ async def run_scan_or_repair_mode() -> None:
     db_path = get_instrument_db_path(settings, instrument_code, instrument_row)
     table_name = get_instrument_table_name(instrument_code, instrument_row)
     start_ts = parse_required_utc_text(CHECK_FROM_UTC)
+    if start_ts % EXPECTED_STEP_SECONDS != 0:
+        raise ValueError(
+            f"CHECK_FROM_UTC должен быть выровнен по "
+            f"{EXPECTED_STEP_SECONDS} секундам: {CHECK_FROM_UTC}"
+        )
 
-    conn = open_sqlite_connection(db_path, use_wal=False)
+    conn = open_sqlite_connection(
+        db_path,
+        require_existing_file=True,
+        use_wal=False,
+    )
     conn.row_factory = sqlite3.Row
 
     try:
@@ -1035,6 +1166,15 @@ async def run_scan_or_repair_mode() -> None:
     if MODE == "SCAN":
         return
 
+    if not intervals:
+        print("Ремонт не требуется: проблемных интервалов нет.")
+        return
+
+    require_repair_confirmation(
+        intervals=intervals,
+        instrument_row=instrument_row,
+    )
+
     total_rows_written = await repair_intervals(
         intervals=intervals,
         db_path=db_path,
@@ -1042,8 +1182,43 @@ async def run_scan_or_repair_mode() -> None:
         instrument_code=instrument_code,
         instrument_row=instrument_row,
     )
+    remaining_intervals = rescan_repair_intervals(
+        db_path=db_path,
+        table_name=table_name,
+        instrument_code=instrument_code,
+        instrument_row=instrument_row,
+        start_ts=start_ts,
+    )
+    unresolved_selected = [
+        remaining
+        for remaining in remaining_intervals
+        if any(
+            intervals_overlap(remaining, selected)
+            for selected in intervals
+        )
+    ]
+
     print()
-    print(f"Ремонт завершён. Всего записано строк: {total_rows_written}")
+    print(f"Ремонт записал строк: {total_rows_written}")
+    print(
+        "После повторного сканирования осталось интервалов: "
+        f"{len(remaining_intervals)}"
+    )
+
+    if unresolved_selected:
+        print("Не закрыты интервалы, которые ремонтировались:")
+        print_intervals(unresolved_selected)
+        raise RuntimeError(
+            "PRICE DB repair завершился, но часть выбранных дырок осталась"
+        )
+
+    if remaining_intervals:
+        print(
+            "Выбранные интервалы закрыты; в БД остались другие интервалы "
+            "(например, из-за MAX_REPAIR_INTERVALS)."
+        )
+    else:
+        print("Ремонт подтверждён повторным сканированием: дырок не осталось.")
 
 
 async def main() -> None:
@@ -1054,4 +1229,15 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    repair_instance_key = (
+        f"{PriceDbRepairIbSettings.ib_host}:"
+        f"{PriceDbRepairIbSettings.ib_port}:"
+        f"{PriceDbRepairIbSettings.ib_client_id}:"
+        f"{PriceDbRepairIbSettings.ib_account_id}"
+    )
+
+    with service_instance_lock(
+        "price_db_repair",
+        instance_key=repair_instance_key,
+    ):
+        asyncio.run(main())
