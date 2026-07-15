@@ -42,7 +42,7 @@ class ExecutionIbSettings:
     ib_host = app_settings.ib_host
     ib_port = app_settings.ib_port
     ib_client_id = app_settings.ib_client_id + 40
-    ib_connect_account_id = app_settings.ib_account_id
+    ib_account_id = app_settings.ib_account_id
 
 
 async def send_service_message(message: str) -> None:
