@@ -97,7 +97,7 @@ class SignalConfig:
     # Если кандидатов меньше min_count, потенциал не считается.
     candidate_potential_min_count: int = 3
     candidate_potential_max_count: int = 5
-    candidate_potential_min_abs_end_delta_points: float = 10.0
+    candidate_potential_min_abs_end_delta_points: float = 25.0
 
     # Сколько дней храним live signal_events в state DB.
     # Если значение <= 0, cleanup отключён.
