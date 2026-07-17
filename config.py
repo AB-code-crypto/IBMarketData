@@ -34,7 +34,7 @@ class Settings:
 
     # Дневной take-profit всего робота. Граница дня: 00:00 по Москве.
     daily_take_profit_enabled: bool = True
-    daily_take_profit_usd: float = 510.0
+    daily_take_profit_usd: float = 500.0
 
     # Каталог с SQLite-БД цен.
     price_db_dir: str = str(BASE_DIR / "data" / "prices")
