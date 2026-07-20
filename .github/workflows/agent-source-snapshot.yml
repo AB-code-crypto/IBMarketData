@@ -1,4 +1,4 @@
-name: Agent branch workspace check
+name: Agent refactor workspace
 
 on:
   push:
@@ -9,25 +9,43 @@ permissions:
   contents: write
 
 jobs:
-  workspace-check:
+  refactor-workspace:
     runs-on: ubuntu-latest
     steps:
       - name: Check out branch
         uses: actions/checkout@v4
         with:
           ref: agent/simplify-rolling-price-pipeline
+          fetch-depth: 0
 
-      - name: Verify writable branch workspace
+      - name: Run current refactor pass and persist report
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -f .agent-workspace-ready ]]; then
-            echo "workspace marker already exists"
+          script_sha="$(sha256sum scripts/agent_refactor.py | awk '{print $1}')"
+          if [[ -f .agent-refactor-last-sha ]] && grep -Fxq "$script_sha" .agent-refactor-last-sha; then
+            echo "Current refactor pass already recorded"
             exit 0
           fi
-          printf 'ready\n' > .agent-workspace-ready
+
+          set +e
+          python scripts/agent_refactor.py > agent_refactor_report.txt 2>&1
+          status=$?
+          set -e
+
+          {
+            echo
+            echo "REFRACTOR_SCRIPT_EXIT_STATUS=$status"
+            echo "REFRACTOR_SCRIPT_SHA=$script_sha"
+          } >> agent_refactor_report.txt
+          printf '%s\n' "$script_sha" > .agent-refactor-last-sha
+
           git config user.name "OpenAI Agent"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .agent-workspace-ready
-          git commit -m "ci: verify agent branch workspace"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No workspace changes to commit"
+            exit 0
+          fi
+          git commit -m "chore: record automated refactor pass"
           git push origin HEAD:agent/simplify-rolling-price-pipeline
