@@ -1,0 +1,27 @@
+name: Agent source snapshot
+
+on:
+  push:
+    branches:
+      - agent/simplify-rolling-price-pipeline
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build source archive
+        run: git archive --format=zip --output=IBMarketData-source.zip HEAD
+
+      - name: Upload source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: IBMarketData-source
+          path: IBMarketData-source.zip
+          if-no-files-found: error
+          retention-days: 1
