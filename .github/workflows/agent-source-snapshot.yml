@@ -18,34 +18,53 @@ jobs:
           ref: agent/simplify-rolling-price-pipeline
           fetch-depth: 0
 
+      - name: Build branch source archive
+        shell: bash
+        run: git archive --format=zip --output=/tmp/IBMarketData-source.zip HEAD
+
+      - name: Upload branch source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: IBMarketData-source
+          path: /tmp/IBMarketData-source.zip
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Run current refactor pass and persist report
         shell: bash
         run: |
           set -euo pipefail
           script_sha="$(sha256sum scripts/agent_refactor.py | awk '{print $1}')"
-          if [[ -f .agent-refactor-last-sha ]] && grep -Fxq "$script_sha" .agent-refactor-last-sha; then
-            echo "Current refactor pass already recorded"
-            exit 0
+          changed=0
+
+          if [[ ! -f .agent-artifact-run-id ]]; then
+            printf '%s\n' "$GITHUB_RUN_ID" > .agent-artifact-run-id
+            changed=1
           fi
 
-          set +e
-          python scripts/agent_refactor.py > agent_refactor_report.txt 2>&1
-          status=$?
-          set -e
+          if [[ ! -f .agent-refactor-last-sha ]] || ! grep -Fxq "$script_sha" .agent-refactor-last-sha; then
+            set +e
+            python scripts/agent_refactor.py > agent_refactor_report.txt 2>&1
+            status=$?
+            set -e
 
-          {
-            echo
-            echo "REFRACTOR_SCRIPT_EXIT_STATUS=$status"
-            echo "REFRACTOR_SCRIPT_SHA=$script_sha"
-          } >> agent_refactor_report.txt
-          printf '%s\n' "$script_sha" > .agent-refactor-last-sha
+            {
+              echo
+              echo "REFRACTOR_SCRIPT_EXIT_STATUS=$status"
+              echo "REFRACTOR_SCRIPT_SHA=$script_sha"
+              echo "GITHUB_RUN_ID=$GITHUB_RUN_ID"
+            } >> agent_refactor_report.txt
+            printf '%s\n' "$script_sha" > .agent-refactor-last-sha
+            changed=1
+          fi
+
+          if [[ "$changed" -eq 0 ]]; then
+            echo "Current refactor pass and artifact run already recorded"
+            exit 0
+          fi
 
           git config user.name "OpenAI Agent"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          if git diff --cached --quiet; then
-            echo "No workspace changes to commit"
-            exit 0
-          fi
-          git commit -m "chore: record automated refactor pass"
+          git commit -m "chore: record automated refactor workspace"
           git push origin HEAD:agent/simplify-rolling-price-pipeline
