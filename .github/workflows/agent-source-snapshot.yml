@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/simplify-rolling-price-pipeline
+  pull_request:
+    branches:
+      - master
 
 permissions:
   contents: read
