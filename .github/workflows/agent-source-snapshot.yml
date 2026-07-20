@@ -1,30 +1,33 @@
-name: Agent source snapshot
+name: Agent branch workspace check
 
 on:
   push:
     branches:
       - agent/simplify-rolling-price-pipeline
-  pull_request:
-    branches:
-      - master
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  snapshot:
+  workspace-check:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
+      - name: Check out branch
         uses: actions/checkout@v4
-
-      - name: Build source archive
-        run: git archive --format=zip --output=IBMarketData-source.zip HEAD
-
-      - name: Upload source archive
-        uses: actions/upload-artifact@v4
         with:
-          name: IBMarketData-source
-          path: IBMarketData-source.zip
-          if-no-files-found: error
-          retention-days: 1
+          ref: agent/simplify-rolling-price-pipeline
+
+      - name: Verify writable branch workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f .agent-workspace-ready ]]; then
+            echo "workspace marker already exists"
+            exit 0
+          fi
+          printf 'ready\n' > .agent-workspace-ready
+          git config user.name "OpenAI Agent"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .agent-workspace-ready
+          git commit -m "ci: verify agent branch workspace"
+          git push origin HEAD:agent/simplify-rolling-price-pipeline
