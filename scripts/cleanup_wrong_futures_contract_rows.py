@@ -5,7 +5,7 @@
 ------------------
 Если run_market_data был запущен до rollover, realtime-подписка могла продолжить
 писать старый контракт, например MNQM6, хотя execution уже торгует MNQU6.
-Это создаёт разрыв между signal/job-data ценой и реально торгуемым контрактом.
+Это создаёт разрыв между signal-ценой и реально торгуемым контрактом.
 
 Скрипт проходит по price DB инструментов MES/ES/MNQ/NQ и удаляет строки, где:
     bar_time_ts попадает в configured active-window контракта из contracts.py,
@@ -16,8 +16,8 @@
     а в price DB строка имеет contract='MNQM6' -> строка удаляется.
 
 Важно:
-    - Скрипт НЕ трогает job/features DB. После реальной очистки price DB
-      нужно перезапустить/rebuild run_job_data, чтобы пересобрать features.
+    - После реальной очистки price DB перезапусти market_data и signal,
+      чтобы оба сервиса читали уже очищенную каноническую историю.
     - По умолчанию включён dry-run. Сначала посмотри отчёт, потом поставь
       APPLY_DELETE = True.
 """
@@ -381,7 +381,7 @@ def main() -> None:
     if not APPLY_DELETE:
         print("\nЭто был DRY RUN. Для реального удаления поставь APPLY_DELETE = True.")
     else:
-        print("\nПосле реального удаления перезапусти/rebuild run_job_data, чтобы пересобрать feature/job DB.")
+        print("\nПосле удаления перезапусти market-data и проверь целостность основной price DB.")
 
 
 if __name__ == "__main__":

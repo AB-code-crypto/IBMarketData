@@ -12,6 +12,28 @@ from ib_execution.execution_models import ExecutionResult, ExecutionStatus, Trad
 STALE_NEW_INTENT_ERROR_TEXT = "stale trade_intent: older than execution max age"
 STALE_ACTIVE_INTENT_ERROR_TEXT = "stale active trade_intent: execution service is no longer tracking it"
 
+# Database-only cleanup for obsolete auxiliary exits. The old table name is
+# retained only so existing installations can be upgraded safely.
+LEGACY_AUXILIARY_STATE_TABLE = "slot_loss_extensions"
+LEGACY_AUXILIARY_EXIT_SUFFIXES = ("_EXT_TP", "_EXT_SL")
+
+
+def remove_legacy_auxiliary_exit_state(conn) -> None:
+    conn.execute(f'DROP TABLE IF EXISTS "{LEGACY_AUXILIARY_STATE_TABLE}"')
+    protective_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+        ("protective_orders",),
+    ).fetchone()
+    if protective_exists is None:
+        return
+    conn.execute(
+        """
+        DELETE FROM protective_orders
+        WHERE substr(order_ref, -7) IN (?, ?)
+        """,
+        LEGACY_AUXILIARY_EXIT_SUFFIXES,
+    )
+
 def trade_intent_age_anchor_sql() -> str:
     return (
         "CASE WHEN intent_source = 'SIGNAL' "
@@ -23,6 +45,7 @@ def trade_intent_age_anchor_sql() -> str:
 
 def initialize_execution_db(conn) -> None:
     initialize_trade_db(conn)
+    remove_legacy_auxiliary_exit_state(conn)
     require_table_absent(
         conn,
         "take_profit_orders",

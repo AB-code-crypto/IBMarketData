@@ -7,7 +7,6 @@ from ib_execution.broker_state_service import get_broker_state_service
 from ib_execution.execution_models import ExecutionResult, ExecutionStatus, TradeIntent
 from contracts import Instrument
 from core.time_utils import CT_TIMEZONE
-from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG
 from ib_execution.contract_resolver import build_execution_contract
 from ib_execution.order_service import (
     OrderRejectedError,
@@ -94,6 +93,7 @@ DEFAULT_LIMIT_DONE_TIMEOUT_SECONDS = 600
 LIMIT_CANCEL_CHECK_INTERVAL_SECONDS = 0.5
 LIMIT_CANCEL_CONFIRM_TIMEOUT_SECONDS = 5.0
 FUTURES_NO_NEW_TRADES_HOUR_CT = 15
+FUTURES_LIMIT_CUTOFF_BUFFER_SECONDS = 10
 
 
 def signed_qty(side: str, qty: float) -> float:
@@ -536,7 +536,7 @@ def get_futures_limit_cutoff_ts(*, instrument_code: str, now_ts: int) -> int | N
         now_ts=now_ts,
         hour=FUTURES_NO_NEW_TRADES_HOUR_CT,
     )
-    return int(no_new_trades_ts) - int(DEFAULT_SIGNAL_CONFIG.slot_close_before_end_seconds)
+    return int(no_new_trades_ts) - FUTURES_LIMIT_CUTOFF_BUFFER_SECONDS
 
 
 def clamp_limit_ttl_seconds_for_futures_cutoff(intent: TradeIntent) -> int | None:

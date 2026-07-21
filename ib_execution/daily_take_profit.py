@@ -31,8 +31,8 @@ from ib_execution.order_cancellation import (
     cancel_order_and_require_terminal,
 )
 from ib_execution.order_service import OrderService
-from ib_execution.slot_loss_extension import (
-    SlotLossExtensionEvent,
+from ib_execution.emergency_close import (
+    EmergencyCloseEvent,
     cancel_exit_orders_for_instrument,
     close_market_safely,
 )
@@ -49,12 +49,7 @@ DAILY_TAKE_PROFIT_REASON = "daily_take_profit_reached_moscow_day"
 DAILY_TAKE_PROFIT_MONITOR_INTERVAL_SECONDS = 1.0
 DAILY_TAKE_PROFIT_ERROR_LOG_INTERVAL_SECONDS = 60
 
-EXIT_ORDER_REF_SUFFIXES = (
-    "_TP",
-    "_SL",
-    "_EXT_TP",
-    "_EXT_SL",
-)
+EXIT_ORDER_REF_SUFFIXES = ("_TP", "_SL")
 
 
 # In-memory fail-safe for the execution process. A fresh process starts in the
@@ -780,7 +775,7 @@ async def cancel_non_exit_robot_orders(
 
 
 
-def _convert_close_event(event: SlotLossExtensionEvent) -> DailyTakeProfitEvent:
+def _convert_close_event(event: EmergencyCloseEvent) -> DailyTakeProfitEvent:
     return DailyTakeProfitEvent(
         event=str(event.event),
         message=str(event.message),

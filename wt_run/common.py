@@ -32,7 +32,6 @@ SERVICES = (
     ServiceSpec("market_data", "run_market_data.py", "MARKET DATA", "#2563EB"),
     ServiceSpec("position_sync", "run_position_sync.py", "POSITION SYNC", "#0891B2"),
     ServiceSpec("execution", "run_execution.py", "EXECUTION", "#DC2626"),
-    ServiceSpec("job_data", "run_job_data.py", "JOB DATA", "#7C3AED"),
     ServiceSpec("signal", "run_signal.py", "SIGNAL", "#D97706"),
     ServiceSpec("trader", "run_trader.py", "TRADER", "#16A34A"),
 )
@@ -64,8 +63,6 @@ for spec in SERVICES:
         names.update({"position", "positions", "sync"})
     elif spec.key == "execution":
         names.update({"exec"})
-    elif spec.key == "job_data":
-        names.update({"job", "features"})
     elif spec.key == "signal":
         names.update({"signals"})
     elif spec.key == "trader":

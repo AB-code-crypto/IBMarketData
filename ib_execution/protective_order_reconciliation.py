@@ -5,7 +5,6 @@ import time
 from types import SimpleNamespace
 from typing import Any
 
-from ib_execution.broker_state_service import get_broker_state_service
 from ib_execution.execution_logic import (
     are_commission_reports_final_for_fills,
     collect_trade_fill_statistics,
@@ -690,9 +689,6 @@ def create_protective_close_trade_intent(
             signal_time_ct,
             signal_time_msk,
 
-            entry_regime,
-            entry_ma_zone,
-
             intent_source,
 
             action,
@@ -725,7 +721,7 @@ def create_protective_close_trade_intent(
             sent_at_ts,
             finished_at_ts
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
         ON CONFLICT (
             instrument_code,
@@ -741,8 +737,6 @@ def create_protective_close_trade_intent(
             signal_time_utc,
             signal_time_ct,
             signal_time_msk,
-            None,
-            None,
             intent_source,
             "CLOSE_POSITION",
             reason,

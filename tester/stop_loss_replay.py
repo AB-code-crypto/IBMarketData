@@ -12,7 +12,7 @@ stop_loss_replay.py
 Что делает:
 - читает EXECUTED trade_intents;
 - собирает сделки entry -> exit;
-- берёт 5-секундные mid OHLC из job DB: data/features/<instrument>_job.sqlite3, table mid_price_5s;
+- читает 5-секундные BID/ASK OHLC из основной price DB; для LONG использует bid_low, для SHORT — ask_high;
 - проверяет, был бы задет фиксированный стоп между входом и реальным выходом;
 - сохраняет два CSV:
   1) summary по стопам;
@@ -58,13 +58,7 @@ STOP_LOSS_POINTS_LIST: list[float] = [0,50, 100, 150, 200]
 # Комиссии берутся из trade_intents.total_commission entry + exit, если есть.
 INCLUDE_COMMISSIONS_IN_USD: bool = True
 
-# Источник цен для проверки стопа.
-# Рекомендуемый вариант: feature/job DB с mid_price_5s.
-# Скрипт сам строит путь: Path(settings_live.price_db_dir).parent / "features" / "<db_stem>_job.sqlite3"
-USE_FEATURE_DB_MID_PRICE: bool = True
-
-# Если True, при отсутствии feature DB попробует прочитать raw price DB и посчитать mid high/low из bid/ask.
-ALLOW_RAW_PRICE_DB_FALLBACK: bool = True
+# Источник цен — только каноническая price DB с BID/ASK.
 
 # Отступ по времени для поиска цен вокруг сделки.
 # Нужен на случай, если fill time слегка не совпал с bar_time_ts.
@@ -140,8 +134,8 @@ class Trade:
 @dataclass(frozen=True)
 class PriceBar:
     ts: int
-    high: float
-    low: float
+    short_exit_high: float
+    long_exit_low: float
 
 
 @dataclass(frozen=True)
@@ -390,44 +384,28 @@ def build_trade(entry: IntentRow, exit_intent: IntentRow, multiplier: float) -> 
 # ЧТЕНИЕ ЦЕН
 # ============================================================
 
-def get_feature_db_path(settings, instrument_registry: dict[str, dict[str, Any]], instrument_code: str) -> Path:
-    row = instrument_registry[instrument_code]
-    price_db_filename = row["db_filename"]
-    feature_db_stem = Path(price_db_filename).stem.lower()
-    return Path(settings.price_db_dir).parent / "features" / f"{feature_db_stem}_job.sqlite3"
-
-
-def get_price_source_for_instrument(settings, instrument_registry, get_instrument_db_path, get_instrument_table_name, instrument_code: str):
-    """
-    Возвращает (db_path, table_name, mode)
-    mode:
-      - feature_mid: таблица mid_price_5s с mid_high/mid_low
-      - raw_bid_ask: raw price DB с bid_high/ask_high/bid_low/ask_low
-      - raw_ohlc: raw таблица с high/low
-    """
+def get_price_source_for_instrument(
+        settings,
+        instrument_registry,
+        get_instrument_db_path,
+        get_instrument_table_name,
+        instrument_code: str,
+) -> tuple[Path, str]:
+    """Return the canonical BID/ASK price database and table."""
     if instrument_code not in instrument_registry:
-        raise ValueError(f"Instrument {instrument_code!r} is not found in contracts.py")
-
-    if USE_FEATURE_DB_MID_PRICE:
-        feature_db_path = get_feature_db_path(settings, instrument_registry, instrument_code)
-        if feature_db_path.is_file():
-            return feature_db_path, "mid_price_5s", "feature_mid"
-
-        if not ALLOW_RAW_PRICE_DB_FALLBACK:
-            raise FileNotFoundError(f"Feature DB not found: {feature_db_path}")
-
+        raise ValueError(
+            f"Instrument {instrument_code!r} is not found in contracts.py"
+        )
     row = instrument_registry[instrument_code]
-    price_db_path = Path(get_instrument_db_path(settings, instrument_code, row))
-    table_name = get_instrument_table_name(instrument_code, row)
-
+    price_db_path = Path(
+        get_instrument_db_path(settings, instrument_code, row)
+    )
     if not price_db_path.is_file():
         raise FileNotFoundError(
-            f"Neither feature DB nor raw price DB exists for {instrument_code}: "
-            f"feature={get_feature_db_path(settings, instrument_registry, instrument_code)}, raw={price_db_path}"
+            f"Price DB does not exist for {instrument_code}: {price_db_path}"
         )
-
-    return price_db_path, table_name, "raw_auto"
-
+    table_name = get_instrument_table_name(instrument_code, row)
+    return price_db_path, table_name
 
 def read_price_bars(
         settings,
@@ -438,7 +416,7 @@ def read_price_bars(
         start_ts: int,
         end_ts: int,
 ) -> list[PriceBar]:
-    db_path, table_name, mode = get_price_source_for_instrument(
+    db_path, table_name = get_price_source_for_instrument(
         settings,
         instrument_registry,
         get_instrument_db_path,
@@ -448,49 +426,39 @@ def read_price_bars(
 
     conn = sqlite3.connect(str(db_path))
     try:
-        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({quote_identifier(table_name)})").fetchall()}
-
-        if mode == "feature_mid" or {"mid_high", "mid_low"}.issubset(columns):
-            sql = f"""
-                SELECT bar_time_ts, mid_high, mid_low
-                FROM {quote_identifier(table_name)}
-                WHERE bar_time_ts BETWEEN ? AND ?
-                ORDER BY bar_time_ts ASC
-            """
-
-        elif {"bid_high", "ask_high", "bid_low", "ask_low"}.issubset(columns):
-            sql = f"""
-                SELECT
-                    bar_time_ts,
-                    (bid_high + ask_high) / 2.0 AS mid_high,
-                    (bid_low + ask_low) / 2.0 AS mid_low
-                FROM {quote_identifier(table_name)}
-                WHERE bar_time_ts BETWEEN ? AND ?
-                  AND bid_high IS NOT NULL
-                  AND ask_high IS NOT NULL
-                  AND bid_low IS NOT NULL
-                  AND ask_low IS NOT NULL
-                ORDER BY bar_time_ts ASC
-            """
-
-        elif {"high", "low"}.issubset(columns):
-            sql = f"""
-                SELECT bar_time_ts, high, low
-                FROM {quote_identifier(table_name)}
-                WHERE bar_time_ts BETWEEN ? AND ?
-                ORDER BY bar_time_ts ASC
-            """
-
-        else:
+        columns = {
+            row[1]
+            for row in conn.execute(
+                f"PRAGMA table_info({quote_identifier(table_name)})"
+            ).fetchall()
+        }
+        required = {"ask_high", "bid_low"}
+        missing = required - columns
+        if missing:
             raise RuntimeError(
-                f"Cannot detect high/low columns in {db_path}::{table_name}. "
-                f"Columns: {sorted(columns)}"
+                f"Required BID/ASK columns are missing in "
+                f"{db_path}::{table_name}: {sorted(missing)}"
             )
 
+        sql = f"""
+            SELECT
+                bar_time_ts,
+                ask_high AS executable_short_high,
+                bid_low AS executable_long_low
+            FROM {quote_identifier(table_name)}
+            WHERE bar_time_ts BETWEEN ? AND ?
+              AND ask_high IS NOT NULL
+              AND bid_low IS NOT NULL
+            ORDER BY bar_time_ts ASC
+        """
         rows = conn.execute(sql, (int(start_ts), int(end_ts))).fetchall()
 
         return [
-            PriceBar(ts=int(row[0]), high=float(row[1]), low=float(row[2]))
+            PriceBar(
+                ts=int(row[0]),
+                short_exit_high=float(row[1]),
+                long_exit_low=float(row[2]),
+            )
             for row in rows
         ]
 
@@ -516,13 +484,13 @@ def find_stop_hit(trade: Trade, stop_points: float, bars: list[PriceBar]) -> tup
     if sign > 0:
         stop_price = trade.entry_price - float(stop_points)
         for bar in bars:
-            if bar.low <= stop_price:
+            if bar.long_exit_low <= stop_price:
                 return True, bar.ts, stop_price
 
     else:
         stop_price = trade.entry_price + float(stop_points)
         for bar in bars:
-            if bar.high >= stop_price:
+            if bar.short_exit_high >= stop_price:
                 return True, bar.ts, stop_price
 
     return False, None, trade.exit_price
@@ -723,7 +691,6 @@ def main() -> None:
     print("=" * 80)
     print(f"Trade DB: {TRADE_DB_PATH.resolve()}")
     print(f"Price DB dir: {Path(settings.price_db_dir).resolve()}")
-    print(f"Feature DB dir: {(Path(settings.price_db_dir).parent / 'features').resolve()}")
     print(f"Instruments: {INSTRUMENTS if INSTRUMENTS is not None else 'ALL'}")
     print(f"Stop list: {STOP_LOSS_POINTS_LIST}")
     print(f"Intent ID range: {MIN_TRADE_INTENT_ID}..{MAX_TRADE_INTENT_ID}")

@@ -27,6 +27,7 @@ from ib_execution.daily_take_profit import (
     run_daily_take_profit_monitor_loop,
 )
 from ib_execution.execution_loop import run_execution_loop
+from ib_execution.emergency_close import cancel_legacy_auxiliary_exit_orders_once
 from ib_execution.order_service import OrderService
 
 setup_logging()
@@ -100,6 +101,17 @@ async def main() -> None:
             ib,
             account_id=app_settings.ib_account_id,
         )
+
+        cancelled_legacy_orders = await cancel_legacy_auxiliary_exit_orders_once(
+            order_service
+        )
+        if cancelled_legacy_orders:
+            log_warning(
+                logger,
+                "rolling-only startup cancelled obsolete auxiliary exit orders: "
+                f"{cancelled_legacy_orders}",
+                to_telegram=True,
+            )
 
         try:
             initial_halt, initial_snapshot, first_trigger = (

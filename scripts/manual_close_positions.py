@@ -34,7 +34,7 @@ from ib_execution.order_cancellation import (
     cancel_order_and_require_terminal,
 )
 from ib_execution.order_service import OrderService
-from ib_execution.slot_loss_extension import cancel_exit_orders_for_instrument
+from ib_execution.emergency_close import cancel_exit_orders_for_instrument
 from ib_position_sync.position_store import (
     find_position_for_instrument,
     get_trading_enabled_instrument_codes,
@@ -48,7 +48,6 @@ from ib_trader.trade_schema import (
     TRADE_INTENTS_TABLE_NAME,
     TradeIntentDraft,
     get_trade_db_connection,
-    initialize_trade_db,
 )
 
 
@@ -61,7 +60,7 @@ MANUAL_FLAT_INTENT_SOURCE = "MANUAL_FLAT"
 MANUAL_FLAT_REASON = "manual_flat_helper_close_broker_open_position"
 MANUAL_FLAT_CANCEL_SOURCE_SIGNAL_ID = -9000000000000
 BROKER_READY_POLL_SECONDS = 1.0
-EXIT_ORDER_REF_SUFFIXES = ("_TP", "_SL", "_EXT_TP", "_EXT_SL")
+EXIT_ORDER_REF_SUFFIXES = ("_TP", "_SL")
 
 
 class ManualFlatIbSettings:
@@ -576,13 +575,7 @@ def create_manual_flat_intent(position, *, position_index: int) -> TradeIntent:
             signal_direction="CLOSE",
             entry_price=0.0,
             potential_end_delta_points=0.0,
-            regime=None,
-            ma_zone=None,
-            signal_strength=MANUAL_FLAT_INTENT_SOURCE,
             order_type="MARKET",
-            limit_price=None,
-            limit_offset_points=None,
-            ttl_seconds=None,
             position_before_side=position.side,
             position_before_qty=float(position.quantity),
             position_after_side=PositionSide.FLAT,

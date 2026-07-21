@@ -5,6 +5,7 @@ import time
 import traceback
 
 from core.daily_trading_guard import DAILY_GUARD_STATUS_HALTED
+from core.logger import get_logger, log_info, log_warning
 from ib_execution.daily_take_profit import (
     DailyTakeProfitEvent,
     evaluate_and_trigger_daily_take_profit_once,
@@ -14,48 +15,48 @@ from ib_execution.daily_take_profit import (
     read_current_daily_halt_for_order_service,
     run_daily_take_profit_cleanup_once,
 )
+from ib_execution.execution_logic import execute_trade_intent
+from ib_execution.execution_models import ExecutionResult, ExecutionStatus
+from ib_execution.execution_runner import (
+    send_deal_status_notification,
+    send_executed_deal_notification,
+)
+from ib_execution.execution_stats_reconciliation import (
+    format_backfilled_execution_stats_message,
+    reconcile_missing_execution_stats_once,
+)
+from ib_execution.execution_store import (
+    get_trade_db_connection,
+    initialize_execution_db,
+    mark_trade_intent_order_submitted,
+    mark_trade_intent_sending,
+    read_new_trade_intents,
+    read_trade_intent_submission_state,
+    write_trade_intent_execution_result,
+)
+from ib_execution.order_service import OrderService
 from ib_execution.protective_execution_runner import (
     EXECUTION_HEARTBEAT_INTERVAL_SECONDS,
     EXECUTION_LOOP_SLEEP_SECONDS,
     EXECUTION_STATS_RECONCILE_INTERVAL_SECONDS,
     EXECUTION_STATS_RECONCILE_TIMEOUT_SECONDS,
-    ExecutionResult,
-    ExecutionStatus,
     MAX_NEW_INTENT_AGE_SECONDS,
     NEW_INTENTS_LIMIT,
     PROTECTIVE_RECONCILE_INTERVAL_SECONDS,
     PROTECTIVE_RECONCILE_TOTAL_TIMEOUT_SECONDS,
     PROTECTIVE_WATCHDOG_TIMEOUT_SECONDS,
-    SLOT_CLOSE_RECOVERY_INTERVAL_SECONDS,
-    SLOT_CLOSE_RECOVERY_TIMEOUT_SECONDS,
-    SLOT_LOSS_EXTENSION_TIMEOUT_SECONDS,
     UNCERTAIN_EXECUTION_RECONCILE_INTERVAL_SECONDS,
     UNCERTAIN_EXECUTION_RECONCILE_TIMEOUT_SECONDS,
     cancel_protective_orders_before_position_change,
-    execute_trade_intent,
-    format_backfilled_execution_stats_message,
-    get_trade_db_connection,
     get_trade_intent_execution_timeout_seconds,
-    initialize_execution_db,
     is_ib_api_connected,
-    log_info,
-    log_warning,
-    logger,
-    mark_trade_intent_order_submitted,
-    mark_trade_intent_sending,
     place_protective_orders_after_entry,
-    read_new_trade_intents,
-    read_trade_intent_submission_state,
     reconcile_and_notify_protective_orders,
-    reconcile_missing_execution_stats_once,
     reconcile_uncertain_executions_and_restore_protection,
     run_protective_order_price_watchdog_once,
-    run_slot_close_recovery_once,
-    run_slot_loss_extension_once,
-    send_deal_status_notification,
-    send_executed_deal_notification,
-    write_trade_intent_execution_result,
 )
+
+logger = get_logger(__name__)
 
 async def handle_daily_take_profit_events(
         events: tuple[DailyTakeProfitEvent, ...],
@@ -389,7 +390,6 @@ async def run_execution_loop(
     )
 
     next_heartbeat_ts = int(time.time()) + EXECUTION_HEARTBEAT_INTERVAL_SECONDS
-    next_slot_close_recovery_ts = 0
     next_uncertain_reconcile_ts = 0
     next_protective_reconcile_ts = 0
     next_execution_stats_reconcile_ts = 0
@@ -534,146 +534,6 @@ async def run_execution_loop(
                 f"protective-order watchdog failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
                 to_telegram=True,
             )
-
-        try:
-            slot_loss_extension_events = await asyncio.wait_for(
-                run_slot_loss_extension_once(
-                    order_service=order_service,
-                ),
-                timeout=float(SLOT_LOSS_EXTENSION_TIMEOUT_SECONDS),
-            )
-
-            for extension_event in slot_loss_extension_events:
-                if str(extension_event.log_level).upper() == "WARNING":
-                    log_warning(
-                        logger,
-                        extension_event.message,
-                        to_telegram=True,
-                    )
-                else:
-                    log_info(
-                        logger,
-                        extension_event.message,
-                        to_telegram=False,
-                    )
-
-                if extension_event.intent is None or extension_event.result is None:
-                    continue
-
-                try:
-                    await send_executed_deal_notification(
-                        telegram_sender=deal_telegram_sender,
-                        message_thread_id=deal_message_thread_id,
-                        intent=extension_event.intent,
-                        result=extension_event.result,
-                    )
-                except Exception as notification_exc:
-                    log_warning(
-                        logger,
-                        (
-                            f"slot-loss extension deal notification failed "
-                            f"trade_intent={extension_event.intent.trade_intent_id}: "
-                            f"{type(notification_exc).__name__}: {notification_exc}"
-                        ),
-                        to_telegram=True,
-                    )
-
-                try:
-                    await send_deal_status_notification(
-                        telegram_sender=deal_telegram_sender,
-                        message_thread_id=deal_status_message_thread_id,
-                        intent=extension_event.intent,
-                        result=extension_event.result,
-                    )
-                except Exception as notification_exc:
-                    log_warning(
-                        logger,
-                        (
-                            f"slot-loss extension status notification failed "
-                            f"trade_intent={extension_event.intent.trade_intent_id}: "
-                            f"{type(notification_exc).__name__}: {notification_exc}"
-                        ),
-                        to_telegram=True,
-                    )
-
-        except Exception as exc:
-            log_warning(
-                logger,
-                f"slot-loss extension failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
-                to_telegram=True,
-            )
-
-        now_ts = int(time.time())
-        if now_ts >= next_slot_close_recovery_ts:
-            next_slot_close_recovery_ts = now_ts + SLOT_CLOSE_RECOVERY_INTERVAL_SECONDS
-
-            try:
-                recovery_events = await asyncio.wait_for(
-                    run_slot_close_recovery_once(
-                        order_service=order_service,
-                    ),
-                    timeout=float(SLOT_CLOSE_RECOVERY_TIMEOUT_SECONDS),
-                )
-
-                for recovery_event in recovery_events:
-                    if str(recovery_event.log_level).upper() == "WARNING":
-                        log_warning(
-                            logger,
-                            recovery_event.message,
-                            to_telegram=True,
-                        )
-                    else:
-                        log_info(
-                            logger,
-                            recovery_event.message,
-                            to_telegram=False,
-                        )
-
-                    if recovery_event.intent is None or recovery_event.result is None:
-                        continue
-
-                    try:
-                        await send_executed_deal_notification(
-                            telegram_sender=deal_telegram_sender,
-                            message_thread_id=deal_message_thread_id,
-                            intent=recovery_event.intent,
-                            result=recovery_event.result,
-                        )
-                    except Exception as notification_exc:
-                        log_warning(
-                            logger,
-                            (
-                                f"slot-close recovery deal notification failed "
-                                f"trade_intent={recovery_event.intent.trade_intent_id}: "
-                                f"{type(notification_exc).__name__}: {notification_exc}"
-                            ),
-                            to_telegram=True,
-                        )
-
-                    try:
-                        await send_deal_status_notification(
-                            telegram_sender=deal_telegram_sender,
-                            message_thread_id=deal_status_message_thread_id,
-                            intent=recovery_event.intent,
-                            result=recovery_event.result,
-                        )
-                    except Exception as notification_exc:
-                        log_warning(
-                            logger,
-                            (
-                                f"slot-close recovery status notification failed "
-                                f"trade_intent={recovery_event.intent.trade_intent_id}: "
-                                f"{type(notification_exc).__name__}: {notification_exc}"
-                            ),
-                            to_telegram=True,
-                        )
-
-            except Exception as exc:
-                log_warning(
-                    logger,
-                    f"slot-close recovery failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
-                    to_telegram=True,
-                )
 
         now_ts = int(time.time())
         if now_ts >= next_execution_stats_reconcile_ts:

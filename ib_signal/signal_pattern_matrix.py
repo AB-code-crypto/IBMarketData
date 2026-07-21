@@ -1,27 +1,22 @@
-from dataclasses import dataclass
+from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
+
 import numpy as np
 
 from contracts import Instrument
 from core.bar_utils import get_bar_size_seconds
+from core.price_source import (
+    complete_mid_close_predicate,
+    get_price_db_target,
+    mid_close_sql,
+    quote_identifier,
+)
 from core.sqlite_utils import open_sqlite_connection
-from ib_job_data.feature_db_sql import MID_PRICE_TABLE_NAME, quote_identifier
-from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 from ib_signal.signal_candidates import CandidateWindow
 from ib_signal.signal_errors import SignalDataNotReadyError
 from ib_signal.signal_window import SignalWindow
-
-PRICE_SOURCE_COLUMNS = {
-    "mid_open",
-    "mid_high",
-    "mid_low",
-    "mid_close",
-    "spread_open",
-    "spread_high",
-    "spread_low",
-    "spread_close",
-}
 
 
 @dataclass(frozen=True)
@@ -33,34 +28,16 @@ class PatternMatrixResult:
     expected_points: int
 
 
-def validate_price_source(price_source: str) -> None:
-    """Что делает: проверяет, что price_source является разрешённой колонкой job DB.
-    Зачем нужна: имя колонки нельзя подставлять в SQL без белого списка."""
-    if price_source not in PRICE_SOURCE_COLUMNS:
-        raise ValueError(
-            f"Неподдерживаемый price_source={price_source!r}. "
-            f"Допустимо: {sorted(PRICE_SOURCE_COLUMNS)}"
-        )
-
-
 def get_expected_points(window: SignalWindow, bar_size_seconds: int) -> int:
-    """Что делает: считает ожидаемое количество точек в pattern window.
-    Зачем нужна: Pearson требует одинаковую длину текущего и всех candidate-паттернов."""
-    if window.pattern_seconds % bar_size_seconds != 0:
+    if window.pattern_seconds % int(bar_size_seconds) != 0:
         raise ValueError(
             "Длина pattern window должна быть кратна размеру бара: "
-            f"pattern_seconds={window.pattern_seconds}, "
-            f"bar_size_seconds={bar_size_seconds}"
+            f"pattern_seconds={window.pattern_seconds}, bar_size_seconds={bar_size_seconds}"
         )
-
-    expected_points = window.pattern_seconds // bar_size_seconds
-
-    if expected_points < 2:
-        raise ValueError(
-            f"Для Pearson нужно минимум две точки, получено: {expected_points}"
-        )
-
-    return expected_points
+    expected = window.pattern_seconds // int(bar_size_seconds)
+    if expected < 2:
+        raise ValueError(f"Для Pearson нужно минимум две точки, получено: {expected}")
+    return expected
 
 
 def validate_pattern_rows(
@@ -71,56 +48,46 @@ def validate_pattern_rows(
         bar_size_seconds: int,
         context: str,
 ) -> np.ndarray:
-    """Что делает: проверяет полноту и шаг одного pattern window и возвращает NumPy-вектор.
-    Зачем нужна: окна с дырками или неверной длиной нельзя отдавать в Pearson."""
-    if len(rows) != expected_points:
+    if len(rows) != int(expected_points):
         raise ValueError(
             f"{context}: неправильное количество точек: "
             f"expected={expected_points}, actual={len(rows)}"
         )
-
     values = np.empty((expected_points,), dtype=float)
-
     for index, (bar_time_ts, value) in enumerate(rows):
-        expected_ts = start_ts + index * bar_size_seconds
-
+        expected_ts = int(start_ts) + index * int(bar_size_seconds)
         if int(bar_time_ts) != expected_ts:
             raise ValueError(
-                f"{context}: дырка или неверный шаг в pattern window: "
-                f"index={index}, expected_ts={expected_ts}, actual_ts={bar_time_ts}"
+                f"{context}: дырка или неверный шаг: index={index}, "
+                f"expected_ts={expected_ts}, actual_ts={bar_time_ts}"
             )
-
         values[index] = float(value)
-
     return values
 
 
 def read_current_pattern_values(
         *,
         conn,
+        instrument_code: str,
+        table_name: str,
         window: SignalWindow,
-        price_source: str,
         expected_points: int,
         bar_size_seconds: int,
 ) -> np.ndarray:
-    """Что делает: читает текущий pattern window из job DB и валидирует его полноту.
-    Зачем нужна: текущий паттерн — reference-вектор для всех Pearson-сравнений."""
     rows = [
         (int(row[0]), float(row[1]))
         for row in conn.execute(
             f"""
-            SELECT
-                bar_time_ts,
-                {quote_identifier(price_source)}
-            FROM {quote_identifier(MID_PRICE_TABLE_NAME)}
+            SELECT bar_time_ts, {mid_close_sql(instrument_code)} AS mid_close
+            FROM {quote_identifier(table_name)}
             WHERE bar_time_ts >= ?
               AND bar_time_ts < ?
+              AND {complete_mid_close_predicate()}
             ORDER BY bar_time_ts
             """,
-            (window.pattern_start_ts, window.pattern_end_ts),
+            (int(window.pattern_start_ts), int(window.pattern_end_ts)),
         ).fetchall()
     ]
-
     return validate_pattern_rows(
         rows=rows,
         start_ts=window.pattern_start_ts,
@@ -131,8 +98,6 @@ def read_current_pattern_values(
 
 
 def create_temp_candidate_windows(conn, candidates: list[CandidateWindow]) -> None:
-    """Что делает: создаёт временную таблицу candidate windows в SQLite-соединении.
-    Зачем нужна: позволяет одним range join прочитать все candidate-паттерны без тысяч отдельных запросов."""
     conn.execute("DROP TABLE IF EXISTS temp_candidate_windows")
     conn.execute(
         """
@@ -143,15 +108,11 @@ def create_temp_candidate_windows(conn, candidates: list[CandidateWindow]) -> No
         )
         """
     )
-
     conn.executemany(
         """
         INSERT INTO temp_candidate_windows (
-            candidate_index,
-            pattern_start_ts,
-            pattern_end_ts
-        )
-        VALUES (?, ?, ?)
+            candidate_index, pattern_start_ts, pattern_end_ts
+        ) VALUES (?, ?, ?)
         """,
         [
             (index, candidate.pattern_start_ts, candidate.pattern_end_ts)
@@ -163,65 +124,48 @@ def create_temp_candidate_windows(conn, candidates: list[CandidateWindow]) -> No
 def read_candidate_pattern_matrix(
         *,
         conn,
+        instrument_code: str,
+        table_name: str,
         candidates: list[CandidateWindow],
-        price_source: str,
         expected_points: int,
         bar_size_seconds: int,
 ) -> tuple[np.ndarray, list[CandidateWindow], int]:
-    """Что делает: читает candidate-паттерны, отбрасывает неполные окна и возвращает NumPy-матрицу.
-    Зачем нужна: Pearson считаем только по окнам без дырок и с точной длиной current pattern."""
     if not candidates:
-        return (
-            np.empty((0, expected_points), dtype=float),
-            [],
-            0,
-        )
+        return np.empty((0, expected_points), dtype=float), [], 0
 
     create_temp_candidate_windows(conn, candidates)
-
-    raw_matrix = np.empty((len(candidates), expected_points), dtype=float)
-    raw_matrix.fill(np.nan)
-
+    raw_matrix = np.full((len(candidates), expected_points), np.nan, dtype=float)
     counts = np.zeros((len(candidates),), dtype=np.int32)
     invalid_indices: set[int] = set()
+    midpoint = mid_close_sql(instrument_code, table_alias="p")
 
     rows = conn.execute(
         f"""
-        SELECT
-            cw.candidate_index,
-            mp.bar_time_ts,
-            mp.{quote_identifier(price_source)}
+        SELECT cw.candidate_index, p.bar_time_ts, {midpoint} AS mid_close
         FROM temp_candidate_windows AS cw
-        JOIN {quote_identifier(MID_PRICE_TABLE_NAME)} AS mp
-          ON mp.bar_time_ts >= cw.pattern_start_ts
-         AND mp.bar_time_ts < cw.pattern_end_ts
-        ORDER BY
-            cw.candidate_index,
-            mp.bar_time_ts
+        JOIN {quote_identifier(table_name)} AS p
+          ON p.bar_time_ts >= cw.pattern_start_ts
+         AND p.bar_time_ts < cw.pattern_end_ts
+        WHERE {complete_mid_close_predicate(table_alias='p')}
+        ORDER BY cw.candidate_index, p.bar_time_ts
         """
     )
 
-    for candidate_index_raw, bar_time_ts_raw, value_raw in rows:
+    for candidate_index_raw, bar_ts_raw, value_raw in rows:
         candidate_index = int(candidate_index_raw)
-
         if candidate_index in invalid_indices:
             continue
-
         point_index = int(counts[candidate_index])
-
         if point_index >= expected_points:
             invalid_indices.add(candidate_index)
             continue
-
         expected_ts = (
             candidates[candidate_index].pattern_start_ts
-            + point_index * bar_size_seconds
+            + point_index * int(bar_size_seconds)
         )
-
-        if int(bar_time_ts_raw) != expected_ts or value_raw is None:
+        if int(bar_ts_raw) != expected_ts or value_raw is None:
             invalid_indices.add(candidate_index)
             continue
-
         raw_matrix[candidate_index, point_index] = float(value_raw)
         counts[candidate_index] += 1
 
@@ -230,20 +174,13 @@ def read_candidate_pattern_matrix(
         for index in range(len(candidates))
         if index not in invalid_indices and int(counts[index]) == expected_points
     ]
-
-    valid_candidates = [
-        candidates[index]
-        for index in valid_indices
-    ]
-
-    if valid_indices:
-        candidate_matrix = raw_matrix[valid_indices, :]
-    else:
-        candidate_matrix = np.empty((0, expected_points), dtype=float)
-
-    skipped_count = len(candidates) - len(valid_candidates)
-
-    return candidate_matrix, valid_candidates, skipped_count
+    valid_candidates = [candidates[index] for index in valid_indices]
+    matrix = (
+        raw_matrix[valid_indices, :]
+        if valid_indices
+        else np.empty((0, expected_points), dtype=float)
+    )
+    return matrix, valid_candidates, len(candidates) - len(valid_candidates)
 
 
 def build_pattern_matrix(
@@ -251,74 +188,56 @@ def build_pattern_matrix(
         instrument_code: str,
         window: SignalWindow,
         candidates: list[CandidateWindow],
-        price_source: str,
 ) -> PatternMatrixResult:
-    """Что делает: собирает current-вектор и candidate-матрицу значений price_source.
-    Зачем нужна: это готовый вход для векторного расчёта Pearson через NumPy."""
-    validate_price_source(price_source)
-
     instrument_row = Instrument[instrument_code]
     bar_size_seconds = get_bar_size_seconds(instrument_row["barSizeSetting"])
     expected_points = get_expected_points(window, bar_size_seconds)
-
-    job_db_path = get_instrument_feature_db_path(
-        instrument_code=instrument_code,
-        instrument_row=instrument_row,
-    )
-
+    target = get_price_db_target(instrument_code)
     conn = open_sqlite_connection(
-        str(job_db_path),
+        str(target.db_path),
         require_existing_file=True,
         use_wal=False,
     )
-
     try:
         try:
             current_values = read_current_pattern_values(
                 conn=conn,
+                instrument_code=instrument_code,
+                table_name=target.table_name,
                 window=window,
-                price_source=price_source,
                 expected_points=expected_points,
                 bar_size_seconds=bar_size_seconds,
             )
         except ValueError as exc:
             raise SignalDataNotReadyError(str(exc)) from exc
-
-        candidate_matrix, valid_candidates, skipped_candidates_count = (
-            read_candidate_pattern_matrix(
-                conn=conn,
-                candidates=candidates,
-                price_source=price_source,
-                expected_points=expected_points,
-                bar_size_seconds=bar_size_seconds,
-            )
+        matrix, valid, skipped = read_candidate_pattern_matrix(
+            conn=conn,
+            instrument_code=instrument_code,
+            table_name=target.table_name,
+            candidates=candidates,
+            expected_points=expected_points,
+            bar_size_seconds=bar_size_seconds,
         )
-
         return PatternMatrixResult(
             current_values=current_values,
-            candidate_matrix=candidate_matrix,
-            valid_candidates=valid_candidates,
-            skipped_candidates_count=skipped_candidates_count,
+            candidate_matrix=matrix,
+            valid_candidates=valid,
+            skipped_candidates_count=skipped,
             expected_points=expected_points,
         )
-
     except sqlite3.OperationalError as exc:
         if "locked" in str(exc).lower():
             raise SignalDataNotReadyError(
-                f"job DB locked during pattern matrix build: {exc}"
+                f"price DB locked during pattern matrix build: {exc}"
             ) from exc
         raise
-
     finally:
         conn.close()
 
 
 def format_pattern_matrix_result(result: PatternMatrixResult) -> str:
-    """Что делает: форматирует результат сборки pattern matrix для runtime-лога.
-    Зачем нужна: быстро видно, сколько кандидатов осталось после проверки полноты окон."""
     return (
-        f"points={result.expected_points}, "
-        f"current_shape={result.current_values.shape}, "
+        f"points={result.expected_points}, current_shape={result.current_values.shape}, "
         f"candidate_matrix_shape={result.candidate_matrix.shape}, "
         f"valid_candidates={len(result.valid_candidates)}, "
         f"skipped_candidates={result.skipped_candidates_count}"

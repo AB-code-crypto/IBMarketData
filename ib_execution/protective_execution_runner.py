@@ -1,31 +1,19 @@
 import asyncio
 import time
-import traceback
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from typing import Any
 
 from core.logger import get_logger, log_info, log_warning, setup_logging
 from contracts import Instrument
 from ib_execution.contract_resolver import build_execution_contract
-from ib_execution.execution_logic import execute_trade_intent
-from ib_execution.execution_models import ExecutionResult, ExecutionStatus
-from ib_execution.execution_stats_reconciliation import (
-    format_backfilled_execution_stats_message,
-    reconcile_missing_execution_stats_once,
-)
+from ib_execution.execution_models import ExecutionStatus
 from ib_execution.execution_runner import (
     read_executed_trade_intent_and_result_for_notification,
-    send_deal_status_notification,
     send_executed_deal_notification,
 )
 from ib_execution.execution_store import (
     get_trade_db_connection,
     initialize_execution_db,
-    mark_trade_intent_order_submitted,
-    mark_trade_intent_sending,
-    read_new_trade_intents,
-    read_trade_intent_submission_state,
-    write_trade_intent_execution_result,
 )
 from ib_execution.order_cancellation import (
     OrderFilledDuringCancellationError,
@@ -50,19 +38,14 @@ from ib_execution.protective_order_store import (
     record_protective_order,
     has_active_protective_stop_for_parent,
 )
-from ib_execution.slot_close_recovery import (
-    SLOT_CLOSE_RECOVERY_INTERVAL_SECONDS,
-    run_slot_close_recovery_once,
-)
 from ib_execution.executable_price_reader import (
     read_first_executable_level_touch_row as read_first_level_touch_row,
-    read_latest_executable_bar as read_latest_feature_bar,
+    read_latest_executable_bar as read_latest_price_bar,
 )
-from ib_execution.slot_loss_extension import (
+from ib_execution.emergency_close import (
     close_market_safely,
     find_snapshot,
 )
-from ib_execution.slot_loss_extension_runner import run_slot_loss_extension_once
 from ib_position_sync.position_store import sync_broker_positions_once
 from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG
 from ib_trader.trade_schema import TRADE_INTENTS_TABLE_NAME
@@ -85,8 +68,6 @@ PROTECTIVE_NOTIFICATION_TIMEOUT_SECONDS = 8.0
 PROTECTIVE_WATCHDOG_TIMEOUT_SECONDS = 20.0
 PROTECTIVE_EMERGENCY_SYNC_TIMEOUT_SECONDS = 8.0
 PROTECTIVE_EMERGENCY_CLOSE_TIMEOUT_SECONDS = 45.0
-SLOT_LOSS_EXTENSION_TIMEOUT_SECONDS = 90.0
-SLOT_CLOSE_RECOVERY_TIMEOUT_SECONDS = 90.0
 EXECUTION_STATS_RECONCILE_TIMEOUT_SECONDS = 20.0
 UNCERTAIN_EXECUTION_RECONCILE_TIMEOUT_SECONDS = 20.0
 UNCERTAIN_EXECUTION_RECONCILE_INTERVAL_SECONDS = 2
@@ -402,7 +383,6 @@ async def wait_for_protective_exit_order_working_or_done(
     while True:
         status = str(getattr(getattr(trade, "orderStatus", None), "status", "") or "")
         role_value = str(role).lower()
-        last_error = order_service.monitor.last_error(order_id)
         held_until_rth_error = order_service.monitor.find_error(order_id, code=399)
 
         # code=399 для protective STOP означает, что ордер принят в PreSubmitted,
@@ -422,7 +402,6 @@ async def wait_for_protective_exit_order_working_or_done(
             # Даём errorEvent короткое время дойти после смены статуса.
             if role_value in {"stop-loss", "stop_loss"}:
                 await asyncio.sleep(0.50)
-                last_error = order_service.monitor.last_error(order_id)
                 held_until_rth_error = order_service.monitor.find_error(order_id, code=399)
 
                 if held_until_rth_error is not None:
@@ -616,8 +595,8 @@ async def run_protective_order_price_watchdog_once(*, order_service: OrderServic
         instrument_code = str(stop_order["instrument_code"])
         order_ref = str(stop_order.get("order_ref", "") or "")
 
-        # Extension TP/SL живут в той же protective_orders таблице, но управляются отдельным
-        # SLOT_LOSS_EXTENSION watchdog. Не смешиваем источники закрытия и finish_reason.
+        # Legacy auxiliary exit rows may remain in an old trade DB. The rolling-only
+        # robot never creates them, and the ordinary stop watchdog must ignore them.
         if order_ref.endswith(("_EXT_SL", "_EXT_TP")):
             continue
 
@@ -630,7 +609,7 @@ async def run_protective_order_price_watchdog_once(*, order_service: OrderServic
         stale_max_seconds = get_protective_order_price_stale_max_seconds()
         latest_start_ts = max(0, int(now_ts) - stale_max_seconds * 2)
 
-        latest_bar = read_latest_feature_bar(
+        latest_bar = read_latest_price_bar(
             instrument_code=instrument_code,
             start_ts=latest_start_ts,
             now_ts=now_ts,

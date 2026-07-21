@@ -6,10 +6,14 @@ import numpy as np
 
 from contracts import Instrument
 from core.bar_utils import get_bar_size_seconds
+from core.price_source import (
+    complete_mid_close_predicate,
+    get_price_db_target,
+    mid_close_sql,
+    quote_identifier,
+)
 from core.sqlite_utils import open_sqlite_connection
 from core.time_utils import build_bar_time_fields_from_utc_dt
-from ib_job_data.feature_db_sql import MID_PRICE_TABLE_NAME, quote_identifier
-from ib_job_data.rebuild_mid_price import get_instrument_feature_db_path
 from ib_signal.signal_candidates import CandidateWindow
 from ib_signal.signal_window import SignalWindow
 
@@ -77,38 +81,30 @@ def read_candidate_full_values(
         *,
         instrument_code: str,
         candidate: CandidateWindow,
-        price_source: str,
         expected_points: int,
         bar_size_seconds: int,
 ) -> np.ndarray | None:
-    """Что делает: читает candidate pattern + trade-window из job DB.
-    Зачем нужна: potential строится по историческому будущему уже отобранных кандидатов."""
-    instrument_row = Instrument[instrument_code]
-    job_db_path = get_instrument_feature_db_path(
-        instrument_code=instrument_code,
-        instrument_row=instrument_row,
-    )
-
+    """Reads a candidate pattern and its historical future from price DB."""
+    target = get_price_db_target(instrument_code)
     conn = open_sqlite_connection(
-        str(job_db_path),
+        str(target.db_path),
         require_existing_file=True,
         use_wal=False,
     )
-
     try:
         rows = conn.execute(
             f"""
             SELECT
                 bar_time_ts,
-                {quote_identifier(price_source)}
-            FROM {quote_identifier(MID_PRICE_TABLE_NAME)}
+                {mid_close_sql(instrument_code)} AS mid_close
+            FROM {quote_identifier(target.table_name)}
             WHERE bar_time_ts >= ?
               AND bar_time_ts < ?
+              AND {complete_mid_close_predicate()}
             ORDER BY bar_time_ts
             """,
             (candidate.pattern_start_ts, candidate.trade_end_ts),
         ).fetchall()
-
     finally:
         conn.close()
 
@@ -116,17 +112,13 @@ def read_candidate_full_values(
         return None
 
     values = np.empty((expected_points,), dtype=float)
-
     for index, row in enumerate(rows):
         bar_time_ts = int(row[0])
         value = row[1]
         expected_ts = candidate.pattern_start_ts + index * bar_size_seconds
-
         if bar_time_ts != expected_ts or value is None:
             return None
-
         values[index] = float(value)
-
     return values
 
 
@@ -295,7 +287,6 @@ def build_candidate_potential_result(
         current_values: np.ndarray,
         candidates: list[CandidateWindow],
         candidate_scores: np.ndarray,
-        price_source: str,
         min_count: int,
         max_count: int,
 ) -> CandidatePotentialResult:
@@ -368,7 +359,6 @@ def build_candidate_potential_result(
         full_values = read_candidate_full_values(
             instrument_code=instrument_code,
             candidate=candidate,
-            price_source=price_source,
             expected_points=expected_points,
             bar_size_seconds=bar_size_seconds,
         )

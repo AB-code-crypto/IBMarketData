@@ -19,13 +19,8 @@ DEFAULTS_DATA: InstrumentRow = {
     "trading_enabled": False,
     "useRTH": False,
     "barSizeSetting": "5 secs",
-    "price_digits": 2,
     "mid_price_digits": 3,
-    "regression_flat_delta_threshold_bps": 1.0,
-    "regime_flat_delta_threshold_points": 1.0,
     "price_tick": 0.25,
-    "limit_offset_points": 30.0,
-    "limit_ttl_seconds": 600,
     "take_profit_points": 100.0,
     "stop_loss_points": 150.0,
 }
@@ -43,7 +38,6 @@ FX_DEFAULTS: InstrumentRow = {
     "secType": "CASH",
     "exchange": "IDEALPRO",
     "session_model": "FX_24_5",
-    "price_digits": 5,
     "mid_price_digits": 6,
 }
 
@@ -67,7 +61,6 @@ Instrument: Registry = {
         "db_filename": "MNQ.sqlite3",
         "realtime_enabled": True,
         "trading_enabled": True,
-        "regression_flat_delta_threshold_bps": 3.0,
         "take_profit_points": 75.0,
         "stop_loss_points": 150.0,
         "contracts": [
@@ -111,10 +104,8 @@ Instrument: Registry = {
         "tradingClass": "MES",
         "multiplier": 5.0,
         "db_filename": "MES.sqlite3",
-        "regime_flat_delta_threshold_points": 0.4,
         "take_profit_points": 35.0,
         "stop_loss_points": 60.0,
-        "limit_offset_points": 10.0,
         "contracts": [
             {"conId": 620731036, "localSymbol": "MESM4", "lastTradeDateOrContractMonth": "20240621",
              "active_from_utc": "2024-03-13T22:00:00Z", "active_to_utc": "2024-06-19T17:00:00Z"},
@@ -156,8 +147,6 @@ Instrument: Registry = {
         "currency": "USD",
         "db_filename": "EURUSD.sqlite3",
         "history_start_utc": "2025-09-22T01:00:00Z",
-        "regression_flat_delta_threshold_bps": 2.0,
-        "regime_flat_delta_threshold_points": 0.00008,
     },
     "NQ": {
         **FUT_DEFAULTS,
@@ -250,7 +239,5 @@ Instrument: Registry = {
         "exchange": "PAXOS",
         "db_filename": "BTCUSD.sqlite3",
         "history_start_utc": "2025-09-15T01:00:00Z",
-        "regression_flat_delta_threshold_bps": 10.0,
-        "regime_flat_delta_threshold_points": 10.0,
     },
 }

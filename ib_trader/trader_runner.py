@@ -135,11 +135,7 @@ async def run_trader_loop() -> None:
                         f"reason={intent.reason}, "
                         f"signal_direction={intent.signal_direction}, "
                         f"potential_end={intent.potential_end_delta_points:+.2f}, "
-                        f"regime={intent.regime}, "
-                        f"ma_zone={intent.ma_zone}, "
-                        f"strength={intent.signal_strength}, "
                         f"order_type={intent.order_type}, "
-                        f"limit_price={intent.limit_price}, "
                         f"position_before={intent.position_before_side.value}/{intent.position_before_qty:g}, "
                         f"position_after={intent.position_after_side.value}/{intent.position_after_qty:g}"
                     ),

@@ -150,7 +150,7 @@ def _log_connection_details(*, server_time_text: str, active_instruments: dict) 
 
 
 def _reset_signal_states_for_enabled_instruments() -> None:
-    """Что делает: сбрасывает signal-ready состояние инструментов полного live-контура перед новым запуском market-data. Зачем нужна: защищает job-data и signal сервисы от stale-состояния прошлого запуска."""
+    """Что делает: сбрасывает signal-ready состояние инструментов полного live-контура перед новым запуском market-data. Зачем нужна: защищает signal-сервис от stale-состояния прошлого запуска."""
     initialize_state_db()
 
     for instrument_code, instrument_row in Instrument.items():
