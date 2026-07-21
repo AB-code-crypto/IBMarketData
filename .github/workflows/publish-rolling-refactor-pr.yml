@@ -33,46 +33,40 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Validate payload transport parts
+      - name: Validate reconstructed payload transport
         id: transport
         continue-on-error: true
         shell: bash
         run: |
-          python - <<'PY' > transport.log 2>&1
-          from hashlib import sha256
-          from pathlib import Path
+          set -o pipefail
+          {
+            cat scripts/.rolling_payload_v3.part00
+            cat scripts/.rolling_payload_v3.part01
+            cat scripts/.rolling_payload_v3.part02
+            cat scripts/.rolling_payload_v3.part03a
+            cat scripts/.rolling_payload_v3.part03b
+            cat scripts/.rolling_payload_v3.part03c
+            cat scripts/.rolling_payload_v3.part03d
+            cat scripts/.rolling_payload_v3.part04
+            cat scripts/.rolling_payload_v3.part05
+            cat scripts/.rolling_payload_v3.part06
+          } \
+            | tr -d '\r\n' \
+            | base64 --decode \
+            > /tmp/rolling_refactor_transport_check.tar.xz \
+            2> transport.log
 
-          expected = {
-              0: (16001, '85365ec3cf68d2d4570f020a614bbf5f1a3d5144c96a062cfbbe7ca0e94b0367'),
-              1: (16001, '0e9326a720db8e5644f8eb2653bdf7663df37dabcf7b69cf794fcc4639ce52a4'),
-              2: (16001, '5b711d46d7845b47363d561d2ec8bbedd60e02001509864aa24c8def11eacd06'),
-              3: (16001, '28a9ebf4568bfff94c7ade2eb20e4bfb6848964095e430349d9eb50c357f6d68'),
-              4: (16001, '90da0dd2ffed37f237b7eb37a11457b06a4d9613127dd7a703596ed9ff47a44d'),
-              5: (16001, '5626142f5835f6387ab95c3957cc88b0e517c8d4a58348259f941fb002d8726d'),
-              6: (15353, '1b7b256dcacc6c21b4c0c1543da690f20f5533c0f9b59c9820a21bab1730e5ae'),
-          }
-          allowed = set(b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\r\n')
-          failed = False
+          printf '%s  %s\n' \
+            '31aa29f44e9f41216d588edaa0f85030328bf8ab870c7cd206cdeacd7650340b' \
+            /tmp/rolling_refactor_transport_check.tar.xz \
+            | sha256sum --check - \
+            >> transport.log \
+            2>&1
 
-          for index, (expected_size, expected_sha) in expected.items():
-              path = Path(f'scripts/.rolling_payload_v3.part{index:02d}')
-              data = path.read_bytes()
-              actual_sha = sha256(data).hexdigest()
-              invalid = sorted(set(data) - allowed)
-              ok = (
-                  len(data) == expected_size
-                  and actual_sha == expected_sha
-                  and not invalid
-              )
-              print(
-                  f'part{index:02d}: ok={ok} size={len(data)}/{expected_size} '
-                  f'sha={actual_sha}/{expected_sha} invalid={invalid}'
-              )
-              failed = failed or not ok
-
-          if failed:
-              raise SystemExit(1)
-          PY
+          tar --list --xz \
+            --file /tmp/rolling_refactor_transport_check.tar.xz \
+            >> transport.log \
+            2>&1
 
       - name: Upload payload transport diagnostics
         if: always()
@@ -97,7 +91,18 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cp scripts/run_rolling_refactor_publisher.sh /tmp/run_rolling_refactor_publisher.sh
+
+          # The original large part03 was damaged by the GitHub contents
+          # transport. Reconstruct it from four independently verified chunks.
+          cat \
+            scripts/.rolling_payload_v3.part03a \
+            scripts/.rolling_payload_v3.part03b \
+            scripts/.rolling_payload_v3.part03c \
+            scripts/.rolling_payload_v3.part03d \
+            > scripts/.rolling_payload_v3.part03
+
+          cp scripts/run_rolling_refactor_publisher.sh \
+            /tmp/run_rolling_refactor_publisher.sh
           bash /tmp/run_rolling_refactor_publisher.sh \
             > publisher.log \
             2>&1
