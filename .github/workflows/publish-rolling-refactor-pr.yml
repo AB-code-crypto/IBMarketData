@@ -92,17 +92,33 @@ jobs:
         run: |
           set -o pipefail
 
-          # The original large part03 was damaged by the GitHub contents
-          # transport. Reconstruct it from four independently verified chunks.
-          cat \
-            scripts/.rolling_payload_v3.part03a \
-            scripts/.rolling_payload_v3.part03b \
-            scripts/.rolling_payload_v3.part03c \
-            scripts/.rolling_payload_v3.part03d \
-            > scripts/.rolling_payload_v3.part03
+          python - <<'PY'
+          from pathlib import Path
 
-          cp scripts/run_rolling_refactor_publisher.sh \
-            /tmp/run_rolling_refactor_publisher.sh
+          source = Path('scripts/run_rolling_refactor_publisher.sh').read_text(
+              encoding='utf-8'
+          )
+          old = 'scripts/.rolling_payload_v3.part{00..06}'
+          parts = (
+              'scripts/.rolling_payload_v3.part00 '
+              'scripts/.rolling_payload_v3.part01 '
+              'scripts/.rolling_payload_v3.part02 '
+              'scripts/.rolling_payload_v3.part03a '
+              'scripts/.rolling_payload_v3.part03b '
+              'scripts/.rolling_payload_v3.part03c '
+              'scripts/.rolling_payload_v3.part03d '
+              'scripts/.rolling_payload_v3.part04 '
+              'scripts/.rolling_payload_v3.part05 '
+              'scripts/.rolling_payload_v3.part06'
+          )
+          if old not in source:
+              raise RuntimeError('publisher transport expression not found')
+          Path('/tmp/run_rolling_refactor_publisher.sh').write_text(
+              source.replace(old, parts),
+              encoding='utf-8',
+          )
+          PY
+
           bash /tmp/run_rolling_refactor_publisher.sh \
             > publisher.log \
             2>&1
