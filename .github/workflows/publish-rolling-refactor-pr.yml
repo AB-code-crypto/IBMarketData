@@ -98,7 +98,8 @@ jobs:
           source = Path('scripts/run_rolling_refactor_publisher.sh').read_text(
               encoding='utf-8'
           )
-          old = 'scripts/.rolling_payload_v3.part{00..06}'
+
+          old_transport = 'scripts/.rolling_payload_v3.part{00..06}'
           parts = (
               'scripts/.rolling_payload_v3.part00 '
               'scripts/.rolling_payload_v3.part01 '
@@ -111,10 +112,23 @@ jobs:
               'scripts/.rolling_payload_v3.part05 '
               'scripts/.rolling_payload_v3.part06'
           )
-          if old not in source:
+          old_count = '''changed_count="$(git diff --name-only "$EXPECTED_BASE_SHA" | wc -l | tr -d ' ')"'''
+          new_count = '''changed_count="$(
+            {
+              git diff --name-only "$EXPECTED_BASE_SHA"
+              git ls-files --others --exclude-standard
+            } | sort -u | wc -l | tr -d ' '
+          )"'''
+
+          if old_transport not in source:
               raise RuntimeError('publisher transport expression not found')
+          if old_count not in source:
+              raise RuntimeError('publisher changed-file counter not found')
+
+          source = source.replace(old_transport, parts)
+          source = source.replace(old_count, new_count)
           Path('/tmp/run_rolling_refactor_publisher.sh').write_text(
-              source.replace(old, parts),
+              source,
               encoding='utf-8',
           )
           PY
