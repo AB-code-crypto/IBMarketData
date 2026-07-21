@@ -65,6 +65,12 @@ SKIP_DIR_NAMES = {
     "venv",
 }
 
+# Deployment documentation must explicitly name removed components so operators
+# can verify that they are absent. It is not production source code.
+FORBIDDEN_SCAN_SKIP_FILES = {
+    "docs/rolling_only_runbook.md",
+}
+
 # The signal-event migration must recognize old column names while copying rows.
 TEXT_ALLOWLIST: dict[str, set[str]] = {
     "ib_signal/signal_event_store.py": {
@@ -99,6 +105,8 @@ def verify_forbidden_text(root: Path, errors: list[str]) -> None:
     for path in iter_source_files(root):
         relative = path.relative_to(root).as_posix()
         if relative == "scripts/verify_rolling_refactor.py":
+            continue
+        if relative in FORBIDDEN_SCAN_SKIP_FILES:
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
         allowed = TEXT_ALLOWLIST.get(relative, set())
