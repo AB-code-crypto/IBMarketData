@@ -34,8 +34,29 @@ jobs:
           cache: pip
 
       - name: Build, validate and publish the production branch
+        id: publisher
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
+          set -o pipefail
           cp scripts/run_rolling_refactor_publisher.sh /tmp/run_rolling_refactor_publisher.sh
-          bash /tmp/run_rolling_refactor_publisher.sh
+          bash /tmp/run_rolling_refactor_publisher.sh \
+            > publisher.log \
+            2>&1
+
+      - name: Upload complete publisher log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rolling-refactor-publisher-log
+          path: publisher.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Report publisher failure
+        if: steps.publisher.outcome == 'failure'
+        shell: bash
+        run: |
+          echo 'Publisher failed. Last 200 log lines:' >&2
+          tail -200 publisher.log >&2
+          exit 1
