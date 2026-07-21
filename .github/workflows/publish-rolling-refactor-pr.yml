@@ -33,8 +33,66 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      - name: Validate payload transport parts
+        id: transport
+        continue-on-error: true
+        shell: bash
+        run: |
+          python - <<'PY' > transport.log 2>&1
+          from hashlib import sha256
+          from pathlib import Path
+
+          expected = {
+              0: (16001, '85365ec3cf68d2d4570f020a614bbf5f1a3d5144c96a062cfbbe7ca0e94b0367'),
+              1: (16001, '0e9326a720db8e5644f8eb2653bdf7663df37dabcf7b69cf794fcc4639ce52a4'),
+              2: (16001, '5b711d46d7845b47363d561d2ec8bbedd60e02001509864aa24c8def11eacd06'),
+              3: (16001, '28a9ebf4568bfff94c7ade2eb20e4bfb6848964095e430349d9eb50c357f6d68'),
+              4: (16001, '90da0dd2ffed37f237b7eb37a11457b06a4d9613127dd7a703596ed9ff47a44d'),
+              5: (16001, '5626142f5835f6387ab95c3957cc88b0e517c8d4a58348259f941fb002d8726d'),
+              6: (15353, '1b7b256dcacc6c21b4c0c1543da690f20f5533c0f9b59c9820a21bab1730e5ae'),
+          }
+          allowed = set(b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\r\n')
+          failed = False
+
+          for index, (expected_size, expected_sha) in expected.items():
+              path = Path(f'scripts/.rolling_payload_v3.part{index:02d}')
+              data = path.read_bytes()
+              actual_sha = sha256(data).hexdigest()
+              invalid = sorted(set(data) - allowed)
+              ok = (
+                  len(data) == expected_size
+                  and actual_sha == expected_sha
+                  and not invalid
+              )
+              print(
+                  f'part{index:02d}: ok={ok} size={len(data)}/{expected_size} '
+                  f'sha={actual_sha}/{expected_sha} invalid={invalid}'
+              )
+              failed = failed or not ok
+
+          if failed:
+              raise SystemExit(1)
+          PY
+
+      - name: Upload payload transport diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rolling-refactor-transport-diagnostics
+          path: transport.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Stop on damaged transport
+        if: steps.transport.outcome == 'failure'
+        shell: bash
+        run: |
+          cat transport.log >&2
+          exit 1
+
       - name: Build, validate and publish the production branch
         id: publisher
+        if: steps.transport.outcome == 'success'
         continue-on-error: true
         shell: bash
         run: |
@@ -45,7 +103,7 @@ jobs:
             2>&1
 
       - name: Upload complete publisher log
-        if: always()
+        if: always() && steps.transport.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: rolling-refactor-publisher-log
@@ -54,7 +112,7 @@ jobs:
           retention-days: 7
 
       - name: Report publisher failure
-        if: steps.publisher.outcome == 'failure'
+        if: steps.transport.outcome == 'success' && steps.publisher.outcome == 'failure'
         shell: bash
         run: |
           echo 'Publisher failed. Last 200 log lines:' >&2
