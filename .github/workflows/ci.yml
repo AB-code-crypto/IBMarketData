@@ -51,6 +51,7 @@ jobs:
           python -m unittest \
             tester.rolling_signal_smoke_tester \
             tester.rolling_price_pipeline_tester \
+            tester.execution_sqlite_locking_tester \
             -v
 
       - name: Compile Python sources
