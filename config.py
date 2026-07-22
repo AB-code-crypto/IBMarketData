@@ -20,11 +20,15 @@ class Settings:
     # Имя робота для Telegram-сообщений и логической идентификации сервиса.
     robot_name: str = "IBMarketData"
 
+    # host/port выбирают конкретный экземпляр TWS / IB Gateway.
+    # Базовый clientId разделяет API-клиентов этого робота внутри выбранного TWS.
     ib_host: str = "127.0.0.1"
     ib_port: int = 7496  # 7497 - демо счёт, 7496 - реальный счёт
     ib_client_id: int = 200
 
-    # Чувствительный account id остаётся в .env.
+    # Fail-closed защита от подключения к неправильному счёту.
+    # Она не выбирает TWS, а проверяет, что выбранный через host/port терминал
+    # действительно предоставляет ожидаемый account id.
     ib_account_id: str = os.environ["IB_ACCOUNT_ID"].strip()
 
     # Clock guard: новые OPEN/REVERSE запрещены, если локальные часы
