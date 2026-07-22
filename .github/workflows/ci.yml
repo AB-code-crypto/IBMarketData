@@ -59,9 +59,12 @@ jobs:
         run: python -m compileall -q .
 
       - name: Check diff and changed Python files
+        id: lint
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
+          exec > >(tee lint.log) 2>&1
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             base_sha="${{ github.event.pull_request.base.sha }}"
@@ -88,6 +91,17 @@ jobs:
           if (( ${#changed_python[@]} > 0 )); then
             ruff check --ignore E402 "${changed_python[@]}"
           fi
+
+      - name: Upload lint diagnostics
+        if: steps.lint.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-diagnostics
+          path: lint.log
+
+      - name: Fail when lint validation failed
+        if: steps.lint.outcome == 'failure'
+        run: exit 1
 
       - name: Import critical production modules
         run: |
