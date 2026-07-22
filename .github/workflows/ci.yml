@@ -46,12 +46,13 @@ jobs:
       - name: Verify rolling-only architecture
         run: python scripts/verify_rolling_refactor.py .
 
-      - name: Run smoke and integration tests
+      - name: Run smoke, integration and characterization tests
         run: |
           python -m unittest \
             tester.rolling_signal_smoke_tester \
             tester.rolling_price_pipeline_tester \
             tester.execution_sqlite_locking_tester \
+            tester.current_system_behavior_characterization_tester \
             -v
 
       - name: Compile Python sources
