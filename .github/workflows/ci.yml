@@ -18,6 +18,9 @@ jobs:
     timeout-minutes: 30
 
     env:
+      IB_HOST: 127.0.0.1
+      IB_PORT: "7497"
+      IB_CLIENT_ID: "200"
       IB_ACCOUNT_ID: U0000000
       TELEGRAM_BOT_TOKEN: test-token
       TELEGRAM_CHAT_ID: "-1000000000000"
