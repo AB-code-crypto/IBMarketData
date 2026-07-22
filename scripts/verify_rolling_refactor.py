@@ -42,6 +42,7 @@ FORBIDDEN_TEXT = (
     "candidate_funnel_store",
     "regression_flat_delta_threshold",
     "regime_flat_delta_threshold",
+    "PLOT_TOP_CANDIDATES",
     "mid_open",
     "mid_high",
     "mid_low",
@@ -171,8 +172,24 @@ def verify_structure(root: Path, errors: list[str]) -> None:
     require_contains(
         root,
         "ib_signal/signal_config.py",
-        required=("rolling_back_minutes", "rolling_trade_minutes"),
-        forbidden=("signal_window_mode", "second_chance", "market_regime"),
+        required=(
+            "rolling_back_minutes",
+            "rolling_trade_minutes",
+            "candidate_potential_max_count",
+        ),
+        forbidden=(
+            "signal_window_mode",
+            "second_chance",
+            "market_regime",
+            "PLOT_TOP_CANDIDATES",
+        ),
+        errors=errors,
+    )
+    require_contains(
+        root,
+        "ib_signal/signal_plot.py",
+        required=("candidate_potential_result.max_count",),
+        forbidden=("PLOT_TOP_CANDIDATES",),
         errors=errors,
     )
     require_contains(
