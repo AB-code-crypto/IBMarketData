@@ -4,8 +4,6 @@ from pathlib import Path
 
 import matplotlib
 
-from ib_signal.signal_config import PLOT_TOP_CANDIDATES
-
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -124,7 +122,10 @@ def save_signal_candidate_plot(
     fig, axes = plt.subplots(2, 1, figsize=(13, 9))
     pattern_ax, potential_ax = axes
 
-    top_count = min(PLOT_TOP_CANDIDATES, len(valid_candidates))
+    top_count = min(
+        int(candidate_potential_result.max_count),
+        len(valid_candidates),
+    )
     for index in range(top_count - 1, -1, -1):
         candidate = valid_candidates[index]
         label = (
