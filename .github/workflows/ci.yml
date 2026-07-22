@@ -76,7 +76,9 @@ jobs:
             base_sha="$(git rev-parse HEAD^)"
           fi
 
-          git diff --check "$base_sha" HEAD
+          # Markdown uses two trailing spaces intentionally for hard line breaks.
+          # Keep whitespace validation strict for code/configuration files.
+          git diff --check "$base_sha" HEAD -- . ':!*.md' ':!**/*.md'
 
           mapfile -d '' changed_python < <(
             git diff \
