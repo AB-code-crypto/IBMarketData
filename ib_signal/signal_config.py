@@ -1,9 +1,6 @@
 from dataclasses import dataclass
 
 
-PLOT_TOP_CANDIDATES = 5
-
-
 @dataclass(frozen=True)
 class SignalConfig:
     # A complete BID/ASK close bar older than this is not safe for live signals.
