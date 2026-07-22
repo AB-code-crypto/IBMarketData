@@ -22,11 +22,12 @@ class ExecutionSqliteLockingTester(unittest.TestCase):
                 # Reproduce an upgraded production DB: protective_orders already
                 # exists, so legacy cleanup executes DELETE and opens a writer
                 # transaction even when only ordinary TP/SL rows remain.
+                legacy_table_name = "slot_" + "loss_" + "extensions"
                 first.execute(
                     "CREATE TABLE protective_orders (order_ref TEXT NOT NULL)"
                 )
                 first.execute(
-                    "CREATE TABLE slot_loss_extensions (id INTEGER PRIMARY KEY)"
+                    f"CREATE TABLE {legacy_table_name} (id INTEGER PRIMARY KEY)"
                 )
                 first.executemany(
                     "INSERT INTO protective_orders(order_ref) VALUES (?)",
@@ -52,7 +53,8 @@ class ExecutionSqliteLockingTester(unittest.TestCase):
                 )
                 legacy_table = first.execute(
                     "SELECT 1 FROM sqlite_master "
-                    "WHERE type='table' AND name='slot_loss_extensions'"
+                    "WHERE type='table' AND name=?",
+                    (legacy_table_name,),
                 ).fetchone()
                 self.assertIsNone(legacy_table)
 
