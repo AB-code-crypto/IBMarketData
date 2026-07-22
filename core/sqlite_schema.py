@@ -68,3 +68,12 @@ def require_table_absent(conn, table_name: str, *, reason: str) -> None:
         raise RuntimeError(
             f"Obsolete SQLite table is present: table={table_name}; {reason}"
         )
+
+    # execution DB initialization performs one-time legacy cleanup before these
+    # final schema guards.  That cleanup may execute DELETE even when no rows
+    # match, which opens a SQLite writer transaction.  Async reconciliation must
+    # never carry that writer lock into an await, otherwise another task in the
+    # same execution process deadlocks on trade.sqlite3.  These guards are the
+    # end of the initialization boundary, so commit any pending setup transaction.
+    if bool(getattr(conn, "in_transaction", False)):
+        conn.commit()
