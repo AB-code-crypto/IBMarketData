@@ -68,7 +68,7 @@ jobs:
             --apply
           python apps/run_position_feed_v2.py --validate-store-only
 
-      - name: Validate shadow market-data store
+      - name: Validate shadow market-data store and parity CLIs
         env:
           IBMD_DEPLOYMENT_ID: ci-market-data
           IBMD_DATA_ROOT: /tmp/ibmd-market-data-ci
@@ -81,6 +81,8 @@ jobs:
             --application-version "$IBMD_APPLICATION_VERSION" \
             --apply
           python apps/run_market_data_v2.py --validate-store-only
+          python scripts/backfill_target_market_data.py --help >/dev/null
+          python scripts/compare_market_data_shadow.py --help >/dev/null
 
       - name: Run smoke, integration and characterization tests
         run: |
@@ -96,6 +98,7 @@ jobs:
             tester.target_architecture_boundary_tester \
             tester.target_position_feed_tester \
             tester.target_market_data_tester \
+            tester.target_market_data_parity_tester \
             -v
 
       - name: Compile Python sources
@@ -173,6 +176,7 @@ jobs:
               'ibmd.public_contracts.market_data',
               'ibmd.operations.health.filesystem',
               'ibmd.operations.migrations.runner',
+              'ibmd.operations.parity.market_data',
               'ibmd.catalog.store',
               'ibmd.catalog.resolver',
               'ibmd.ib_gateway.positions',
@@ -181,6 +185,7 @@ jobs:
               'ibmd.ib_gateway.ib_async_market_data',
               'ibmd.position_feed.application.service',
               'ibmd.position_feed.adapters.sqlite_store',
+              'ibmd.market_data.application.backfill',
               'ibmd.market_data.application.service',
               'ibmd.market_data.adapters.sqlite_store',
           )
