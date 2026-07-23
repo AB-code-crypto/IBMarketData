@@ -79,6 +79,7 @@ jobs:
             tester.current_system_liquidation_characterization_tester \
             tester.target_foundation_tester \
             tester.target_catalog_tester \
+            tester.target_architecture_boundary_tester \
             tester.target_position_feed_tester \
             -v
 
