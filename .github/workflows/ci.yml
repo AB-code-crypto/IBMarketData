@@ -160,7 +160,10 @@ jobs:
           )
 
           if (( ${#changed_python[@]} > 0 )); then
-            ruff check --ignore E402 "${changed_python[@]}"
+            ruff check \
+              --select E4,E7,E9,F \
+              --ignore E402 \
+              "${changed_python[@]}"
           fi
 
       - name: Upload lint diagnostics
