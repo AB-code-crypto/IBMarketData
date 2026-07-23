@@ -1,0 +1,19 @@
+{
+  "store_name": "position_feed",
+  "migrations": [
+    {
+      "version": 1,
+      "name": "create_broker_position_snapshot_store_v1",
+      "statements": [
+        "CREATE TABLE internal_position_snapshot_attempts (\n    snapshot_id TEXT PRIMARY KEY,\n    account_id TEXT NOT NULL,\n    captured_at_utc TEXT NOT NULL,\n    published_at_utc TEXT,\n    status TEXT NOT NULL CHECK (status IN ('WRITING', 'COMPLETE', 'FAILED')),\n    row_count INTEGER NOT NULL DEFAULT 0 CHECK (row_count >= 0),\n    source_session_id TEXT NOT NULL,\n    error_text TEXT,\n    created_at_utc TEXT NOT NULL\n)",
+        "CREATE TABLE internal_broker_position_rows (\n    snapshot_id TEXT NOT NULL,\n    row_ordinal INTEGER NOT NULL CHECK (row_ordinal >= 0),\n    con_id INTEGER NOT NULL CHECK (con_id > 0),\n    local_symbol TEXT,\n    symbol TEXT NOT NULL,\n    sec_type TEXT NOT NULL,\n    exchange TEXT,\n    currency TEXT,\n    signed_quantity REAL NOT NULL CHECK (signed_quantity != 0),\n    average_cost REAL,\n    PRIMARY KEY (snapshot_id, row_ordinal),\n    UNIQUE (snapshot_id, con_id),\n    FOREIGN KEY (snapshot_id)\n        REFERENCES internal_position_snapshot_attempts(snapshot_id)\n        ON DELETE CASCADE\n)",
+        "CREATE TABLE internal_position_feed_state (\n    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),\n    latest_complete_snapshot_id TEXT,\n    FOREIGN KEY (latest_complete_snapshot_id)\n        REFERENCES internal_position_snapshot_attempts(snapshot_id)\n)",
+        "INSERT INTO internal_position_feed_state (\n    singleton_id,\n    latest_complete_snapshot_id\n) VALUES (1, NULL)",
+        "CREATE INDEX idx_internal_position_snapshot_status_captured\nON internal_position_snapshot_attempts(status, captured_at_utc)",
+        "CREATE VIEW public_broker_position_snapshots_v1 AS\nSELECT\n    snapshot_id,\n    account_id,\n    captured_at_utc,\n    published_at_utc,\n    status,\n    row_count,\n    source_session_id\nFROM internal_position_snapshot_attempts\nWHERE status = 'COMPLETE'",
+        "CREATE VIEW public_broker_position_rows_v1 AS\nSELECT\n    row.snapshot_id,\n    row.row_ordinal,\n    row.con_id,\n    row.local_symbol,\n    row.symbol,\n    row.sec_type,\n    row.exchange,\n    row.currency,\n    row.signed_quantity,\n    row.average_cost\nFROM internal_broker_position_rows AS row\nJOIN internal_position_snapshot_attempts AS snapshot\n  ON snapshot.snapshot_id = row.snapshot_id\nWHERE snapshot.status = 'COMPLETE'",
+        "CREATE VIEW public_broker_position_latest_v1 AS\nSELECT\n    snapshot.snapshot_id,\n    snapshot.account_id,\n    snapshot.captured_at_utc,\n    snapshot.published_at_utc,\n    snapshot.status,\n    snapshot.row_count,\n    snapshot.source_session_id\nFROM internal_position_feed_state AS state\nJOIN internal_position_snapshot_attempts AS snapshot\n  ON snapshot.snapshot_id = state.latest_complete_snapshot_id\nWHERE state.singleton_id = 1\n  AND snapshot.status = 'COMPLETE'"
+      ]
+    }
+  ]
+}
