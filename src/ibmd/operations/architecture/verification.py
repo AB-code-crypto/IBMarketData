@@ -156,6 +156,10 @@ def verify_target_architecture(repo_root: str | Path) -> list[ImportViolation]:
         source_service = _source_service(module_name)
         is_domain = "domain" in path.relative_to(source_root).parts
         is_supervisor = module_name.startswith("ibmd.operations.supervisor")
+        is_ib_gateway = (
+            module_name == "ibmd.ib_gateway"
+            or module_name.startswith("ibmd.ib_gateway.")
+        )
 
         for node in ast.walk(tree):
             for imported, line, aliases in _imported_modules(node):
@@ -215,6 +219,18 @@ def verify_target_architecture(repo_root: str | Path) -> list[ImportViolation]:
                             ),
                         )
                     )
+                if is_ib_gateway and target_service is not None:
+                    violations.append(
+                        ImportViolation(
+                            rule_id="TGT-202",
+                            path=path,
+                            line=line,
+                            message=(
+                                "reusable IB gateway imports a robot service package: "
+                                f"{target_service}"
+                            ),
+                        )
+                    )
                 if is_domain and top_level in _DOMAIN_FORBIDDEN_IMPORTS:
                     violations.append(
                         ImportViolation(
@@ -223,6 +239,21 @@ def verify_target_architecture(repo_root: str | Path) -> list[ImportViolation]:
                             line=line,
                             message=(
                                 "domain module imports storage/network/broker library: "
+                                f"{imported}"
+                            ),
+                        )
+                    )
+                if is_domain and (
+                    imported == "ibmd.ib_gateway"
+                    or imported.startswith("ibmd.ib_gateway.")
+                ):
+                    violations.append(
+                        ImportViolation(
+                            rule_id="TGT-301",
+                            path=path,
+                            line=line,
+                            message=(
+                                "domain module imports IB gateway infrastructure: "
                                 f"{imported}"
                             ),
                         )
