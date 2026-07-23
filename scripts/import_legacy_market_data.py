@@ -28,10 +28,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Import complete legacy BID/ASK bars into the target market-data "
-            "store over one explicit UTC interval. The legacy database is "
-            "opened read-only. Without --apply this command performs only a "
-            "validated dry run."
-        )
+            "store over one explicit UTC interval.\n"
+            "The legacy database is opened read-only.\n"
+            "Without --apply, this command performs only a validated dry run."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--legacy-database", type=Path, required=True)
     parser.add_argument("--legacy-table", default="MNQ_5s")
