@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -11,7 +12,6 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from ibmd.catalog import load_catalog_bundle
-from ibmd.foundation.config import load_deployment_settings
 from ibmd.foundation.identity import new_id
 from ibmd.foundation.process_lock import ServiceProcessLock
 from ibmd.foundation.time import format_utc, parse_utc
@@ -47,6 +47,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="write validated missing complete bars into the target store",
     )
     return parser
+
+
+def _required_environment(name: str) -> str:
+    value = str(os.environ.get(name, "") or "").strip()
+    if not value:
+        raise ValueError(f"required environment value is missing: {name}")
+    return value
+
+
+def _market_data_lock() -> ServiceProcessLock:
+    deployment_id = _required_environment("IBMD_DEPLOYMENT_ID")
+    data_root = Path(
+        _required_environment("IBMD_DATA_ROOT")
+    ).expanduser()
+    if not data_root.is_absolute():
+        data_root = Path.cwd() / data_root
+    lock_file = (
+        data_root.resolve()
+        / "runtime"
+        / "locks"
+        / f"{SERVICE_NAME}.lock"
+    )
+    return ServiceProcessLock(
+        lock_file,
+        service_name=SERVICE_NAME,
+        deployment_id=deployment_id,
+        instance_id=new_id("instance"),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -109,14 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         return result.to_dict()
 
     if arguments.apply:
-        settings = load_deployment_settings()
-        paths = settings.paths_for(SERVICE_NAME)
-        with ServiceProcessLock(
-            paths.lock_file,
-            service_name=SERVICE_NAME,
-            deployment_id=settings.deployment_id,
-            instance_id=new_id("instance"),
-        ):
+        with _market_data_lock():
             payload = execute()
     else:
         payload = execute()
