@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -17,6 +20,7 @@ from ibmd.ib_gateway.ib_async_market_data import (
     IBMarketDataConnectionSettings,
 )
 from ibmd.public_contracts.market_data import MarketDataContractV1
+from scripts.import_legacy_market_data import _market_data_lock
 
 ACCOUNT_ID = "U0000000"
 
@@ -95,6 +99,26 @@ class ReadOnlyMarketDataStartupTest(unittest.IsolatedAsyncioTestCase):
             StartupFetchNONE,
         )
         await reader.close()
+
+
+class LegacyImporterLockTest(unittest.TestCase):
+    def test_apply_lock_does_not_require_IB_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            environment = {
+                "IBMD_DEPLOYMENT_ID": "shadow-mnq-account1",
+                "IBMD_DATA_ROOT": temp_dir,
+            }
+            with patch.dict(os.environ, environment, clear=True):
+                lock = _market_data_lock()
+                with lock:
+                    self.assertTrue(
+                        (
+                            Path(temp_dir)
+                            / "runtime"
+                            / "locks"
+                            / "market_data.lock"
+                        ).is_file()
+                    )
 
 
 if __name__ == "__main__":
