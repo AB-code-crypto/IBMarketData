@@ -11,10 +11,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from ibmd.foundation.atomic_json import atomic_write_json
-from ibmd.operations.parity.market_data import (
-    MarketDataParityError,
-    compare_market_data_databases,
-)
+from ibmd.operations.parity.market_data import compare_market_data_databases
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -49,10 +46,13 @@ def main(argv: list[str] | None = None) -> int:
             tolerance=arguments.tolerance,
             max_samples=arguments.max_samples,
         )
-    except MarketDataParityError as exc:
+    except Exception as exc:
         print(
             json.dumps(
-                {"is_match": False, "error": str(exc)},
+                {
+                    "is_match": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
                 ensure_ascii=False,
                 sort_keys=True,
             ),
