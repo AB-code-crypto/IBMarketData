@@ -1,0 +1,150 @@
+{
+  "calendar_version": "mnq.contracts.v1",
+  "content_hash": "2b81adca8e8dc9d79a7c0a65add205d1e50875f9e0684e3a93c30bf5aa6d46e8",
+  "contracts": [
+    {
+      "active_from_utc": "2024-03-13T22:00:00Z",
+      "active_to_utc": "2024-06-19T17:00:00Z",
+      "con_id": 620730945,
+      "instrument_id": "MNQ",
+      "last_trade_date": "20240621",
+      "local_symbol": "MNQM4"
+    },
+    {
+      "active_from_utc": "2024-06-19T22:00:00Z",
+      "active_to_utc": "2024-09-18T21:00:00Z",
+      "con_id": 637533593,
+      "instrument_id": "MNQ",
+      "last_trade_date": "20240920",
+      "local_symbol": "MNQU4"
+    },
+    {
+      "active_from_utc": "2024-09-18T22:00:00Z",
+      "active_to_utc": "2024-12-18T22:00:00Z",
+      "con_id": 654503320,
+      "instrument_id": "MNQ",
+      "last_trade_date": "20241220",
+      "local_symbol": "MNQZ4"
+    },
+    {
+      "active_from_utc": "2024-12-18T23:00:00Z",
+      "active_to_utc": "2025-03-19T21:00:00Z",
+      "con_id": 672387468,
+      "instrument_id": "MNQ",
+      "last_trade_date": "20250321",
+      "local_symbol": "MNQH5"
+    },
+    {
+      "active_from_utc": "2025-03-19T22:00:00Z",
+      "active_to_utc": "2025-06-18T21:00:00Z",
+      "con_id": 691171685,
+      "instrument_id": "MNQ",
+      "last_trade_date": "20250620",
+      "local_symbol": "MNQM5"
+    },
+    {
+      "active_from_utc": "2025-06-18T22:00:00Z",
+      "active_to_utc": "2025-09-17T21:00:00Z",
+      "con_id": 711280073,
+      "instrument_id": "MNQ",
+      "last_trade_date": "20250919",
+      "local_symbol": "MNQU5"
+    },
+    {
+      "active_from_utc": "2025-09-17T22:00:00Z",
+      "active_to_utc": "2025-12-17T22:00:00Z",
+      "con_id": 730283094,
+      "instrument_id": "MNQ",
+      "last_trade_date": "20251219",
+      "local_symbol": "MNQZ5"
+    },
+    {
+      "active_from_utc": "2025-12-17T23:00:00Z",
+      "active_to_utc": "2026-03-18T21:00:00Z",
+      "con_id": 750150193,
+      "instrument_id": "MNQ",
+      "last_trade_date": "20260320",
+      "local_symbol": "MNQH6"
+    },
+    {
+      "active_from_utc": "2026-03-18T22:00:00Z",
+      "active_to_utc": "2026-06-16T21:00:00Z",
+      "con_id": 770561201,
+      "instrument_id": "MNQ",
+      "last_trade_date": "20260618",
+      "local_symbol": "MNQM6"
+    },
+    {
+      "active_from_utc": "2026-06-16T22:00:00Z",
+      "active_to_utc": "2026-09-16T21:00:00Z",
+      "con_id": 793356225,
+      "instrument_id": "MNQ",
+      "last_trade_date": "20260918",
+      "local_symbol": "MNQU6"
+    },
+    {
+      "active_from_utc": "2026-09-16T22:00:00Z",
+      "active_to_utc": "2026-12-16T22:00:00Z",
+      "con_id": 815824267,
+      "instrument_id": "MNQ",
+      "last_trade_date": "20261218",
+      "local_symbol": "MNQZ6"
+    }
+  ],
+  "declared_gaps": [
+    {
+      "end_utc": "2024-06-19T22:00:00Z",
+      "reason": "ROLL_TRANSITION_NO_ACTIVE_CONTRACT",
+      "start_utc": "2024-06-19T17:00:00Z"
+    },
+    {
+      "end_utc": "2024-09-18T22:00:00Z",
+      "reason": "ROLL_TRANSITION_NO_ACTIVE_CONTRACT",
+      "start_utc": "2024-09-18T21:00:00Z"
+    },
+    {
+      "end_utc": "2024-12-18T23:00:00Z",
+      "reason": "ROLL_TRANSITION_NO_ACTIVE_CONTRACT",
+      "start_utc": "2024-12-18T22:00:00Z"
+    },
+    {
+      "end_utc": "2025-03-19T22:00:00Z",
+      "reason": "ROLL_TRANSITION_NO_ACTIVE_CONTRACT",
+      "start_utc": "2025-03-19T21:00:00Z"
+    },
+    {
+      "end_utc": "2025-06-18T22:00:00Z",
+      "reason": "ROLL_TRANSITION_NO_ACTIVE_CONTRACT",
+      "start_utc": "2025-06-18T21:00:00Z"
+    },
+    {
+      "end_utc": "2025-09-17T22:00:00Z",
+      "reason": "ROLL_TRANSITION_NO_ACTIVE_CONTRACT",
+      "start_utc": "2025-09-17T21:00:00Z"
+    },
+    {
+      "end_utc": "2025-12-17T23:00:00Z",
+      "reason": "ROLL_TRANSITION_NO_ACTIVE_CONTRACT",
+      "start_utc": "2025-12-17T22:00:00Z"
+    },
+    {
+      "end_utc": "2026-03-18T22:00:00Z",
+      "reason": "ROLL_TRANSITION_NO_ACTIVE_CONTRACT",
+      "start_utc": "2026-03-18T21:00:00Z"
+    },
+    {
+      "end_utc": "2026-06-16T22:00:00Z",
+      "reason": "ROLL_TRANSITION_NO_ACTIVE_CONTRACT",
+      "start_utc": "2026-06-16T21:00:00Z"
+    },
+    {
+      "end_utc": "2026-09-16T22:00:00Z",
+      "reason": "ROLL_TRANSITION_NO_ACTIVE_CONTRACT",
+      "start_utc": "2026-09-16T21:00:00Z"
+    }
+  ],
+  "instrument_id": "MNQ",
+  "schema_name": "FuturesContractCalendar",
+  "schema_version": 1,
+  "source_runtime_commit": "5073dbea3f96740b4390e113d06578a514918f00"
+}
