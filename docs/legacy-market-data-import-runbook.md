@@ -93,7 +93,7 @@ incomplete_source_count
 applied = false
 ```
 
-No target rows are inserted without `--apply`.
+Before the first apply, `imported_count` is the number of complete source rows still missing from target. No target rows are inserted without `--apply`.
 
 ## Apply
 
@@ -117,51 +117,45 @@ applied = true
 imported_count >= 0
 ```
 
-Running the same command a second time is expected to produce:
+## Scalable post-import verification
 
-```text
-existing_exact_count = complete_source_count
-imported_count        = 0
-```
+Do not feed an entire year of five-second bars into the Python comparator. The comparator intentionally materializes a control interval in memory and is suitable for measured windows, not millions of rows.
 
-That is the idempotency check.
-
-## Post-import verification
-
-Compare the same interval read-only:
+Instead, rerun the same importer command **without** `--apply`:
 
 ```powershell
-python scripts/compare_market_data_shadow.py `
+python scripts/import_legacy_market_data.py `
   --legacy-database $LegacyDb `
   --legacy-table MNQ_5s `
   --target-database $TargetDb `
   --instrument MNQ `
   --start-utc 2025-07-23T00:00:00Z `
-  --end-utc 2026-07-23T17:25:00Z `
-  --output-json "C:\IBMarketData-shadow\market-data-import-parity.json"
-
-$LASTEXITCODE
-Get-Content "C:\IBMarketData-shadow\market-data-import-parity.json"
+  --end-utc 2026-07-23T17:25:00Z
 ```
+
+The verification query is executed inside SQLite and does not load the full year into Python memory.
 
 Acceptance requires:
 
 ```text
-exit code             = 0
-is_match              = true
-legacy_only_count     = 0
-target_only_count     = 0
-value_mismatch_count  = 0
+applied                = false
+existing_exact_count   = complete_source_count
+imported_count          = 0
 ```
 
-Incomplete legacy half-bars are deliberately excluded from both the import and parity comparison.
+The importer also rejects any existing target row whose contract or BID/ASK OHLC values differ, so a successful second dry-run proves that every complete source row in the explicit interval exists exactly in target.
+
+For an additional human-readable check, run the existing comparator only on small control windows, for example the already measured historical and reconnect intervals. Do not increase tolerance to conceal differences.
+
+Incomplete legacy half-bars are deliberately excluded from both import and parity checks.
 
 ## Gate to target signal
 
 Target signal work may begin only after:
 
-1. dry-run counts are reviewed;
-2. import completes successfully;
-3. the full imported interval passes the strict comparator.
+1. the initial dry-run counts are reviewed;
+2. the import completes successfully;
+3. the second dry-run reports `existing_exact_count = complete_source_count` and `imported_count = 0`;
+4. short control windows still pass the strict comparator.
 
 The signal remains shadow-only and does not create trade commands during its first parity stage.
