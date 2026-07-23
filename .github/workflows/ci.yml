@@ -54,6 +54,20 @@ jobs:
           python scripts/validate_target_catalog.py catalog \
             --resolve-active-at 2026-07-23T00:00:00Z
 
+      - name: Validate shadow position-feed store
+        env:
+          IBMD_DEPLOYMENT_ID: ci-position-feed
+          IBMD_DATA_ROOT: /tmp/ibmd-position-feed-ci
+          IBMD_APPLICATION_VERSION: ci
+        run: |
+          rm -rf "$IBMD_DATA_ROOT"
+          python scripts/run_target_migrations.py \
+            --manifest migrations/position_feed.v1.json \
+            --database "$IBMD_DATA_ROOT/position_feed/broker_positions.sqlite3" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --apply
+          python apps/run_position_feed_v2.py --validate-store-only
+
       - name: Run smoke, integration and characterization tests
         run: |
           python -m unittest \
@@ -65,6 +79,7 @@ jobs:
             tester.current_system_liquidation_characterization_tester \
             tester.target_foundation_tester \
             tester.target_catalog_tester \
+            tester.target_position_feed_tester \
             -v
 
       - name: Compile Python sources
@@ -138,10 +153,15 @@ jobs:
               'ibmd.foundation.process_lock',
               'ibmd.public_contracts.envelope',
               'ibmd.public_contracts.health',
+              'ibmd.public_contracts.positions',
               'ibmd.operations.health.filesystem',
               'ibmd.operations.migrations.runner',
               'ibmd.catalog.store',
               'ibmd.catalog.resolver',
+              'ibmd.ib_gateway.positions',
+              'ibmd.ib_gateway.ib_async_positions',
+              'ibmd.position_feed.application.service',
+              'ibmd.position_feed.adapters.sqlite_store',
           )
 
           for module in modules:
