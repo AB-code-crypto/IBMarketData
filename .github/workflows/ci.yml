@@ -54,6 +54,7 @@ jobs:
             tester.execution_sqlite_locking_tester \
             tester.current_system_behavior_characterization_tester \
             tester.current_system_recovery_characterization_tester \
+            tester.current_system_liquidation_characterization_tester \
             -v
 
       - name: Compile Python sources
