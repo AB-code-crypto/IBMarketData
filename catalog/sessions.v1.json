@@ -1,0 +1,120 @@
+{
+  "calendar_version": "sessions.parity.v1",
+  "content_hash": "4320a0f1b7b874c033eabff19bdf374906b462dc2bd4d93e188b31d3d9046437",
+  "schema_name": "SessionCalendar",
+  "schema_version": 1,
+  "sessions": [
+    {
+      "exception_coverage_end_date": null,
+      "exceptions": [],
+      "production_qualified": false,
+      "qualification_note": "Parity baseline only; holiday and early-close exceptions are not populated.",
+      "session_id": "CME_EQUITY_INDEX",
+      "timezone": "America/Chicago",
+      "weekly_days": [
+        {
+          "maintenance_intervals": [
+            {
+              "end_local": "17:00:00",
+              "start_local": "16:00:00"
+            }
+          ],
+          "trading_intervals": [
+            {
+              "end_local": "16:00:00",
+              "start_local": "00:00:00"
+            },
+            {
+              "end_local": "24:00:00",
+              "start_local": "17:00:00"
+            }
+          ],
+          "weekday": "MONDAY"
+        },
+        {
+          "maintenance_intervals": [
+            {
+              "end_local": "17:00:00",
+              "start_local": "16:00:00"
+            }
+          ],
+          "trading_intervals": [
+            {
+              "end_local": "16:00:00",
+              "start_local": "00:00:00"
+            },
+            {
+              "end_local": "24:00:00",
+              "start_local": "17:00:00"
+            }
+          ],
+          "weekday": "TUESDAY"
+        },
+        {
+          "maintenance_intervals": [
+            {
+              "end_local": "17:00:00",
+              "start_local": "16:00:00"
+            }
+          ],
+          "trading_intervals": [
+            {
+              "end_local": "16:00:00",
+              "start_local": "00:00:00"
+            },
+            {
+              "end_local": "24:00:00",
+              "start_local": "17:00:00"
+            }
+          ],
+          "weekday": "WEDNESDAY"
+        },
+        {
+          "maintenance_intervals": [
+            {
+              "end_local": "17:00:00",
+              "start_local": "16:00:00"
+            }
+          ],
+          "trading_intervals": [
+            {
+              "end_local": "16:00:00",
+              "start_local": "00:00:00"
+            },
+            {
+              "end_local": "24:00:00",
+              "start_local": "17:00:00"
+            }
+          ],
+          "weekday": "THURSDAY"
+        },
+        {
+          "maintenance_intervals": [],
+          "trading_intervals": [
+            {
+              "end_local": "16:00:00",
+              "start_local": "00:00:00"
+            }
+          ],
+          "weekday": "FRIDAY"
+        },
+        {
+          "maintenance_intervals": [],
+          "trading_intervals": [],
+          "weekday": "SATURDAY"
+        },
+        {
+          "maintenance_intervals": [],
+          "trading_intervals": [
+            {
+              "end_local": "24:00:00",
+              "start_local": "17:00:00"
+            }
+          ],
+          "weekday": "SUNDAY"
+        }
+      ]
+    }
+  ],
+  "source_runtime_commit": "5073dbea3f96740b4390e113d06578a514918f00"
+}
