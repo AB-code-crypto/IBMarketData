@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from ib_async import Contract, IB
+from ib_async.ib import StartupFetchNONE
 
 from ibmd.foundation.identity import new_id
 from ibmd.foundation.time import ensure_utc, format_utc, parse_utc, utc_now
@@ -118,12 +119,11 @@ def _bar_value(value: Any, field_name: str) -> float:
     else:
         raw = getattr(value, field_name, None)
     try:
-        number = float(raw)
+        return float(raw)
     except (TypeError, ValueError) as exc:
         raise BrokerMarketDataReadError(
             f"IB bar {field_name} is not numeric: {raw!r}"
         ) from exc
-    return number
 
 
 def raw_quote_side_from_ib(
@@ -187,7 +187,10 @@ class IBAsyncRealtimeQuoteSubscription(RealtimeQuoteSubscription):
                 "IB connection is not active during realtime subscription"
             )
         try:
-            value = await asyncio.wait_for(self._queue.get(), timeout=timeout)
+            value = await asyncio.wait_for(
+                self._queue.get(),
+                timeout=timeout,
+            )
         except asyncio.TimeoutError:
             if not self._connected():
                 raise BrokerMarketDataReadError(
@@ -196,7 +199,8 @@ class IBAsyncRealtimeQuoteSubscription(RealtimeQuoteSubscription):
             return None
         if isinstance(value, Exception):
             raise BrokerMarketDataReadError(
-                f"realtime bar mapping failed: {type(value).__name__}: {value}"
+                "realtime bar mapping failed: "
+                f"{type(value).__name__}: {value}"
             ) from value
         return value
 
@@ -289,6 +293,8 @@ class IBAsyncMarketDataReader:
                     port=self.settings.port,
                     clientId=self.settings.client_id,
                     account=self.settings.account_id,
+                    readonly=True,
+                    fetchFields=StartupFetchNONE,
                 ),
                 timeout=self.settings.connect_timeout_seconds,
             )
@@ -411,7 +417,9 @@ class IBAsyncMarketDataReader:
             await self._ensure_connected()
             ib_contract = build_ib_contract(contract)
             generation_id = new_id("md_generation")
-            queue: asyncio.Queue[MarketSideBarObservationV1 | Exception] = asyncio.Queue()
+            queue: asyncio.Queue[
+                MarketSideBarObservationV1 | Exception
+            ] = asyncio.Queue()
             rows_and_handlers: list[tuple[Any, Callable[..., None]]] = []
 
             for side in (QuoteSide.BID, QuoteSide.ASK):
