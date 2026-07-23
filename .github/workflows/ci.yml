@@ -83,6 +83,7 @@ jobs:
           python apps/run_market_data_v2.py --validate-store-only
           python scripts/backfill_target_market_data.py --help >/dev/null
           python scripts/compare_market_data_shadow.py --help >/dev/null
+          python scripts/import_legacy_market_data.py --help >/dev/null
 
       - name: Run smoke, integration and characterization tests
         run: |
@@ -99,6 +100,7 @@ jobs:
             tester.target_position_feed_tester \
             tester.target_market_data_tester \
             tester.target_market_data_parity_tester \
+            tester.target_legacy_market_data_import_tester \
             -v
 
       - name: Compile Python sources
@@ -176,6 +178,7 @@ jobs:
               'ibmd.public_contracts.market_data',
               'ibmd.operations.health.filesystem',
               'ibmd.operations.migrations.runner',
+              'ibmd.operations.migrations.legacy_market_data',
               'ibmd.operations.parity.market_data',
               'ibmd.catalog.store',
               'ibmd.catalog.resolver',
