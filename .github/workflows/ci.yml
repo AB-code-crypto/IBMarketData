@@ -49,6 +49,11 @@ jobs:
       - name: Verify target architecture boundaries
         run: python scripts/verify_target_architecture.py .
 
+      - name: Validate target catalog artifacts
+        run: |
+          python scripts/validate_target_catalog.py catalog \
+            --resolve-active-at 2026-07-23T00:00:00Z
+
       - name: Run smoke, integration and characterization tests
         run: |
           python -m unittest \
@@ -59,6 +64,7 @@ jobs:
             tester.current_system_recovery_characterization_tester \
             tester.current_system_liquidation_characterization_tester \
             tester.target_foundation_tester \
+            tester.target_catalog_tester \
             -v
 
       - name: Compile Python sources
@@ -134,6 +140,8 @@ jobs:
               'ibmd.public_contracts.health',
               'ibmd.operations.health.filesystem',
               'ibmd.operations.migrations.runner',
+              'ibmd.catalog.store',
+              'ibmd.catalog.resolver',
           )
 
           for module in modules:
