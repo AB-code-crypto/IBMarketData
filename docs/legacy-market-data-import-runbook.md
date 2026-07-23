@@ -53,15 +53,14 @@ C:\IBMD-shadow-data\account1\market_data\MNQ.sqlite3
 
 The dry-run does not require deployment environment values.
 
-`--apply` uses the target service lock and therefore requires the deployment identity and target data root in the current PowerShell process:
+`--apply` needs only the deployment identity and target data root so it can take the same service lock as target market-data:
 
 ```powershell
 $env:IBMD_DEPLOYMENT_ID = "shadow-mnq-account1"
 $env:IBMD_DATA_ROOT = "C:\IBMD-shadow-data\account1"
-$env:IBMD_APPLICATION_VERSION = "architecture-rewrite-shadow"
 ```
 
-IB connection variables are not used by the importer.
+IB host, port, client ID and account variables are not read by the importer. It never connects to TWS/Gateway.
 
 ## Dry-run
 
