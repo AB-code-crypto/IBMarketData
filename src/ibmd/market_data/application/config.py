@@ -28,6 +28,20 @@ def _positive_float(value: object, *, field_name: str) -> float:
     return number
 
 
+def _non_negative_float(value: object, *, field_name: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise MarketDataConfigError(
+            f"{field_name} must be numeric: {value!r}"
+        ) from exc
+    if not math.isfinite(number) or number < 0.0:
+        raise MarketDataConfigError(
+            f"{field_name} must be finite and non-negative: {value!r}"
+        )
+    return number
+
+
 def _positive_int(value: object, *, field_name: str) -> int:
     if isinstance(value, bool):
         raise MarketDataConfigError(f"{field_name} must be an integer")
@@ -54,6 +68,8 @@ class MarketDataShadowConfig:
     configuration_hash: str
     bar_duration_seconds: int = 5
     history_lookback_seconds: int = 3_600
+    history_chunk_seconds: int = 3_600
+    history_chunk_spacing_seconds: float = 0.0
     bar_max_age_seconds: float = 60.0
     realtime_read_timeout_seconds: float = 1.0
     writer_queue_maxsize: int = 10_000
@@ -91,6 +107,22 @@ class MarketDataShadowConfig:
             _positive_int(
                 self.history_lookback_seconds,
                 field_name="history_lookback_seconds",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "history_chunk_seconds",
+            _positive_int(
+                self.history_chunk_seconds,
+                field_name="history_chunk_seconds",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "history_chunk_spacing_seconds",
+            _non_negative_float(
+                self.history_chunk_spacing_seconds,
+                field_name="history_chunk_spacing_seconds",
             ),
         )
         object.__setattr__(
