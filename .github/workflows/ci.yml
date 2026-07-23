@@ -85,6 +85,28 @@ jobs:
           python scripts/compare_market_data_shadow.py --help >/dev/null
           python scripts/import_legacy_market_data.py --help >/dev/null
 
+      - name: Run target market-data migration tests
+        id: target_market_data_migration_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest \
+            tester.target_legacy_market_data_import_tester \
+            tester.target_ib_market_data_connection_tester \
+            -v 2>&1 | tee target-market-data-migration-tests.log
+
+      - name: Upload target market-data migration diagnostics
+        if: steps.target_market_data_migration_tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-market-data-migration-test-diagnostics
+          path: target-market-data-migration-tests.log
+
+      - name: Fail when target market-data migration tests failed
+        if: steps.target_market_data_migration_tests.outcome == 'failure'
+        run: exit 1
+
       - name: Run smoke, integration and characterization tests
         run: |
           python -m unittest \
@@ -100,7 +122,6 @@ jobs:
             tester.target_position_feed_tester \
             tester.target_market_data_tester \
             tester.target_market_data_parity_tester \
-            tester.target_legacy_market_data_import_tester \
             -v
 
       - name: Compile Python sources
