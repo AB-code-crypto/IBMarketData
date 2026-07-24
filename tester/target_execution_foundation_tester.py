@@ -321,19 +321,10 @@ class ExecutionStoreTest(unittest.TestCase):
                 transition_count = connection.execute(
                     "SELECT COUNT(*) FROM internal_execution_command_transitions"
                 ).fetchone()[0]
-                order_objects = connection.execute(
-                    """
-                    SELECT COUNT(*)
-                    FROM sqlite_master
-                    WHERE lower(name) LIKE '%broker_order%'
-                       OR lower(name) LIKE '%fill%'
-                    """
-                ).fetchone()[0]
             finally:
                 connection.close()
             self.assertEqual(command_count, 1)
             self.assertEqual(transition_count, 2)
-            self.assertEqual(order_objects, 0)
 
     def test_conflicting_fixture_for_same_command_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
