@@ -41,6 +41,7 @@ from ibmd.execution.adapters import (
 from ibmd.execution.application.new_risk_window import (
     NewRiskWindowError,
     NewRiskWindowV1,
+    broker_operation_requires_new_risk_gate,
 )
 from ibmd.execution.domain import (
     BrokerAttemptDomainError,
@@ -312,23 +313,30 @@ async def run(arguments: argparse.Namespace) -> int:
         ):
             submit_observed = utc_now()
             submit_observed_text = format_utc(submit_observed)
-            new_risk_window.require_allows_new_risk(
-                observed_at_utc=submit_observed_text,
-                lead_seconds=60,
-            )
             session_resolution = resolve_session(
                 bundle.session_calendar,
                 session_id=session_id,
                 at_utc=submit_observed,
             )
-            if not session_resolution.is_trading_open:
-                raise PaperSubmitError(
-                    "paper submission requires an open catalog session: "
-                    f"phase={session_resolution.phase.value}, "
-                    f"local={session_resolution.local_date} "
-                    f"{session_resolution.local_time}, "
-                    f"reason={session_resolution.reason}"
+            existing_operation = attempt_store.read_operation_by_command(
+                command_id
+            )
+            new_risk_gate_applied = broker_operation_requires_new_risk_gate(
+                None if existing_operation is None else existing_operation.state
+            )
+            if new_risk_gate_applied:
+                new_risk_window.require_allows_new_risk(
+                    observed_at_utc=submit_observed_text,
+                    lead_seconds=60,
                 )
+                if not session_resolution.is_trading_open:
+                    raise PaperSubmitError(
+                        "paper submission requires an open catalog session: "
+                        f"phase={session_resolution.phase.value}, "
+                        f"local={session_resolution.local_date} "
+                        f"{session_resolution.local_time}, "
+                        f"reason={session_resolution.reason}"
+                    )
             result = await coordinator.run_once(command_id=command_id)
             payload = paper_submit_payload(result)
             payload["blocking_reason"] = result.after.operation.blocking_reason
@@ -337,6 +345,7 @@ async def run(arguments: argparse.Namespace) -> int:
             payload["last_broker_proof_at_utc"] = (
                 result.after.attempt.last_broker_proof_at_utc
             )
+            payload["new_risk_gate_applied"] = new_risk_gate_applied
             payload["session"] = {
                 "session_id": session_resolution.session_id,
                 "phase": session_resolution.phase.value,
