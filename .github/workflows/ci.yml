@@ -122,6 +122,27 @@ jobs:
         if: steps.target_market_data_migration_tests.outcome == 'failure'
         run: exit 1
 
+      - name: Run target signal parity tests
+        id: target_signal_parity_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest \
+            tester.target_signal_parity_tester \
+            -v 2>&1 | tee target-signal-parity-tests.log
+
+      - name: Upload target signal parity diagnostics
+        if: steps.target_signal_parity_tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-signal-parity-test-diagnostics
+          path: target-signal-parity-tests.log
+
+      - name: Fail when target signal parity tests failed
+        if: steps.target_signal_parity_tests.outcome == 'failure'
+        run: exit 1
+
       - name: Run smoke, integration and characterization tests
         run: |
           python -m unittest \
@@ -139,7 +160,6 @@ jobs:
             tester.target_market_data_parity_tester \
             tester.target_signal_tester \
             tester.target_signal_idempotency_tester \
-            tester.target_signal_parity_tester \
             -v
 
       - name: Compile Python sources
