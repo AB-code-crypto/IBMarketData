@@ -133,7 +133,8 @@ class SignalParityComparisonTest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("current rolling implementation", result.stdout)
+        self.assertIn("Compare one stored target signal calculation", result.stdout)
+        self.assertIn("implementation on the same explicit timestamp", result.stdout)
 
 
 if __name__ == "__main__":
