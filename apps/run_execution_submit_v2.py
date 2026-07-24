@@ -331,6 +331,12 @@ async def run(arguments: argparse.Namespace) -> int:
                 )
             result = await coordinator.run_once(command_id=command_id)
             payload = paper_submit_payload(result)
+            payload["blocking_reason"] = result.after.operation.blocking_reason
+            payload["broker_perm_id"] = result.after.attempt.broker_perm_id
+            payload["broker_status"] = result.after.attempt.broker_status
+            payload["last_broker_proof_at_utc"] = (
+                result.after.attempt.last_broker_proof_at_utc
+            )
             payload["session"] = {
                 "session_id": session_resolution.session_id,
                 "phase": session_resolution.phase.value,
