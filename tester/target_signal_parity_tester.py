@@ -15,6 +15,7 @@ if str(SRC) not in sys.path:
 
 from scripts.compare_signal_shadow import (
     SignalParityError,
+    _read_json_object,
     compare_metrics,
     target_metrics,
 )
@@ -65,7 +66,9 @@ class SignalParityComparisonTest(unittest.TestCase):
             tolerance=1e-9,
         )
         self.assertFalse(report.is_match)
-        by_field = {item["field"]: item for item in report.mismatches}
+        by_field = {
+            item["field"]: item for item in report.mismatches
+        }
         self.assertIn("raw_candidate_count", by_field)
         self.assertIn("potential_end_delta_points", by_field)
         self.assertAlmostEqual(
@@ -78,12 +81,44 @@ class SignalParityComparisonTest(unittest.TestCase):
         target = target_metrics(dict(BASE_METRICS))
         legacy = dict(target)
         legacy["signal_bar_utc"] = "2026-07-23T17:25:00.000000Z"
-        with self.assertRaisesRegex(SignalParityError, "timestamps differ"):
+        with self.assertRaisesRegex(
+            SignalParityError,
+            "timestamps differ",
+        ):
             compare_metrics(
                 legacy=legacy,
                 target=target,
                 tolerance=1e-9,
             )
+
+    def test_windows_powershell_utf16_json_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "target.json"
+            path.write_bytes(
+                json.dumps(BASE_METRICS, indent=2).encode("utf-16")
+            )
+            restored = _read_json_object(path)
+        self.assertEqual(restored, BASE_METRICS)
+
+    def test_utf8_bom_json_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "target.json"
+            path.write_text(
+                json.dumps(BASE_METRICS),
+                encoding="utf-8-sig",
+            )
+            restored = _read_json_object(path)
+        self.assertEqual(restored, BASE_METRICS)
+
+    def test_invalid_text_encoding_is_reported_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "target.json"
+            path.write_bytes(b"\x80\x81\x82")
+            with self.assertRaisesRegex(
+                SignalParityError,
+                "cannot decode target calculation JSON",
+            ):
+                _read_json_object(path)
 
     def test_target_metrics_reject_missing_required_field(self) -> None:
         value = dict(BASE_METRICS)
@@ -133,8 +168,14 @@ class SignalParityComparisonTest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Compare one stored target signal calculation", result.stdout)
-        self.assertIn("implementation on the same explicit timestamp", result.stdout)
+        self.assertIn(
+            "Compare one stored target signal calculation",
+            result.stdout,
+        )
+        self.assertIn(
+            "implementation on the same explicit timestamp",
+            result.stdout,
+        )
 
 
 if __name__ == "__main__":
