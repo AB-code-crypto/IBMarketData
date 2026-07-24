@@ -69,7 +69,10 @@ T0 = "2026-07-24T10:00:00Z"
 T1 = "2026-07-24T10:00:01Z"
 T2 = "2026-07-24T10:00:02Z"
 T9 = "2026-07-24T10:00:30Z"
-FIXED_CLOCK = lambda: datetime(2026, 7, 24, 10, 0, 1, tzinfo=timezone.utc)
+
+
+def FIXED_CLOCK():
+    return datetime(2026, 7, 24, 10, 0, 1, tzinfo=timezone.utc)
 
 
 def command_request(*, expires_at: str = T9) -> StrategyCommandRequestV1:
