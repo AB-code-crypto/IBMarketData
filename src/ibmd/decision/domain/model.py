@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import math
 import re
 from dataclasses import dataclass
 from datetime import timedelta
@@ -17,7 +16,7 @@ from ibmd.public_contracts.decision import (
     StrategyCommandKind,
     StrategyCommandRequestV1,
 )
-from ibmd.public_contracts.signal import SignalDirection, SignalEventV1
+from ibmd.public_contracts.signal import SignalEventV1
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -614,7 +613,7 @@ def evaluate_signal(
         desired_target_quantity=policy.target_quantity,
         command_kind=command_kind,
         reason=command_reason,
-        created_at_utc=fixture.observed_at_utc,
+        created_at_utc=signal.created_at_utc,
         expires_at_utc=format_utc(expires),
         policy_hash=policy.policy_hash,
     )
