@@ -14,6 +14,7 @@ from ibmd.catalog import (
     ActiveContractStatus,
     load_catalog_bundle,
     resolve_active_contract,
+    resolve_session,
 )
 from ibmd.decision.adapters import (
     DecisionSchemaError,
@@ -239,9 +240,8 @@ def run(arguments: argparse.Namespace) -> int:
 
     observed = utc_now()
     observed_text = format_utc(observed)
-    daily_flat_session = bundle.session_calendar.require(
-        instrument_policy.daily_flat.session_id
-    )
+    session_id = instrument_policy.daily_flat.session_id
+    daily_flat_session = bundle.session_calendar.require(session_id)
     NewRiskWindowV1(
         enabled=instrument_policy.daily_flat.enabled,
         timezone_name=daily_flat_session.timezone,
@@ -255,6 +255,19 @@ def run(arguments: argparse.Namespace) -> int:
         observed_at_utc=observed_text,
         lead_seconds=60,
     )
+    session_resolution = resolve_session(
+        bundle.session_calendar,
+        session_id=session_id,
+        at_utc=observed,
+    )
+    if not session_resolution.is_trading_open:
+        raise PaperDrillPreparationError(
+            "paper drill requires an open catalog session: "
+            f"phase={session_resolution.phase.value}, "
+            f"local={session_resolution.local_date} "
+            f"{session_resolution.local_time}, "
+            f"reason={session_resolution.reason}"
+        )
 
     resolution = resolve_active_contract(bundle.contract_calendar, observed)
     if (
@@ -324,6 +337,14 @@ def run(arguments: argparse.Namespace) -> int:
             result = preparer.prepare(observed_at_utc=observed_text)
 
     payload = result.to_dict()
+    payload["session"] = {
+        "session_id": session_resolution.session_id,
+        "phase": session_resolution.phase.value,
+        "local_date": session_resolution.local_date,
+        "local_time": session_resolution.local_time,
+        "reason": session_resolution.reason,
+        "production_qualified": session_resolution.production_qualified,
+    }
     payload["databases"] = {
         "decision": str(decision_database),
         "execution": str(execution_database),
@@ -335,8 +356,8 @@ def run(arguments: argparse.Namespace) -> int:
         "confirm_paper_account": settings.ib_account_id,
         "warning": (
             "No broker order has been sent. Review the JSON, keep position-feed "
-            "fresh, then invoke the submit entrypoint explicitly before "
-            "submit_before_utc."
+            "fresh, confirm TWS shows the intended paper market open, then invoke "
+            "the submit entrypoint explicitly before submit_before_utc."
         ),
     }
     print(
