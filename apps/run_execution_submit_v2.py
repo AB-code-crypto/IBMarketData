@@ -15,6 +15,7 @@ from ibmd.catalog import (
     ActiveContractStatus,
     load_catalog_bundle,
     resolve_active_contract,
+    resolve_session,
 )
 from ibmd.execution import (
     PaperOrderSubmitCoordinator,
@@ -183,9 +184,8 @@ async def run(arguments: argparse.Namespace) -> int:
     instrument_id = str(arguments.instrument or "").strip()
     instrument = bundle.instrument_master.require(instrument_id)
     instrument_policy = bundle.strategy_policy.require(instrument_id)
-    daily_flat_session = bundle.session_calendar.require(
-        instrument_policy.daily_flat.session_id
-    )
+    session_id = instrument_policy.daily_flat.session_id
+    daily_flat_session = bundle.session_calendar.require(session_id)
     new_risk_window = NewRiskWindowV1(
         enabled=instrument_policy.daily_flat.enabled,
         timezone_name=daily_flat_session.timezone,
@@ -310,14 +310,40 @@ async def run(arguments: argparse.Namespace) -> int:
             deployment_id=settings.deployment_id,
             instance_id=instance_id,
         ):
+            submit_observed = utc_now()
+            submit_observed_text = format_utc(submit_observed)
             new_risk_window.require_allows_new_risk(
-                observed_at_utc=format_utc(utc_now()),
+                observed_at_utc=submit_observed_text,
                 lead_seconds=60,
             )
+            session_resolution = resolve_session(
+                bundle.session_calendar,
+                session_id=session_id,
+                at_utc=submit_observed,
+            )
+            if not session_resolution.is_trading_open:
+                raise PaperSubmitError(
+                    "paper submission requires an open catalog session: "
+                    f"phase={session_resolution.phase.value}, "
+                    f"local={session_resolution.local_date} "
+                    f"{session_resolution.local_time}, "
+                    f"reason={session_resolution.reason}"
+                )
             result = await coordinator.run_once(command_id=command_id)
+            payload = paper_submit_payload(result)
+            payload["session"] = {
+                "session_id": session_resolution.session_id,
+                "phase": session_resolution.phase.value,
+                "local_date": session_resolution.local_date,
+                "local_time": session_resolution.local_time,
+                "reason": session_resolution.reason,
+                "production_qualified": (
+                    session_resolution.production_qualified
+                ),
+            }
             print(
                 json.dumps(
-                    paper_submit_payload(result),
+                    payload,
                     ensure_ascii=False,
                     sort_keys=True,
                     indent=2,
