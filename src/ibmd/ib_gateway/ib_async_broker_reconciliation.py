@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime
@@ -24,6 +25,37 @@ from .broker_reconciliation_mapping import (
     fill_fact_from_ib,
     order_fact_from_ib_trade,
 )
+
+_TARGET_ORDER_REF_PREFIX = "IBMD:"
+_LOGGER = logging.getLogger(__name__)
+
+
+def _order_ref_from_trade(trade: Any) -> str:
+    order = getattr(trade, "order", None)
+    return str(getattr(order, "orderRef", "") or "").strip()
+
+
+def _order_ref_from_fill(fill: Any) -> str:
+    execution = getattr(fill, "execution", None)
+    return str(getattr(execution, "orderRef", "") or "").strip()
+
+
+def _is_target_order_ref(value: str) -> bool:
+    return str(value or "").strip().startswith(_TARGET_ORDER_REF_PREFIX)
+
+
+def _is_zero_quantity_placeholder(trade: Any) -> bool:
+    order = getattr(trade, "order", None)
+    order_status = getattr(trade, "orderStatus", None)
+    if order is None or order_status is None:
+        return False
+    try:
+        requested = float(getattr(order, "totalQuantity", 0.0) or 0.0)
+        filled = float(getattr(order_status, "filled", 0.0) or 0.0)
+        remaining = float(getattr(order_status, "remaining", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return False
+    return requested == 0.0 and filled == 0.0 and remaining == 0.0
 
 
 @dataclass(frozen=True)
@@ -204,6 +236,40 @@ class IBAsyncBrokerReconciliationReader:
         report_exec_id = str(getattr(report, "execId", "") or "").strip()
         return bool(exec_id and report_exec_id == exec_id)
 
+    @staticmethod
+    def _target_fills(values: list[Any] | tuple[Any, ...]) -> tuple[Any, ...]:
+        return tuple(
+            value
+            for value in values
+            if _is_target_order_ref(_order_ref_from_fill(value))
+        )
+
+    @staticmethod
+    def _target_trades(
+        values: list[Any],
+        *,
+        source: BrokerOrderSource,
+    ) -> tuple[Any, ...]:
+        selected: list[Any] = []
+        for trade in values:
+            order_ref = _order_ref_from_trade(trade)
+            if not _is_target_order_ref(order_ref):
+                continue
+            if _is_zero_quantity_placeholder(trade):
+                order = getattr(trade, "order", None)
+                status = getattr(getattr(trade, "orderStatus", None), "status", "")
+                _LOGGER.warning(
+                    "Ignoring unusable zero-quantity target broker row: "
+                    "source=%s order_ref=%s order_id=%s status=%s",
+                    source.value,
+                    order_ref,
+                    getattr(order, "orderId", None),
+                    status,
+                )
+                continue
+            selected.append(trade)
+        return tuple(selected)
+
     async def _wait_for_commissions(self, fills: tuple[Any, ...]) -> tuple[Any, ...]:
         if not fills or self.settings.commission_wait_seconds <= 0.0:
             return fills
@@ -214,7 +280,7 @@ class IBAsyncBrokerReconciliationReader:
             if loop_time() >= deadline:
                 break
             await asyncio.sleep(0.05)
-            cached = list(self._ib.fills() or [])
+            cached = self._target_fills(tuple(self._ib.fills() or []))
             current = _dedupe_fill_objects((*current, *cached))
         return current
 
@@ -249,15 +315,25 @@ class IBAsyncBrokerReconciliationReader:
                 timeout_seconds=self.settings.executions_timeout_seconds,
                 context="executions",
             )
+            target_execution_fills = self._target_fills(tuple(execution_fills))
+            cached_target_fills = self._target_fills(tuple(self._ib.fills() or []))
             fill_objects = _dedupe_fill_objects(
-                (*execution_fills, *list(self._ib.fills() or []))
+                (*target_execution_fills, *cached_target_fills)
             )
             fill_objects = await self._wait_for_commissions(fill_objects)
             captured_at = format_utc(self._clock())
 
+            target_open_trades = self._target_trades(
+                open_trades,
+                source=BrokerOrderSource.OPEN,
+            )
+            target_completed_trades = self._target_trades(
+                completed_trades,
+                source=BrokerOrderSource.COMPLETED,
+            )
             open_facts = _dedupe_orders(
                 value
-                for trade in open_trades
+                for trade in target_open_trades
                 if (
                     value := order_fact_from_ib_trade(
                         trade,
@@ -270,7 +346,7 @@ class IBAsyncBrokerReconciliationReader:
             )
             completed_facts = _dedupe_orders(
                 value
-                for trade in completed_trades
+                for trade in target_completed_trades
                 if (
                     value := order_fact_from_ib_trade(
                         trade,
