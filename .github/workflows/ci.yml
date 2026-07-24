@@ -190,6 +190,7 @@ jobs:
             tester.target_signal_idempotency_tester \
             tester.target_decision_tester \
             tester.target_execution_foundation_tester \
+            tester.target_execution_position_projection_tester \
             -v
 
       - name: Compile Python sources
@@ -295,8 +296,11 @@ jobs:
               'ibmd.decision.adapters.sqlite_signal',
               'ibmd.decision.adapters.sqlite_store',
               'ibmd.execution.domain.model',
+              'ibmd.execution.domain.position_projection',
               'ibmd.execution.application.service',
               'ibmd.execution.adapters.sqlite_decision',
+              'ibmd.execution.adapters.sqlite_position_feed',
+              'ibmd.execution.adapters.sqlite_state',
               'ibmd.execution.adapters.sqlite_store',
           )
 
