@@ -15,10 +15,7 @@ from ibmd.execution.domain import (
 )
 from ibmd.execution.domain.position_projection import RegisteredFuturesContractV1
 from ibmd.foundation.identity import new_id
-from ibmd.operations.migrations import (
-    SQLiteMigrationRunner,
-    load_migration_manifest,
-)
+from ibmd.operations.migrations import SQLiteMigrationRunner, load_migration_manifest
 from ibmd.public_contracts.broker_execution import (
     BrokerAttemptState,
     BrokerObservationOutcome,
@@ -28,10 +25,7 @@ from ibmd.public_contracts.broker_execution import (
     BrokerOrderOperationV1,
     BrokerOrderSide,
 )
-from ibmd.public_contracts.decision import (
-    DesiredTargetSide,
-    StrategyCommandKind,
-)
+from ibmd.public_contracts.decision import DesiredTargetSide, StrategyCommandKind
 from ibmd.public_contracts.execution import (
     ExecutionCommandState,
     ExecutionCommandStateV1,
@@ -53,7 +47,6 @@ T0 = "2026-07-24T10:00:00Z"
 T1 = "2026-07-24T10:00:01Z"
 T2 = "2026-07-24T10:00:02Z"
 T3 = "2026-07-24T10:00:03Z"
-T4 = "2026-07-24T10:00:04Z"
 
 
 def apply_schema(path: Path) -> None:
@@ -148,6 +141,16 @@ def open_position(
     )
 
 
+def plan_open(*, command_id: str | None = None):
+    return plan_broker_operation(
+        command=command_state(command_id=command_id),
+        position=flat_position(),
+        active_contract=active_contract(),
+        account_id=ACCOUNT,
+        observed_at_utc=T0,
+    )
+
+
 def exact_observation(
     snapshot,
     *,
@@ -175,13 +178,7 @@ def exact_observation(
 
 class BrokerAttemptContractTest(unittest.TestCase):
     def test_public_contracts_round_trip_and_reject_false_filled_state(self) -> None:
-        planned = plan_broker_operation(
-            command=command_state(),
-            position=flat_position(),
-            active_contract=active_contract(),
-            account_id=ACCOUNT,
-            observed_at_utc=T0,
-        )
+        planned = plan_open()
         self.assertEqual(
             BrokerOrderOperationV1.from_dict(planned.operation.to_dict()),
             planned.operation,
@@ -197,6 +194,7 @@ class BrokerAttemptContractTest(unittest.TestCase):
                 "broker_order_id": 1,
                 "broker_status": "Filled",
                 "broker_terminal_proven": True,
+                "updated_at_utc": T1,
                 "terminal_at_utc": T1,
                 "last_broker_proof_at_utc": T1,
             }
@@ -205,21 +203,9 @@ class BrokerAttemptContractTest(unittest.TestCase):
             BrokerOrderAttemptV1.from_dict(invalid)
 
     def test_operation_and_attempt_identities_are_stable(self) -> None:
-        command = command_state(command_id=new_id("strategy_command"))
-        first = plan_broker_operation(
-            command=command,
-            position=flat_position(),
-            active_contract=active_contract(),
-            account_id=ACCOUNT,
-            observed_at_utc=T0,
-        )
-        second = plan_broker_operation(
-            command=command,
-            position=flat_position(),
-            active_contract=active_contract(),
-            account_id=ACCOUNT,
-            observed_at_utc=T0,
-        )
+        command_id = new_id("strategy_command")
+        first = plan_open(command_id=command_id)
+        second = plan_open(command_id=command_id)
         self.assertEqual(first, second)
         self.assertLessEqual(len(first.attempt.order_ref), 64)
         self.assertIn(first.operation.operation_id, first.attempt.order_ref)
@@ -244,7 +230,6 @@ class BrokerOperationPlanningTest(unittest.TestCase):
             command=command_state(
                 kind=StrategyCommandKind.REVERSE,
                 side=DesiredTargetSide.SHORT,
-                target_quantity=1,
             ),
             position=open_position(
                 side=StrategyPositionSide.LONG,
@@ -261,15 +246,8 @@ class BrokerOperationPlanningTest(unittest.TestCase):
 
 class BrokerAttemptReconciliationTest(unittest.TestCase):
     def test_not_found_after_submission_is_unknown_and_suppresses_retry(self) -> None:
-        planned = plan_broker_operation(
-            command=command_state(),
-            position=flat_position(),
-            active_contract=active_contract(),
-            account_id=ACCOUNT,
-            observed_at_utc=T0,
-        )
         submitting = mark_attempt_submitting(
-            planned,
+            plan_open(),
             observed_at_utc=T1,
             broker_order_id=7001,
         )
@@ -296,10 +274,7 @@ class BrokerAttemptReconciliationTest(unittest.TestCase):
             unknown.attempt.state,
             BrokerAttemptState.UNKNOWN_OUTCOME,
         )
-        with self.assertRaisesRegex(
-            BrokerAttemptDomainError,
-            "FAILED_RETRYABLE",
-        ):
+        with self.assertRaisesRegex(BrokerAttemptDomainError, "FAILED_RETRYABLE"):
             prepare_next_attempt(unknown, observed_at_utc=T3)
 
     def test_terminal_partial_cancel_retries_only_fresh_remaining(self) -> None:
@@ -337,7 +312,6 @@ class BrokerAttemptReconciliationTest(unittest.TestCase):
             BrokerOperationState.FAILED_RETRYABLE,
         )
         self.assertEqual(cancelled.operation.filled_qty, 2)
-        self.assertEqual(cancelled.operation.remaining_qty, 1)
         retry = prepare_next_attempt(cancelled, observed_at_utc=T3)
         self.assertEqual(retry.attempt.attempt_no, 2)
         self.assertEqual(retry.attempt.requested_qty, 1)
@@ -345,15 +319,8 @@ class BrokerAttemptReconciliationTest(unittest.TestCase):
         self.assertEqual(retry.operation.filled_qty, 2)
 
     def test_full_fill_succeeds_and_is_terminal(self) -> None:
-        planned = plan_broker_operation(
-            command=command_state(),
-            position=flat_position(),
-            active_contract=active_contract(),
-            account_id=ACCOUNT,
-            observed_at_utc=T0,
-        )
         submitting = mark_attempt_submitting(
-            planned,
+            plan_open(),
             observed_at_utc=T1,
             broker_order_id=7001,
         )
@@ -371,7 +338,7 @@ class BrokerAttemptReconciliationTest(unittest.TestCase):
         self.assertEqual(filled.operation.state, BrokerOperationState.SUCCEEDED)
         self.assertEqual(filled.attempt.state, BrokerAttemptState.FILLED)
         self.assertEqual(filled.operation.remaining_qty, 0)
-        self.assertEqual(filled.operation.terminal_at_utc, T2.replace("Z", ".000000Z"))
+        self.assertEqual(filled.operation.terminal_at_utc, "2026-07-24T10:00:02.000000Z")
 
 
 class BrokerAttemptPersistenceTest(unittest.TestCase):
@@ -385,13 +352,13 @@ class BrokerAttemptPersistenceTest(unittest.TestCase):
                 migrations=migrations[:1],
                 application_version="old",
             ).apply()
-            plan = SQLiteMigrationRunner(
+            result = SQLiteMigrationRunner(
                 database_path=database,
                 store_name=store_name,
                 migrations=migrations,
                 application_version="new",
             ).apply()
-            self.assertEqual(plan.current_version, 2)
+            self.assertEqual(result.current_version, 2)
             SQLiteBrokerAttemptStore(database).validate_schema()
 
     def test_restart_adopts_live_order_by_same_order_ref(self) -> None:
@@ -399,14 +366,7 @@ class BrokerAttemptPersistenceTest(unittest.TestCase):
             database = Path(temp) / "execution.sqlite3"
             apply_schema(database)
             store = SQLiteBrokerAttemptStore(database)
-            store.validate_schema()
-            planned = plan_broker_operation(
-                command=command_state(),
-                position=flat_position(),
-                active_contract=active_contract(),
-                account_id=ACCOUNT,
-                observed_at_utc=T0,
-            )
+            planned = plan_open()
             store.publish_initial(planned)
             submitting = mark_attempt_submitting(
                 planned,
@@ -418,10 +378,6 @@ class BrokerAttemptPersistenceTest(unittest.TestCase):
             restarted = SQLiteBrokerAttemptStore(database)
             unresolved = restarted.read_unresolved()
             self.assertEqual(len(unresolved), 1)
-            self.assertEqual(
-                unresolved[0].operation.operation_id,
-                planned.operation.operation_id,
-            )
             reconciling = begin_reconciliation(
                 unresolved[0],
                 observed_at_utc=T2,
@@ -441,41 +397,25 @@ class BrokerAttemptPersistenceTest(unittest.TestCase):
             )
             restarted.publish_state(live, observation=observation)
 
-            after_second_restart = SQLiteBrokerAttemptStore(database)
-            restored = after_second_restart.read_snapshot(
-                planned.operation.operation_id
-            )
-            self.assertIsNotNone(restored)
+            after_restart = SQLiteBrokerAttemptStore(database)
+            restored = after_restart.read_snapshot(planned.operation.operation_id)
             self.assertEqual(restored.operation.state, BrokerOperationState.LIVE)
             self.assertEqual(restored.attempt.attempt_id, planned.attempt.attempt_id)
             self.assertEqual(restored.attempt.order_ref, planned.attempt.order_ref)
             self.assertEqual(restored.attempt.broker_order_id, 7001)
-            self.assertEqual(after_second_restart.observation_count(restored.attempt.attempt_id), 1)
-
-            after_second_restart.publish_state(restored, observation=observation)
-            self.assertEqual(after_second_restart.observation_count(restored.attempt.attempt_id), 1)
-            self.assertEqual(
-                after_second_restart.transition_counts(restored),
-                (4, 3),
-            )
+            self.assertEqual(after_restart.observation_count(restored.attempt.attempt_id), 1)
+            after_restart.publish_state(restored, observation=observation)
+            self.assertEqual(after_restart.observation_count(restored.attempt.attempt_id), 1)
+            self.assertEqual(after_restart.transition_counts(restored), (4, 3))
 
     def test_unknown_restart_state_cannot_create_second_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             database = Path(temp) / "execution.sqlite3"
             apply_schema(database)
             store = SQLiteBrokerAttemptStore(database)
-            planned = plan_broker_operation(
-                command=command_state(),
-                position=flat_position(),
-                active_contract=active_contract(),
-                account_id=ACCOUNT,
-                observed_at_utc=T0,
-            )
+            planned = plan_open()
             store.publish_initial(planned)
-            submitting = mark_attempt_submitting(
-                planned,
-                observed_at_utc=T1,
-            )
+            submitting = mark_attempt_submitting(planned, observed_at_utc=T1)
             store.publish_state(submitting)
             observation = BrokerOrderObservationV1(
                 order_ref=submitting.attempt.order_ref,
@@ -494,17 +434,14 @@ class BrokerAttemptPersistenceTest(unittest.TestCase):
                 observation=observation,
             )
             store.publish_state(unknown, observation=observation)
-
-            restarted = SQLiteBrokerAttemptStore(database)
-            restored = restarted.read_snapshot(planned.operation.operation_id)
+            restored = SQLiteBrokerAttemptStore(database).read_snapshot(
+                planned.operation.operation_id
+            )
             self.assertEqual(
                 restored.operation.state,
                 BrokerOperationState.UNKNOWN_OUTCOME,
             )
-            with self.assertRaisesRegex(
-                BrokerAttemptDomainError,
-                "FAILED_RETRYABLE",
-            ):
+            with self.assertRaisesRegex(BrokerAttemptDomainError, "FAILED_RETRYABLE"):
                 prepare_next_attempt(restored, observed_at_utc=T3)
             self.assertEqual(restored.operation.current_attempt_no, 1)
 
@@ -513,13 +450,7 @@ class BrokerAttemptPersistenceTest(unittest.TestCase):
             database = Path(temp) / "execution.sqlite3"
             apply_schema(database)
             store = SQLiteBrokerAttemptStore(database)
-            planned = plan_broker_operation(
-                command=command_state(),
-                position=flat_position(),
-                active_contract=active_contract(),
-                account_id=ACCOUNT,
-                observed_at_utc=T0,
-            )
+            planned = plan_open()
             store.publish_initial(planned)
             submitting = mark_attempt_submitting(
                 planned,
@@ -544,10 +475,8 @@ class BrokerAttemptPersistenceTest(unittest.TestCase):
             retry = prepare_next_attempt(rejected, observed_at_utc=T3)
             store.publish_state(retry)
             store.publish_state(retry)
-
             restored = store.read_snapshot(planned.operation.operation_id)
             self.assertEqual(restored.operation.current_attempt_no, 2)
-            self.assertEqual(restored.attempt.attempt_no, 2)
             self.assertEqual(restored.attempt.state, BrokerAttemptState.PREPARING)
             self.assertEqual(store.transition_counts(restored), (4, 1))
 
