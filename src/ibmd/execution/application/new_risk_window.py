@@ -5,10 +5,21 @@ from datetime import time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ibmd.foundation.time import parse_utc
+from ibmd.public_contracts.broker_execution import BrokerOperationState
 
 
 class NewRiskWindowError(ValueError):
     pass
+
+
+def broker_operation_requires_new_risk_gate(
+    state: BrokerOperationState | None,
+) -> bool:
+    if state is not None and not isinstance(state, BrokerOperationState):
+        raise NewRiskWindowError(
+            f"invalid broker operation state for new-risk gate: {state!r}"
+        )
+    return state is None or state == BrokerOperationState.PREPARING
 
 
 def _seconds_of_day(value: str, *, field_name: str) -> int:
