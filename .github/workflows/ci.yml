@@ -129,6 +129,8 @@ jobs:
           python apps/run_execution_v2.py --help >/dev/null
           python apps/run_execution_reconciliation_v2.py --validate-store-only
           python apps/run_execution_reconciliation_v2.py --help >/dev/null
+          python apps/run_execution_submit_v2.py --validate-store-only
+          python apps/run_execution_submit_v2.py --help >/dev/null
 
       - name: Run target market-data migration tests
         id: target_market_data_migration_tests
@@ -183,6 +185,7 @@ jobs:
             tester.target_execution_broker_attempt_tester \
             tester.target_ib_broker_reconciliation_tester \
             tester.target_ib_broker_reconciliation_store_tester \
+            tester.target_execution_paper_submit_tester \
             -v 2>&1 | tee target-broker-attempt-tests.log
 
       - name: Upload target broker recovery diagnostics
@@ -313,6 +316,9 @@ jobs:
               'ibmd.ib_gateway.broker_reconciliation_mapping',
               'ibmd.ib_gateway.fake_broker_reconciliation',
               'ibmd.ib_gateway.ib_async_broker_reconciliation',
+              'ibmd.ib_gateway.paper_orders',
+              'ibmd.ib_gateway.fake_paper_orders',
+              'ibmd.ib_gateway.ib_async_paper_orders',
               'ibmd.position_feed.application.service',
               'ibmd.position_feed.adapters.sqlite_store',
               'ibmd.market_data.application.backfill',
@@ -332,6 +338,7 @@ jobs:
               'ibmd.execution.domain.ib_reconciliation',
               'ibmd.execution.application.service',
               'ibmd.execution.application.read_only_reconciliation',
+              'ibmd.execution.application.paper_submit',
               'ibmd.execution.adapters.sqlite_decision',
               'ibmd.execution.adapters.sqlite_position_feed',
               'ibmd.execution.adapters.sqlite_state',
