@@ -21,7 +21,7 @@ from ibmd.public_contracts.execution import (
 )
 
 EXECUTION_STORE_NAME = "execution"
-EXECUTION_SCHEMA_VERSION = 1
+EXECUTION_SCHEMA_VERSION = 2
 
 _REQUIRED_OBJECTS = {
     ("table", "schema_migrations"),
