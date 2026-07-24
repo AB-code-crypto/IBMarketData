@@ -15,6 +15,15 @@ from ibmd.public_contracts.broker_reconciliation import (
 
 from .broker_reconciliation import BrokerReconciliationReadError
 
+_TERMINAL_ORDER_STATUSES = {
+    "APICANCELLED",
+    "CANCELLED",
+    "CANCELED",
+    "INACTIVE",
+    "REJECTED",
+    "FAILED",
+}
+
 
 def _required_text(value: object, *, field_name: str) -> str:
     text = str(value or "").strip()
@@ -116,6 +125,33 @@ def _utc_text(value: object, *, field_name: str) -> str:
         ) from exc
 
 
+def _status_key(value: object | None) -> str:
+    return "".join(
+        character
+        for character in str(value or "").upper()
+        if character.isalnum()
+    )
+
+
+def _trade_warning_text(trade: Any, order_state: Any) -> str | None:
+    values: list[str] = []
+    order_warning = (
+        ""
+        if order_state is None
+        else str(getattr(order_state, "warningText", "") or "").strip()
+    )
+    if order_warning:
+        values.append(order_warning)
+    for entry in tuple(getattr(trade, "log", ()) or ()):
+        message = str(getattr(entry, "message", "") or "").strip()
+        error_code = int(getattr(entry, "errorCode", 0) or 0)
+        if not message and error_code:
+            message = f"IB error {error_code}"
+        if message and message not in values:
+            values.append(message)
+    return "; ".join(values) or None
+
+
 def order_fact_from_ib_trade(
     trade: Any,
     *,
@@ -149,6 +185,16 @@ def order_fact_from_ib_trade(
         or getattr(order_status, "permId", 0)
         or 0
     )
+    status = _required_text(
+        getattr(order_status, "status", ""),
+        field_name="order status",
+    )
+    completed_status = (
+        None
+        if order_state is None
+        else str(getattr(order_state, "completedStatus", "") or "").strip()
+        or None
+    )
     requested = _positive_int(
         getattr(order, "totalQuantity", 0),
         field_name="totalQuantity",
@@ -157,27 +203,39 @@ def order_fact_from_ib_trade(
         getattr(order_status, "filled", 0),
         field_name="orderStatus.filled",
     )
-    remaining = _non_negative_int(
+    if filled > requested:
+        raise BrokerReconciliationReadError(
+            "IB order filled quantity exceeds requested quantity: "
+            f"requested={requested}, filled={filled}"
+        )
+    raw_remaining = _non_negative_int(
         getattr(order_status, "remaining", requested - filled),
         field_name="orderStatus.remaining",
     )
+    remaining = raw_remaining
     if filled + remaining != requested:
-        raise BrokerReconciliationReadError(
-            "IB order quantities disagree: "
-            f"requested={requested}, filled={filled}, remaining={remaining}"
+        terminal = bool(
+            {
+                _status_key(status),
+                _status_key(completed_status),
+            }
+            & _TERMINAL_ORDER_STATUSES
         )
-    completed_status = (
-        None
-        if order_state is None
-        else str(getattr(order_state, "completedStatus", "") or "").strip()
-        or None
-    )
-    warning_text = (
-        None
-        if order_state is None
-        else str(getattr(order_state, "warningText", "") or "").strip()
-        or None
-    )
+        if terminal:
+            # TWS can report remaining=0 for a cancelled/rejected validation
+            # result even though the unfilled economic quantity is still the
+            # requested quantity minus fills. Internal retry/reconciliation
+            # semantics need that unfilled quantity, not the inactive-order
+            # display value.
+            remaining = requested - filled
+        else:
+            raise BrokerReconciliationReadError(
+                "IB order quantities disagree: "
+                f"requested={requested}, filled={filled}, "
+                f"remaining={raw_remaining}, status={status!r}, "
+                f"completed_status={completed_status!r}"
+            )
+
     return BrokerOrderFactV1(
         account_id=account,
         order_ref=(
@@ -206,14 +264,11 @@ def order_fact_from_ib_trade(
         requested_qty=requested,
         filled_qty=filled,
         remaining_qty=remaining,
-        status=_required_text(
-            getattr(order_status, "status", ""),
-            field_name="order status",
-        ),
+        status=status,
         source=source,
         observed_at_utc=observed_at_utc,
         completed_status=completed_status,
-        warning_text=warning_text,
+        warning_text=_trade_warning_text(trade, order_state),
     )
 
 
