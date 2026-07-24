@@ -62,6 +62,18 @@ def _event_from_payload(payload: str) -> SignalEventV1:
     return SignalEventV1.from_dict(value)
 
 
+def _material_payload(calculation: SignalCalculationV1) -> dict[str, object]:
+    payload = calculation.to_dict()
+    payload.pop("calculation_id")
+    payload.pop("calculated_at_utc")
+    event = payload.get("event")
+    if isinstance(event, dict):
+        event.pop("event_id")
+        event.pop("calculation_id")
+        event.pop("created_at_utc")
+    return payload
+
+
 class SQLiteSignalReader:
     def __init__(
         self,
@@ -281,7 +293,7 @@ class SQLiteSignalStore:
                     stored = _calculation_from_payload(
                         str(existing["payload_json"])
                     )
-                    if stored.to_dict() != calculation.to_dict():
+                    if _material_payload(stored) != _material_payload(calculation):
                         raise SignalStoreError(
                             "conflicting signal calculation already exists "
                             "for the same strategy/source bar/configuration"
