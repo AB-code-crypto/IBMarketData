@@ -10,6 +10,11 @@ from .broker_attempt import (
     prepare_next_attempt,
     require_operator_resolution,
 )
+from .ib_reconciliation import (
+    BrokerAttemptReconciliationResult,
+    BrokerReconciliationDomainError,
+    reconcile_broker_attempt_snapshot,
+)
 from .model import (
     ExecutionAdmission,
     ExecutionDomainError,
@@ -29,7 +34,9 @@ from .position_projection import (
 
 __all__ = [
     "BrokerAttemptDomainError",
+    "BrokerAttemptReconciliationResult",
     "BrokerOperationSnapshot",
+    "BrokerReconciliationDomainError",
     "ExecutionAdmission",
     "ExecutionDomainError",
     "ExecutionFoundationFixtureV1",
@@ -49,5 +56,6 @@ __all__ = [
     "plan_broker_operation",
     "prepare_next_attempt",
     "project_strategy_position",
+    "reconcile_broker_attempt_snapshot",
     "require_operator_resolution",
 ]
