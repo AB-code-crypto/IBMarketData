@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -65,8 +64,7 @@ def _required_text(value: object, *, field_name: str) -> str:
 def _optional_text(value: object | None) -> str | None:
     if value is None:
         return None
-    text = str(value).strip()
-    return text or None
+    return str(value).strip() or None
 
 
 def _hash(value: object, *, field_name: str) -> str:
@@ -78,7 +76,12 @@ def _hash(value: object, *, field_name: str) -> str:
     return text
 
 
-def _positive_int(value: object, *, field_name: str) -> int:
+def _int_value(
+    value: object,
+    *,
+    field_name: str,
+    positive: bool,
+) -> int:
     if isinstance(value, bool):
         raise DecisionContractError(f"{field_name} must be an integer")
     try:
@@ -88,28 +91,21 @@ def _positive_int(value: object, *, field_name: str) -> int:
         raise DecisionContractError(
             f"{field_name} must be an integer: {value!r}"
         ) from exc
-    if parsed <= 0 or exact != float(parsed):
+    invalid = parsed <= 0 if positive else parsed < 0
+    if invalid or exact != float(parsed):
+        qualifier = "positive" if positive else "non-negative"
         raise DecisionContractError(
-            f"{field_name} must be a positive integer: {value!r}"
+            f"{field_name} must be a {qualifier} integer: {value!r}"
         )
     return parsed
+
+
+def _positive_int(value: object, *, field_name: str) -> int:
+    return _int_value(value, field_name=field_name, positive=True)
 
 
 def _non_negative_int(value: object, *, field_name: str) -> int:
-    if isinstance(value, bool):
-        raise DecisionContractError(f"{field_name} must be an integer")
-    try:
-        parsed = int(value)
-        exact = float(value)
-    except (TypeError, ValueError) as exc:
-        raise DecisionContractError(
-            f"{field_name} must be an integer: {value!r}"
-        ) from exc
-    if parsed < 0 or exact != float(parsed):
-        raise DecisionContractError(
-            f"{field_name} must be a non-negative integer: {value!r}"
-        )
-    return parsed
+    return _int_value(value, field_name=field_name, positive=False)
 
 
 @dataclass(frozen=True)
@@ -381,7 +377,6 @@ class DecisionRecordV1:
                 field_name="position_quantity",
             ),
         )
-
         if self.outcome == DecisionOutcome.COMMAND:
             if self.command_id is None or self.command_kind is None:
                 raise DecisionContractError(
