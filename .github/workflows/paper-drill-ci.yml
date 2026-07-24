@@ -43,6 +43,7 @@ jobs:
       - name: Run paper drill and submit safety tests
         run: |
           python -m unittest \
+            tester.target_execution_new_risk_window_tester \
             tester.target_execution_paper_drill_tester \
             tester.target_execution_paper_submit_tester \
             tester.target_ib_broker_reconciliation_tester \
@@ -52,25 +53,33 @@ jobs:
       - name: Validate paper drill entrypoint import
         run: |
           python apps/prepare_execution_paper_drill_v2.py --help >/dev/null
+          python apps/run_execution_submit_v2.py --help >/dev/null
           python - <<'PY'
           import sys
           from pathlib import Path
 
           sys.path.insert(0, str(Path('src').resolve()))
+          import ibmd.execution.application.new_risk_window
           import ibmd.execution.application.paper_drill
 
-          print('paper drill import OK')
+          print('paper drill imports OK')
           PY
 
       - name: Compile and lint paper drill files
         run: |
           python -m compileall -q \
             apps/prepare_execution_paper_drill_v2.py \
+            apps/run_execution_submit_v2.py \
+            src/ibmd/execution/application/new_risk_window.py \
             src/ibmd/execution/application/paper_drill.py \
+            tester/target_execution_new_risk_window_tester.py \
             tester/target_execution_paper_drill_tester.py
           ruff check \
             --select E4,E7,E9,F \
             --ignore E402 \
             apps/prepare_execution_paper_drill_v2.py \
+            apps/run_execution_submit_v2.py \
+            src/ibmd/execution/application/new_risk_window.py \
             src/ibmd/execution/application/paper_drill.py \
+            tester/target_execution_new_risk_window_tester.py \
             tester/target_execution_paper_drill_tester.py
