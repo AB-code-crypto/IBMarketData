@@ -111,6 +111,28 @@ Active-order quantity inconsistencies remain rejected.
 
 The mapper also preserves the TWS trade-log warning text when `orderState.warningText` is absent.
 
+### Account-wide reconciliation pollution
+
+A follow-up read-only reconciliation still could not build a snapshot. `reqCompletedOrdersAsync` repeatedly returned at least one unusable account-history row with:
+
+```text
+totalQuantity = 0.0
+filled        = 0.0
+remaining     = 0.0
+```
+
+The reader previously attempted to strictly map every order and fill visible on the account. Therefore one unrelated or incomplete historical broker row could abort reconciliation of the current target attempt before any snapshot was published.
+
+The reader now scopes facts to the target order-reference namespace:
+
+```text
+IBMD:
+```
+
+Legacy refs such as `IBMD_INTENT_*` and unrelated account orders are ignored. Zero-quantity target-history placeholders are also ignored as unusable evidence. A malformed row can no longer poison reconciliation of a different valid target order.
+
+Skipping an unusable row does not prove that the affected order is absent. The corresponding old attempt remains fail-closed as `UNKNOWN_OUTCOME`; it is preserved as incident evidence and is not retried.
+
 ## Diagnostic improvement
 
 The submit JSON now includes persisted broker diagnostics:
@@ -126,9 +148,9 @@ A bounded reconciliation failure will no longer produce an unexplained `UNKNOWN_
 
 ## Next real gate
 
-1. Reconcile the existing attempt read-only after deploying the fix.
-2. Preserve the original drill database as incident evidence.
+1. Preserve the original drill database as incident evidence.
+2. Do not resubmit or manually rewrite the old `UNKNOWN_OUTCOME` attempt.
 3. Run a fresh drill in a new dedicated paper-drill deployment root.
-4. Confirm one `DAY` MARKET order, exact broker reconciliation and no second submission.
+4. Confirm one explicit `DAY` MARKET order, exact broker reconciliation and no second submission.
 
 No protective order, cancellation automation or live-account path is enabled by this fix.
