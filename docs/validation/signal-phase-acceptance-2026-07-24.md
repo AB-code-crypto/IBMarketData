@@ -32,4 +32,4 @@ This waiver does not make the target system production-ready. Continuous multi-s
 
 ## Acceptance decision
 
-Phase 5 (`signal shadow`) is closed for implementation sequencing. Work may continue to Phase 6 (`decision shadow`) without additional operator action.
+Phase 5 (`signal shadow`) is closed for implementation sequencing. Phase 6 (`decision shadow`) has begun with a fixture-driven, non-broker implementation whose command outbox has no consumer.
