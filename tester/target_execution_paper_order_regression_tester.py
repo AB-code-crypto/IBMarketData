@@ -3,6 +3,9 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
+from ibmd.execution.application.new_risk_window import (
+    broker_operation_requires_new_risk_gate,
+)
 from ibmd.ib_gateway.broker_reconciliation import BrokerReconciliationReadError
 from ibmd.ib_gateway.broker_reconciliation_mapping import (
     order_fact_from_ib_trade,
@@ -12,7 +15,10 @@ from ibmd.ib_gateway.paper_orders import (
     PaperMarketOrderRequest,
     PaperOrderRoute,
 )
-from ibmd.public_contracts.broker_execution import BrokerOrderSide
+from ibmd.public_contracts.broker_execution import (
+    BrokerOperationState,
+    BrokerOrderSide,
+)
 from ibmd.public_contracts.broker_reconciliation import BrokerOrderSource
 
 ACCOUNT = "DU000000"
@@ -113,6 +119,27 @@ class PaperOrderRegressionTest(unittest.TestCase):
                 source=BrokerOrderSource.OPEN,
                 observed_at_utc=OBSERVED_AT,
             )
+
+    def test_only_new_or_preparing_operation_uses_new_risk_gate(self) -> None:
+        self.assertTrue(broker_operation_requires_new_risk_gate(None))
+        self.assertTrue(
+            broker_operation_requires_new_risk_gate(
+                BrokerOperationState.PREPARING
+            )
+        )
+        for state in (
+            BrokerOperationState.SUBMITTING,
+            BrokerOperationState.LIVE,
+            BrokerOperationState.RECONCILING,
+            BrokerOperationState.SUCCEEDED,
+            BrokerOperationState.FAILED_RETRYABLE,
+            BrokerOperationState.FAILED_OPERATOR_REQUIRED,
+            BrokerOperationState.UNKNOWN_OUTCOME,
+        ):
+            with self.subTest(state=state):
+                self.assertFalse(
+                    broker_operation_requires_new_risk_gate(state)
+                )
 
 
 if __name__ == "__main__":
