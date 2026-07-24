@@ -1,5 +1,13 @@
 """Versioned inter-component DTOs without storage or network behavior."""
 
+from .decision import (
+    DecisionContractError,
+    DecisionOutcome,
+    DecisionRecordV1,
+    DesiredTargetSide,
+    StrategyCommandKind,
+    StrategyCommandRequestV1,
+)
 from .envelope import ContractEnvelopeV1, ContractValidationError
 from .health import (
     DependencyStatusV1,
@@ -41,7 +49,11 @@ __all__ = [
     "BrokerPositionSnapshotV1",
     "ContractEnvelopeV1",
     "ContractValidationError",
+    "DecisionContractError",
+    "DecisionOutcome",
+    "DecisionRecordV1",
     "DependencyStatusV1",
+    "DesiredTargetSide",
     "Liveness",
     "MarketBarFreshnessV1",
     "MarketBarV1",
@@ -59,4 +71,6 @@ __all__ = [
     "SignalContractError",
     "SignalDirection",
     "SignalEventV1",
+    "StrategyCommandKind",
+    "StrategyCommandRequestV1",
 ]
