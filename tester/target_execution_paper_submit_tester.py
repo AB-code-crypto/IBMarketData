@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import unittest
-from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -380,7 +379,7 @@ class FakeIB:
 class PaperSubmitGateAndAdapterTest(unittest.TestCase):
     def test_gate_requires_paper_environment_exact_confirmation_and_d_account(self):
         require_paper_submit_gate(policy())
-        with self.assertRaisesRegex(PaperSubmitError, "environment=paper"):
+        with self.assertRaisesRegex(PaperSubmitError, "IBMD_ENVIRONMENT=paper"):
             require_paper_submit_gate(policy(environment="live"))
         with self.assertRaisesRegex(PaperSubmitError, "confirmation"):
             require_paper_submit_gate(
