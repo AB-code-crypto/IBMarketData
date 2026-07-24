@@ -137,6 +137,7 @@ jobs:
             tester.target_market_data_tester \
             tester.target_market_data_parity_tester \
             tester.target_signal_tester \
+            tester.target_signal_idempotency_tester \
             -v
 
       - name: Compile Python sources
