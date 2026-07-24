@@ -98,6 +98,7 @@ jobs:
             --apply
           python apps/run_signal_v2.py --validate-store-only
           python apps/run_signal_v2.py --help >/dev/null
+          python scripts/compare_signal_shadow.py --help >/dev/null
 
       - name: Run target market-data migration tests
         id: target_market_data_migration_tests
@@ -138,6 +139,7 @@ jobs:
             tester.target_market_data_parity_tester \
             tester.target_signal_tester \
             tester.target_signal_idempotency_tester \
+            tester.target_signal_parity_tester \
             -v
 
       - name: Compile Python sources
