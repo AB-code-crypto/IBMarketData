@@ -100,6 +100,20 @@ jobs:
           python apps/run_signal_v2.py --help >/dev/null
           python scripts/compare_signal_shadow.py --help >/dev/null
 
+      - name: Validate shadow decision store
+        env:
+          IBMD_DEPLOYMENT_ID: ci-decision
+          IBMD_DATA_ROOT: /tmp/ibmd-market-data-ci
+          IBMD_APPLICATION_VERSION: ci
+        run: |
+          python scripts/run_target_migrations.py \
+            --manifest migrations/decision.v1.json \
+            --database "$IBMD_DATA_ROOT/decision/decision.sqlite3" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --apply
+          python apps/run_decision_v2.py --validate-store-only
+          python apps/run_decision_v2.py --help >/dev/null
+
       - name: Run target market-data migration tests
         id: target_market_data_migration_tests
         continue-on-error: true
@@ -160,6 +174,7 @@ jobs:
             tester.target_market_data_parity_tester \
             tester.target_signal_tester \
             tester.target_signal_idempotency_tester \
+            tester.target_decision_tester \
             -v
 
       - name: Compile Python sources
@@ -239,6 +254,7 @@ jobs:
               'ibmd.public_contracts.positions',
               'ibmd.public_contracts.market_data',
               'ibmd.public_contracts.signal',
+              'ibmd.public_contracts.decision',
               'ibmd.operations.health.filesystem',
               'ibmd.operations.migrations.runner',
               'ibmd.operations.migrations.legacy_market_data',
@@ -258,6 +274,10 @@ jobs:
               'ibmd.signal.application.service',
               'ibmd.signal.adapters.sqlite_market_data',
               'ibmd.signal.adapters.sqlite_store',
+              'ibmd.decision.domain.model',
+              'ibmd.decision.application.service',
+              'ibmd.decision.adapters.sqlite_signal',
+              'ibmd.decision.adapters.sqlite_store',
           )
 
           for module in modules:
