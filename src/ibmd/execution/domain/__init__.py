@@ -1,3 +1,15 @@
+from .broker_attempt import (
+    BrokerAttemptDomainError,
+    BrokerOperationSnapshot,
+    apply_broker_observation,
+    begin_reconciliation,
+    build_order_ref,
+    mark_attempt_submitting,
+    mark_unknown_outcome,
+    plan_broker_operation,
+    prepare_next_attempt,
+    require_operator_resolution,
+)
 from .model import (
     ExecutionAdmission,
     ExecutionDomainError,
@@ -16,6 +28,8 @@ from .position_projection import (
 )
 
 __all__ = [
+    "BrokerAttemptDomainError",
+    "BrokerOperationSnapshot",
     "ExecutionAdmission",
     "ExecutionDomainError",
     "ExecutionFoundationFixtureV1",
@@ -26,6 +40,14 @@ __all__ = [
     "PositionProjectionResult",
     "RegisteredFuturesContractV1",
     "admit_strategy_command",
+    "apply_broker_observation",
+    "begin_reconciliation",
+    "build_order_ref",
+    "mark_attempt_submitting",
+    "mark_unknown_outcome",
     "merge_position_projection_readiness",
+    "plan_broker_operation",
+    "prepare_next_attempt",
     "project_strategy_position",
+    "require_operator_resolution",
 ]
