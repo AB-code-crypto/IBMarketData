@@ -144,6 +144,44 @@ Both are valid calculation outcomes. The parity question is whether the metrics 
 
 Run the same command a second time. It must return the already stored calculation rather than create another calculation/event for the same strategy configuration and source bar.
 
+## Explicit legacy-vs-target calculation parity
+
+After the repeated one-shot has returned the same stored target fact, compare it with the current rolling implementation on the same timestamp:
+
+```powershell
+python scripts/compare_signal_shadow.py `
+  --legacy-price-dir "C:\IBMarketData-shadow\data\prices" `
+  --target-json ".\target-signal-once.json" `
+  --instrument MNQ `
+  --output-json ".\target-signal-parity.json"
+
+$ParityExitCode = $LASTEXITCODE
+Write-Host "Signal comparator exit code: $ParityExitCode"
+Get-Content ".\target-signal-parity.json"
+```
+
+The comparator:
+
+- derives the timestamp from the stored target JSON;
+- points the current rolling implementation at the explicit legacy price directory;
+- opens the legacy price database with SQLite `mode=ro`;
+- calls the current Pearson, minmax, score and potential functions directly;
+- does not generate a plot;
+- does not write a legacy signal event;
+- compares candidate counts, entry price, filter counts, scores, direction, potential and final signal status.
+
+The current legacy imports still require the repository `.env` to be valid. No IB connection is opened.
+
+Acceptance requires:
+
+```text
+exit code = 0
+is_match  = true
+mismatches = []
+```
+
+Do not increase tolerance to hide a mismatch. A difference must be explained or fixed before continuous shadow mode.
+
 ## Public read-only products
 
 ```text
@@ -156,7 +194,7 @@ The signal store contains no `trade_intents`, command outbox or broker-order tab
 
 ## Continuous shadow mode
 
-Continuous mode is used only after the explicit one-shot result is reviewed. Run target market-data first, then:
+Continuous mode is used only after the explicit one-shot and legacy parity result are reviewed. Run target market-data first, then:
 
 ```powershell
 python apps/run_signal_v2.py `
