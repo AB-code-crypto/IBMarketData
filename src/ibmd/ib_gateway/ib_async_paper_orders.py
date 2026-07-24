@@ -88,6 +88,7 @@ def build_paper_market_order(request: PaperMarketOrderRequest) -> Any:
         orderId=request.broker_order_id,
         account=request.account_id,
         orderRef=request.order_ref,
+        tif="DAY",
         transmit=True,
     )
 
