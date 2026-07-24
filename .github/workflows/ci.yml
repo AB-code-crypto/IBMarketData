@@ -191,6 +191,7 @@ jobs:
             tester.target_decision_tester \
             tester.target_execution_foundation_tester \
             tester.target_execution_position_projection_tester \
+            tester.target_execution_broker_attempt_tester \
             -v
 
       - name: Compile Python sources
@@ -272,6 +273,7 @@ jobs:
               'ibmd.public_contracts.signal',
               'ibmd.public_contracts.decision',
               'ibmd.public_contracts.execution',
+              'ibmd.public_contracts.broker_execution',
               'ibmd.operations.health.filesystem',
               'ibmd.operations.migrations.runner',
               'ibmd.operations.migrations.legacy_market_data',
@@ -297,11 +299,13 @@ jobs:
               'ibmd.decision.adapters.sqlite_store',
               'ibmd.execution.domain.model',
               'ibmd.execution.domain.position_projection',
+              'ibmd.execution.domain.broker_attempt',
               'ibmd.execution.application.service',
               'ibmd.execution.adapters.sqlite_decision',
               'ibmd.execution.adapters.sqlite_position_feed',
               'ibmd.execution.adapters.sqlite_state',
               'ibmd.execution.adapters.sqlite_store',
+              'ibmd.execution.adapters.sqlite_broker_attempts',
           )
 
           for module in modules:
