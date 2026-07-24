@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import codecs
 import json
 import math
 import sqlite3
@@ -74,26 +75,60 @@ class SignalParityReport:
         }
 
 
+def _decode_json_text(raw: bytes, *, path: Path) -> str:
+    if raw.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+        encoding = "utf-32"
+    elif raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        # Windows PowerShell 5.1 Tee-Object/Out-File writes UTF-16 with BOM.
+        encoding = "utf-16"
+    elif raw.startswith(codecs.BOM_UTF8):
+        encoding = "utf-8-sig"
+    else:
+        encoding = "utf-8"
+
+    try:
+        return raw.decode(encoding)
+    except UnicodeDecodeError as exc:
+        raise SignalParityError(
+            "cannot decode target calculation JSON "
+            f"{path}: expected UTF-8 or BOM-marked UTF-16/UTF-32; {exc}"
+        ) from exc
+
+
 def _read_json_object(path: Path) -> dict[str, Any]:
     if not path.is_file():
-        raise SignalParityError(f"target calculation JSON does not exist: {path}")
+        raise SignalParityError(
+            f"target calculation JSON does not exist: {path}"
+        )
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        text = _decode_json_text(path.read_bytes(), path=path)
+        value = json.loads(text)
+    except OSError as exc:
         raise SignalParityError(
             f"cannot read target calculation JSON {path}: {exc}"
         ) from exc
+    except json.JSONDecodeError as exc:
+        raise SignalParityError(
+            f"target calculation JSON is invalid {path}: {exc}"
+        ) from exc
     if not isinstance(value, dict):
-        raise SignalParityError("target calculation JSON must contain an object")
+        raise SignalParityError(
+            "target calculation JSON must contain an object"
+        )
     missing = sorted(_REQUIRED_TARGET_FIELDS - set(value))
     if missing:
         raise SignalParityError(
-            f"target calculation JSON is missing required fields: {missing}"
+            "target calculation JSON is missing required fields: "
+            f"{missing}"
         )
     return value
 
 
-def _normalize_optional_float(value: Any, *, field_name: str) -> float | None:
+def _normalize_optional_float(
+    value: Any,
+    *,
+    field_name: str,
+) -> float | None:
     if value is None:
         return None
     try:
@@ -111,7 +146,9 @@ def _normalize_optional_float(value: Any, *, field_name: str) -> float | None:
 
 def target_metrics(value: dict[str, Any]) -> dict[str, Any]:
     metrics: dict[str, Any] = {
-        "signal_bar_utc": format_utc(parse_utc(str(value["signal_bar_utc"]))),
+        "signal_bar_utc": format_utc(
+            parse_utc(str(value["signal_bar_utc"]))
+        ),
     }
     for field_name in _INT_FIELDS:
         try:
@@ -186,66 +223,77 @@ def legacy_metrics(
         )
     settings_live.price_db_dir = str(source_dir)
 
-    # The current implementation creates TEMP tables while calculating candidate
-    # matrices. A read-only main database still permits TEMP writes, so patch the
-    # three module-local connection helpers to mode=ro instead of copying logic.
+    # Legacy matrix construction uses TEMP tables. The main price database stays
+    # read-only while SQLite is still allowed to create TEMP objects in memory.
     candidates_module.open_sqlite_connection = _read_only_connection
     pattern_module.open_sqlite_connection = _read_only_connection
     potential_module.open_sqlite_connection = _read_only_connection
 
     settings = DEFAULT_SIGNAL_CONFIG
-    window = build_current_signal_window(
-        signal_bar_ts=signal_ts,
-        settings=settings,
-    )
-    candidate_search = find_candidate_windows(
-        instrument_code=instrument_id,
-        current_window=window,
-        settings=settings,
-    )
-    pattern = build_pattern_matrix(
-        instrument_code=instrument_id,
-        window=window,
-        candidates=candidate_search.candidates,
-    )
-    all_pearson = calculate_centered_pearson_batch(
-        pattern.current_values,
-        pattern.candidate_matrix,
-    )
-    best_raw_pearson = (
-        float(all_pearson.max()) if all_pearson.size else 0.0
-    )
-    passed_indices = np.flatnonzero(
-        all_pearson >= float(settings.pearson_min)
-    )
-    passed_candidates = [
-        pattern.valid_candidates[int(index)] for index in passed_indices
-    ]
-    minmax = filter_candidates_by_minmax_ratio(
-        current_values=pattern.current_values,
-        candidates=passed_candidates,
-        candidate_matrix=pattern.candidate_matrix[passed_indices, :],
-        pearson_scores=all_pearson[passed_indices],
-        max_ratio=settings.candidate_minmax_hard_filter_max_ratio,
-    )
-    ranked = rank_candidates_by_score(
-        current_values=pattern.current_values,
-        candidates=minmax.valid_candidates,
-        candidate_matrix=minmax.candidate_matrix,
-        pearson_scores=minmax.pearson_scores,
-        pearson_weight=settings.candidate_score_pearson_weight,
-        end_delta_weight=settings.candidate_score_end_delta_weight,
-        minmax_weight=settings.candidate_score_minmax_weight,
-    )
-    potential = build_candidate_potential_result(
-        instrument_code=instrument_id,
-        signal_window=window,
-        current_values=pattern.current_values,
-        candidates=ranked.valid_candidates,
-        candidate_scores=ranked.candidate_scores,
-        min_count=settings.candidate_potential_min_count,
-        max_count=settings.candidate_potential_max_count,
-    )
+    try:
+        window = build_current_signal_window(
+            signal_bar_ts=signal_ts,
+            settings=settings,
+        )
+        candidate_search = find_candidate_windows(
+            instrument_code=instrument_id,
+            current_window=window,
+            settings=settings,
+        )
+        pattern = build_pattern_matrix(
+            instrument_code=instrument_id,
+            window=window,
+            candidates=candidate_search.candidates,
+        )
+        all_pearson = calculate_centered_pearson_batch(
+            pattern.current_values,
+            pattern.candidate_matrix,
+        )
+        best_raw_pearson = (
+            float(all_pearson.max()) if all_pearson.size else 0.0
+        )
+        passed_indices = np.flatnonzero(
+            all_pearson >= float(settings.pearson_min)
+        )
+        passed_candidates = [
+            pattern.valid_candidates[int(index)]
+            for index in passed_indices
+        ]
+        minmax = filter_candidates_by_minmax_ratio(
+            current_values=pattern.current_values,
+            candidates=passed_candidates,
+            candidate_matrix=pattern.candidate_matrix[
+                passed_indices,
+                :,
+            ],
+            pearson_scores=all_pearson[passed_indices],
+            max_ratio=settings.candidate_minmax_hard_filter_max_ratio,
+        )
+        ranked = rank_candidates_by_score(
+            current_values=pattern.current_values,
+            candidates=minmax.valid_candidates,
+            candidate_matrix=minmax.candidate_matrix,
+            pearson_scores=minmax.pearson_scores,
+            pearson_weight=settings.candidate_score_pearson_weight,
+            end_delta_weight=settings.candidate_score_end_delta_weight,
+            minmax_weight=settings.candidate_score_minmax_weight,
+        )
+        potential = build_candidate_potential_result(
+            instrument_code=instrument_id,
+            signal_window=window,
+            current_values=pattern.current_values,
+            candidates=ranked.valid_candidates,
+            candidate_scores=ranked.candidate_scores,
+            min_count=settings.candidate_potential_min_count,
+            max_count=settings.candidate_potential_max_count,
+        )
+    except SignalParityError:
+        raise
+    except Exception as exc:
+        raise SignalParityError(
+            "current rolling calculation failed: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
 
     threshold = abs(
         float(settings.candidate_potential_min_abs_end_delta_points)
@@ -281,7 +329,9 @@ def legacy_metrics(
         "valid_pattern_count": len(pattern.valid_candidates),
         "pearson_pass_count": len(passed_candidates),
         "minmax_pass_count": int(minmax.kept_candidates_count),
-        "skipped_pattern_count": int(pattern.skipped_candidates_count),
+        "skipped_pattern_count": int(
+            pattern.skipped_candidates_count
+        ),
         "best_raw_pearson": best_raw_pearson,
         "best_signal_pearson": (
             float(ranked.pearson_scores.max())
@@ -314,9 +364,13 @@ def compare_metrics(
     tolerance: float,
 ) -> SignalParityReport:
     numeric_tolerance = float(tolerance)
-    if not math.isfinite(numeric_tolerance) or numeric_tolerance < 0.0:
+    if (
+        not math.isfinite(numeric_tolerance)
+        or numeric_tolerance < 0.0
+    ):
         raise SignalParityError(
-            f"tolerance must be finite and non-negative: {tolerance!r}"
+            "tolerance must be finite and non-negative: "
+            f"{tolerance!r}"
         )
     if legacy["signal_bar_utc"] != target["signal_bar_utc"]:
         raise SignalParityError(
@@ -349,7 +403,9 @@ def compare_metrics(
                     }
                 )
             continue
-        absolute_error = abs(float(legacy_value) - float(target_value))
+        absolute_error = abs(
+            float(legacy_value) - float(target_value)
+        )
         if absolute_error > numeric_tolerance:
             mismatches.append(
                 {
@@ -389,7 +445,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
     try:
-        target_value = _read_json_object(arguments.target_json.resolve())
+        target_value = _read_json_object(
+            arguments.target_json.resolve()
+        )
         target = target_metrics(target_value)
         legacy = legacy_metrics(
             legacy_price_dir=arguments.legacy_price_dir.resolve(),
@@ -413,7 +471,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     payload = report.to_dict()
-    print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+    print(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        )
+    )
     if arguments.output_json is not None:
         atomic_write_json(arguments.output_json.resolve(), payload)
     return 0 if report.is_match else 1
