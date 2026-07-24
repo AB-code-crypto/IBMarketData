@@ -1,0 +1,19 @@
+{
+  "store_name": "signal",
+  "migrations": [
+    {
+      "version": 1,
+      "name": "create_signal_shadow_store_v1",
+      "statements": [
+        "CREATE TABLE internal_signal_calculations (\n    calculation_id TEXT PRIMARY KEY,\n    strategy_id TEXT NOT NULL,\n    strategy_version INTEGER NOT NULL CHECK (strategy_version > 0),\n    configuration_hash TEXT NOT NULL,\n    instrument_id TEXT NOT NULL,\n    source_bar_id TEXT NOT NULL,\n    source_bar_revision INTEGER NOT NULL CHECK (source_bar_revision > 0),\n    source_con_id INTEGER NOT NULL CHECK (source_con_id > 0),\n    source_local_symbol TEXT NOT NULL,\n    signal_bar_ts INTEGER NOT NULL,\n    signal_bar_utc TEXT NOT NULL,\n    calculated_at_utc TEXT NOT NULL,\n    status TEXT NOT NULL CHECK (status IN ('SIGNAL', 'NO_SIGNAL')),\n    event_id TEXT,\n    payload_json TEXT NOT NULL,\n    UNIQUE (\n        strategy_id,\n        strategy_version,\n        configuration_hash,\n        instrument_id,\n        source_bar_id\n    )\n)",
+        "CREATE INDEX internal_signal_calculations_time_idx\nON internal_signal_calculations (\n    instrument_id,\n    signal_bar_ts\n)",
+        "CREATE TABLE internal_signal_events (\n    event_id TEXT PRIMARY KEY,\n    calculation_id TEXT NOT NULL UNIQUE,\n    strategy_id TEXT NOT NULL,\n    strategy_version INTEGER NOT NULL CHECK (strategy_version > 0),\n    configuration_hash TEXT NOT NULL,\n    instrument_id TEXT NOT NULL,\n    source_bar_id TEXT NOT NULL,\n    signal_bar_ts INTEGER NOT NULL,\n    signal_bar_utc TEXT NOT NULL,\n    created_at_utc TEXT NOT NULL,\n    direction TEXT NOT NULL CHECK (direction IN ('LONG', 'SHORT')),\n    payload_json TEXT NOT NULL,\n    FOREIGN KEY (calculation_id)\n        REFERENCES internal_signal_calculations(calculation_id)\n)",
+        "CREATE INDEX internal_signal_events_time_idx\nON internal_signal_events (\n    instrument_id,\n    signal_bar_ts\n)",
+        "CREATE TABLE internal_signal_state (\n    instrument_id TEXT PRIMARY KEY,\n    last_source_bar_id TEXT NOT NULL,\n    last_signal_bar_ts INTEGER NOT NULL,\n    last_calculation_id TEXT NOT NULL,\n    last_event_id TEXT,\n    last_success_at_utc TEXT NOT NULL,\n    FOREIGN KEY (last_calculation_id)\n        REFERENCES internal_signal_calculations(calculation_id)\n)",
+        "CREATE VIEW public_signal_calculations_v1 AS\nSELECT\n    calculation_id,\n    strategy_id,\n    strategy_version,\n    configuration_hash,\n    instrument_id,\n    source_bar_id,\n    source_bar_revision,\n    source_con_id,\n    source_local_symbol,\n    signal_bar_ts,\n    signal_bar_utc,\n    calculated_at_utc,\n    status,\n    event_id,\n    payload_json\nFROM internal_signal_calculations",
+        "CREATE VIEW public_signal_events_v1 AS\nSELECT\n    event_id,\n    calculation_id,\n    strategy_id,\n    strategy_version,\n    configuration_hash,\n    instrument_id,\n    source_bar_id,\n    signal_bar_ts,\n    signal_bar_utc,\n    created_at_utc,\n    direction,\n    payload_json\nFROM internal_signal_events",
+        "CREATE VIEW public_signal_latest_v1 AS\nSELECT c.*\nFROM internal_signal_state AS s\nJOIN internal_signal_calculations AS c\n  ON c.calculation_id = s.last_calculation_id"
+      ]
+    }
+  ]
+}
