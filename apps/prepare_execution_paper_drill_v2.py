@@ -32,6 +32,10 @@ from ibmd.execution.adapters import (
     SQLiteExecutionStateReader,
     SQLiteExecutionStore,
 )
+from ibmd.execution.application.new_risk_window import (
+    NewRiskWindowError,
+    NewRiskWindowV1,
+)
 from ibmd.execution.application.paper_drill import (
     PaperDrillPolicy,
     PaperDrillPreparationError,
@@ -235,6 +239,23 @@ def run(arguments: argparse.Namespace) -> int:
 
     observed = utc_now()
     observed_text = format_utc(observed)
+    daily_flat_session = bundle.session_calendar.require(
+        instrument_policy.daily_flat.session_id
+    )
+    NewRiskWindowV1(
+        enabled=instrument_policy.daily_flat.enabled,
+        timezone_name=daily_flat_session.timezone,
+        liquidation_start_local=(
+            instrument_policy.daily_flat.liquidation_start_local
+        ),
+        risk_blocked_until_local=(
+            instrument_policy.daily_flat.risk_blocked_until_local
+        ),
+    ).require_allows_new_risk(
+        observed_at_utc=observed_text,
+        lead_seconds=60,
+    )
+
     resolution = resolve_active_contract(bundle.contract_calendar, observed)
     if (
         resolution.status != ActiveContractStatus.ACTIVE
@@ -350,6 +371,7 @@ def main(argv: list[str] | None = None) -> int:
         ExecutionDomainError,
         ExecutionPositionFeedError,
         ExecutionStoreError,
+        NewRiskWindowError,
         PaperDrillPreparationError,
         PositionProjectionError,
         ValueError,
