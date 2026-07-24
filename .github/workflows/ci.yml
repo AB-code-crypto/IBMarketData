@@ -171,6 +171,27 @@ jobs:
         if: steps.target_signal_parity_tests.outcome == 'failure'
         run: exit 1
 
+      - name: Run target broker attempt recovery tests
+        id: target_broker_attempt_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest \
+            tester.target_execution_broker_attempt_tester \
+            -v 2>&1 | tee target-broker-attempt-tests.log
+
+      - name: Upload target broker attempt diagnostics
+        if: steps.target_broker_attempt_tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-broker-attempt-test-diagnostics
+          path: target-broker-attempt-tests.log
+
+      - name: Fail when target broker attempt tests failed
+        if: steps.target_broker_attempt_tests.outcome == 'failure'
+        run: exit 1
+
       - name: Run smoke, integration and characterization tests
         run: |
           python -m unittest \
@@ -191,7 +212,6 @@ jobs:
             tester.target_decision_tester \
             tester.target_execution_foundation_tester \
             tester.target_execution_position_projection_tester \
-            tester.target_execution_broker_attempt_tester \
             -v
 
       - name: Compile Python sources
