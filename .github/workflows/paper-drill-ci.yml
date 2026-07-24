@@ -1,0 +1,85 @@
+name: Paper drill CI
+
+on:
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-paper-drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      IB_HOST: 127.0.0.1
+      IB_PORT: "7497"
+      IB_CLIENT_ID: "200"
+      IB_ACCOUNT_ID: DU000000
+      IBMD_ENVIRONMENT: paper
+      IBMD_DEPLOYMENT_ID: paper-drill-ci
+      IBMD_DATA_ROOT: /tmp/ibmd-paper-drill-ci
+      IBMD_APPLICATION_VERSION: ci
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install ruff
+
+      - name: Run paper drill and submit safety tests
+        run: |
+          python -m unittest \
+            tester.target_execution_new_risk_window_tester \
+            tester.target_execution_paper_drill_tester \
+            tester.target_execution_paper_submit_tester \
+            tester.target_ib_broker_reconciliation_tester \
+            tester.target_ib_broker_reconciliation_store_tester \
+            -v
+
+      - name: Validate paper drill entrypoint import
+        run: |
+          python apps/prepare_execution_paper_drill_v2.py --help >/dev/null
+          python apps/run_execution_submit_v2.py --help >/dev/null
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, str(Path('src').resolve()))
+          import ibmd.execution.application.new_risk_window
+          import ibmd.execution.application.paper_drill
+
+          print('paper drill imports OK')
+          PY
+
+      - name: Compile and lint paper drill files
+        run: |
+          python -m compileall -q \
+            apps/prepare_execution_paper_drill_v2.py \
+            apps/run_execution_submit_v2.py \
+            src/ibmd/execution/application/new_risk_window.py \
+            src/ibmd/execution/application/paper_drill.py \
+            tester/target_execution_new_risk_window_tester.py \
+            tester/target_execution_paper_drill_tester.py
+          ruff check \
+            --select E4,E7,E9,F \
+            --ignore E402 \
+            apps/prepare_execution_paper_drill_v2.py \
+            apps/run_execution_submit_v2.py \
+            src/ibmd/execution/application/new_risk_window.py \
+            src/ibmd/execution/application/paper_drill.py \
+            tester/target_execution_new_risk_window_tester.py \
+            tester/target_execution_paper_drill_tester.py

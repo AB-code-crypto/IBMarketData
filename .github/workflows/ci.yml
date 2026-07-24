@@ -46,21 +46,191 @@ jobs:
       - name: Verify rolling-only architecture
         run: python scripts/verify_rolling_refactor.py .
 
-      - name: Run smoke and integration tests
+      - name: Verify target architecture boundaries
+        run: python scripts/verify_target_architecture.py .
+
+      - name: Validate target catalog artifacts
+        run: |
+          python scripts/validate_target_catalog.py catalog \
+            --resolve-active-at 2026-07-23T00:00:00Z
+
+      - name: Validate shadow position-feed store
+        env:
+          IBMD_DEPLOYMENT_ID: ci-position-feed
+          IBMD_DATA_ROOT: /tmp/ibmd-position-feed-ci
+          IBMD_APPLICATION_VERSION: ci
+        run: |
+          rm -rf "$IBMD_DATA_ROOT"
+          python scripts/run_target_migrations.py \
+            --manifest migrations/position_feed.v1.json \
+            --database "$IBMD_DATA_ROOT/position_feed/broker_positions.sqlite3" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --apply
+          python apps/run_position_feed_v2.py --validate-store-only
+
+      - name: Validate shadow market-data store and parity CLIs
+        env:
+          IBMD_DEPLOYMENT_ID: ci-market-data
+          IBMD_DATA_ROOT: /tmp/ibmd-market-data-ci
+          IBMD_APPLICATION_VERSION: ci
+        run: |
+          rm -rf "$IBMD_DATA_ROOT"
+          python scripts/run_target_migrations.py \
+            --manifest migrations/market_data.v1.json \
+            --database "$IBMD_DATA_ROOT/market_data/MNQ.sqlite3" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --apply
+          python apps/run_market_data_v2.py --validate-store-only
+          python scripts/backfill_target_market_data.py --help >/dev/null
+          python scripts/compare_market_data_shadow.py --help >/dev/null
+          python scripts/import_legacy_market_data.py --help >/dev/null
+
+      - name: Validate shadow signal store
+        env:
+          IBMD_DEPLOYMENT_ID: ci-signal
+          IBMD_DATA_ROOT: /tmp/ibmd-market-data-ci
+          IBMD_APPLICATION_VERSION: ci
+        run: |
+          python scripts/run_target_migrations.py \
+            --manifest migrations/signal.v1.json \
+            --database "$IBMD_DATA_ROOT/signal/signal.sqlite3" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --apply
+          python apps/run_signal_v2.py --validate-store-only
+          python apps/run_signal_v2.py --help >/dev/null
+          python scripts/compare_signal_shadow.py --help >/dev/null
+
+      - name: Validate shadow decision store
+        env:
+          IBMD_DEPLOYMENT_ID: ci-decision
+          IBMD_DATA_ROOT: /tmp/ibmd-market-data-ci
+          IBMD_APPLICATION_VERSION: ci
+        run: |
+          python scripts/run_target_migrations.py \
+            --manifest migrations/decision.v1.json \
+            --database "$IBMD_DATA_ROOT/decision/decision.sqlite3" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --apply
+          python apps/run_decision_v2.py --validate-store-only
+          python apps/run_decision_v2.py --help >/dev/null
+
+      - name: Validate execution foundation store
+        env:
+          IBMD_DEPLOYMENT_ID: ci-execution
+          IBMD_DATA_ROOT: /tmp/ibmd-market-data-ci
+          IBMD_APPLICATION_VERSION: ci
+        run: |
+          python scripts/run_target_migrations.py \
+            --manifest migrations/execution.v1.json \
+            --database "$IBMD_DATA_ROOT/execution/execution.sqlite3" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --apply
+          python apps/run_execution_v2.py --validate-store-only
+          python apps/run_execution_v2.py --help >/dev/null
+          python apps/run_execution_reconciliation_v2.py --validate-store-only
+          python apps/run_execution_reconciliation_v2.py --help >/dev/null
+          python apps/run_execution_submit_v2.py --validate-store-only
+          python apps/run_execution_submit_v2.py --help >/dev/null
+
+      - name: Run target market-data migration tests
+        id: target_market_data_migration_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest \
+            tester.target_legacy_market_data_import_tester \
+            tester.target_ib_market_data_connection_tester \
+            -v 2>&1 | tee target-market-data-migration-tests.log
+
+      - name: Upload target market-data migration diagnostics
+        if: steps.target_market_data_migration_tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-market-data-migration-test-diagnostics
+          path: target-market-data-migration-tests.log
+
+      - name: Fail when target market-data migration tests failed
+        if: steps.target_market_data_migration_tests.outcome == 'failure'
+        run: exit 1
+
+      - name: Run target signal parity tests
+        id: target_signal_parity_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest \
+            tester.target_signal_parity_tester \
+            -v 2>&1 | tee target-signal-parity-tests.log
+
+      - name: Upload target signal parity diagnostics
+        if: steps.target_signal_parity_tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-signal-parity-test-diagnostics
+          path: target-signal-parity-tests.log
+
+      - name: Fail when target signal parity tests failed
+        if: steps.target_signal_parity_tests.outcome == 'failure'
+        run: exit 1
+
+      - name: Run target broker recovery tests
+        id: target_broker_attempt_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest \
+            tester.target_execution_broker_attempt_tester \
+            tester.target_ib_broker_reconciliation_tester \
+            tester.target_ib_broker_reconciliation_store_tester \
+            tester.target_execution_paper_submit_tester \
+            -v 2>&1 | tee target-broker-attempt-tests.log
+
+      - name: Upload target broker recovery diagnostics
+        if: steps.target_broker_attempt_tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-broker-attempt-test-diagnostics
+          path: target-broker-attempt-tests.log
+
+      - name: Fail when target broker recovery tests failed
+        if: steps.target_broker_attempt_tests.outcome == 'failure'
+        run: exit 1
+
+      - name: Run smoke, integration and characterization tests
         run: |
           python -m unittest \
             tester.rolling_signal_smoke_tester \
             tester.rolling_price_pipeline_tester \
             tester.execution_sqlite_locking_tester \
+            tester.current_system_behavior_characterization_tester \
+            tester.current_system_recovery_characterization_tester \
+            tester.current_system_liquidation_characterization_tester \
+            tester.target_foundation_tester \
+            tester.target_catalog_tester \
+            tester.target_architecture_boundary_tester \
+            tester.target_position_feed_tester \
+            tester.target_market_data_tester \
+            tester.target_market_data_parity_tester \
+            tester.target_signal_tester \
+            tester.target_signal_idempotency_tester \
+            tester.target_decision_tester \
+            tester.target_execution_foundation_tester \
+            tester.target_execution_position_projection_tester \
             -v
 
       - name: Compile Python sources
         run: python -m compileall -q .
 
       - name: Check diff and changed Python files
+        id: lint
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
+          exec > >(tee lint.log) 2>&1
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             base_sha="${{ github.event.pull_request.base.sha }}"
@@ -72,7 +242,9 @@ jobs:
             base_sha="$(git rev-parse HEAD^)"
           fi
 
-          git diff --check "$base_sha" HEAD
+          # Markdown uses two trailing spaces intentionally for hard line breaks.
+          # Keep whitespace validation strict for code/configuration files.
+          git diff --check "$base_sha" HEAD -- . ':!*.md' ':!**/*.md'
 
           mapfile -d '' changed_python < <(
             git diff \
@@ -85,13 +257,31 @@ jobs:
           )
 
           if (( ${#changed_python[@]} > 0 )); then
-            ruff check --ignore E402 "${changed_python[@]}"
+            ruff check \
+              --select E4,E7,E9,F \
+              --ignore E402 \
+              "${changed_python[@]}"
           fi
 
-      - name: Import critical production modules
+      - name: Upload lint diagnostics
+        if: steps.lint.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-diagnostics
+          path: lint.log
+
+      - name: Fail when lint validation failed
+        if: steps.lint.outcome == 'failure'
+        run: exit 1
+
+      - name: Import critical production and target modules
         run: |
           python - <<'PY'
           import importlib
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, str(Path('src').resolve()))
 
           modules = (
               'core.price_source',
@@ -101,6 +291,61 @@ jobs:
               'ib_execution.emergency_close',
               'ib_execution.execution_loop',
               'wt_run.launcher',
+              'ibmd.foundation.config',
+              'ibmd.foundation.process_lock',
+              'ibmd.public_contracts.envelope',
+              'ibmd.public_contracts.health',
+              'ibmd.public_contracts.positions',
+              'ibmd.public_contracts.market_data',
+              'ibmd.public_contracts.signal',
+              'ibmd.public_contracts.decision',
+              'ibmd.public_contracts.execution',
+              'ibmd.public_contracts.broker_execution',
+              'ibmd.public_contracts.broker_reconciliation',
+              'ibmd.operations.health.filesystem',
+              'ibmd.operations.migrations.runner',
+              'ibmd.operations.migrations.legacy_market_data',
+              'ibmd.operations.parity.market_data',
+              'ibmd.catalog.store',
+              'ibmd.catalog.resolver',
+              'ibmd.ib_gateway.positions',
+              'ibmd.ib_gateway.ib_async_positions',
+              'ibmd.ib_gateway.market_data',
+              'ibmd.ib_gateway.ib_async_market_data',
+              'ibmd.ib_gateway.broker_reconciliation',
+              'ibmd.ib_gateway.broker_reconciliation_mapping',
+              'ibmd.ib_gateway.fake_broker_reconciliation',
+              'ibmd.ib_gateway.ib_async_broker_reconciliation',
+              'ibmd.ib_gateway.paper_orders',
+              'ibmd.ib_gateway.fake_paper_orders',
+              'ibmd.ib_gateway.ib_async_paper_orders',
+              'ibmd.position_feed.application.service',
+              'ibmd.position_feed.adapters.sqlite_store',
+              'ibmd.market_data.application.backfill',
+              'ibmd.market_data.application.service',
+              'ibmd.market_data.adapters.sqlite_store',
+              'ibmd.signal.domain.calculation',
+              'ibmd.signal.application.service',
+              'ibmd.signal.adapters.sqlite_market_data',
+              'ibmd.signal.adapters.sqlite_store',
+              'ibmd.decision.domain.model',
+              'ibmd.decision.application.service',
+              'ibmd.decision.adapters.sqlite_signal',
+              'ibmd.decision.adapters.sqlite_store',
+              'ibmd.execution.domain.model',
+              'ibmd.execution.domain.position_projection',
+              'ibmd.execution.domain.broker_attempt',
+              'ibmd.execution.domain.ib_reconciliation',
+              'ibmd.execution.application.service',
+              'ibmd.execution.application.read_only_reconciliation',
+              'ibmd.execution.application.paper_submit',
+              'ibmd.execution.adapters.sqlite_decision',
+              'ibmd.execution.adapters.sqlite_position_feed',
+              'ibmd.execution.adapters.sqlite_state',
+              'ibmd.execution.adapters.sqlite_store',
+              'ibmd.execution.adapters.sqlite_broker_attempts',
+              'ibmd.execution.adapters.sqlite_broker_reconciliation',
+              'ibmd.execution.adapters.sqlite_broker_reconciliation_store',
           )
 
           for module in modules:

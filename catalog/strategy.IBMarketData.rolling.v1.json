@@ -1,0 +1,62 @@
+{
+  "artifact_version": "IBMarketData.rolling.v1",
+  "content_hash": "fe22065ee941bf7c942e24febfbe96808b28fd4c54d5384270d45a925b421064",
+  "instruments": [
+    {
+      "daily_flat": {
+        "enabled": true,
+        "liquidation_start_local": "14:59:50",
+        "no_new_risk_local": "15:00:00",
+        "risk_blocked_until_local": "16:00:00",
+        "session_id": "CME_EQUITY_INDEX"
+      },
+      "daily_pnl": {
+        "enabled": true,
+        "target_usd": 500.0,
+        "timezone": "Europe/Moscow"
+      },
+      "instrument_id": "MNQ",
+      "protective": {
+        "price_stale_max_seconds": 600,
+        "price_watchdog_enabled": true,
+        "stale_feed_market_close_enabled": false,
+        "stop_loss_points": 150.0,
+        "stop_outside_rth": true,
+        "stop_required": true,
+        "take_profit_enabled": true,
+        "take_profit_outside_rth": false,
+        "take_profit_points": 75.0,
+        "time_in_force": "DAY"
+      },
+      "signal": {
+        "candidate_hour_profile": "current_v1",
+        "complete_bid_ask_required": true,
+        "decision_pipeline_max_age_seconds": 30,
+        "historical_lookback_days": 365,
+        "max_complete_bar_lag_seconds": 60,
+        "minimum_abs_potential_end_delta_points": 30.0,
+        "minmax_hard_filter_max_ratio": 1.5,
+        "pattern_lookback_minutes": 90,
+        "pearson_minimum": 0.7,
+        "plot_enabled": true,
+        "plot_retention_days": 7,
+        "potential_candidate_max_count": 9,
+        "potential_candidate_min_count": 7,
+        "potential_horizon_minutes": 30,
+        "rolling_step_seconds": 60,
+        "score_end_delta_weight": 1.0,
+        "score_minmax_weight": 1.0,
+        "score_pearson_weight": 1.0,
+        "source_bar_size_seconds": 5
+      },
+      "strategic_order_type": "MARKET",
+      "target_quantity": 1,
+      "trading_enabled": true
+    }
+  ],
+  "schema_name": "StrategyPolicyCatalog",
+  "schema_version": 1,
+  "source_runtime_commit": "5073dbea3f96740b4390e113d06578a514918f00",
+  "strategy_id": "IBMarketData.rolling",
+  "strategy_version": 1
+}

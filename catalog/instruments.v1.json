@@ -1,0 +1,21 @@
+{
+  "artifact_version": "instruments.v1",
+  "content_hash": "96cceaa7457fb4b1ef7205093f1350f0122834509c0dba6ef277ea4d034289de",
+  "instruments": [
+    {
+      "currency": "USD",
+      "database_name": "MNQ.sqlite3",
+      "default_bar_size_seconds": 5,
+      "exchange": "CME",
+      "instrument_id": "MNQ",
+      "multiplier": 2.0,
+      "price_precision": 3,
+      "price_tick": 0.25,
+      "sec_type": "FUT",
+      "trading_class": "MNQ"
+    }
+  ],
+  "schema_name": "InstrumentMaster",
+  "schema_version": 1,
+  "source_runtime_commit": "5073dbea3f96740b4390e113d06578a514918f00"
+}
