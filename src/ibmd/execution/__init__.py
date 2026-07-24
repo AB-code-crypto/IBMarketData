@@ -1,11 +1,20 @@
 from .application import (
+    BrokerAttemptSource,
+    BrokerReconciliationRepository,
     ExecutionFoundationConfig,
     ExecutionFoundationService,
+    ReadOnlyBrokerReconciliationService,
+    ReadOnlyBrokerSnapshotSource,
+    ReadOnlyReconciliationRun,
+    ReconciledBrokerAttempt,
+    reconciliation_run_payload,
 )
 from .domain import (
     POSITION_PROJECTION_REASON_PREFIX,
     BrokerAttemptDomainError,
+    BrokerAttemptReconciliationResult,
     BrokerOperationSnapshot,
+    BrokerReconciliationDomainError,
     ExecutionAdmission,
     ExecutionDomainError,
     ExecutionFoundationFixtureV1,
@@ -24,12 +33,17 @@ from .domain import (
     plan_broker_operation,
     prepare_next_attempt,
     project_strategy_position,
+    reconcile_broker_attempt_snapshot,
     require_operator_resolution,
 )
 
 __all__ = [
     "BrokerAttemptDomainError",
+    "BrokerAttemptReconciliationResult",
+    "BrokerAttemptSource",
     "BrokerOperationSnapshot",
+    "BrokerReconciliationDomainError",
+    "BrokerReconciliationRepository",
     "ExecutionAdmission",
     "ExecutionDomainError",
     "ExecutionFoundationConfig",
@@ -40,6 +54,10 @@ __all__ = [
     "PositionProjectionError",
     "PositionProjectionPolicyV1",
     "PositionProjectionResult",
+    "ReadOnlyBrokerReconciliationService",
+    "ReadOnlyBrokerSnapshotSource",
+    "ReadOnlyReconciliationRun",
+    "ReconciledBrokerAttempt",
     "RegisteredFuturesContractV1",
     "admit_strategy_command",
     "apply_broker_observation",
@@ -51,5 +69,7 @@ __all__ = [
     "plan_broker_operation",
     "prepare_next_attempt",
     "project_strategy_position",
+    "reconcile_broker_attempt_snapshot",
+    "reconciliation_run_payload",
     "require_operator_resolution",
 ]
