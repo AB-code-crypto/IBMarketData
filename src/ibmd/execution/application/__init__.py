@@ -1,3 +1,11 @@
+from .paper_submit import (
+    PaperOrderSubmitCoordinator,
+    PaperSubmitError,
+    PaperSubmitPolicy,
+    PaperSubmitRun,
+    paper_submit_payload,
+    require_paper_submit_gate,
+)
 from .ports import (
     DecisionCommandSource,
     ExecutionRepository,
@@ -24,10 +32,16 @@ __all__ = [
     "ExecutionFoundationConfig",
     "ExecutionFoundationService",
     "ExecutionRepository",
+    "PaperOrderSubmitCoordinator",
+    "PaperSubmitError",
+    "PaperSubmitPolicy",
+    "PaperSubmitRun",
     "ReadOnlyBrokerReconciliationService",
     "ReadOnlyBrokerSnapshotSource",
     "ReadOnlyReconciliationRun",
     "ReconciledBrokerAttempt",
     "ServiceHealthPublisher",
+    "paper_submit_payload",
     "reconciliation_run_payload",
+    "require_paper_submit_gate",
 ]
