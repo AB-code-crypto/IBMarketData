@@ -25,6 +25,13 @@ from .positions import (
     BrokerPositionSnapshotStatus,
     BrokerPositionSnapshotV1,
 )
+from .signal import (
+    SignalCalculationStatus,
+    SignalCalculationV1,
+    SignalContractError,
+    SignalDirection,
+    SignalEventV1,
+)
 
 __all__ = [
     "BrokerPositionContractError",
@@ -47,4 +54,9 @@ __all__ = [
     "QuoteSide",
     "Readiness",
     "ServiceHealthV1",
+    "SignalCalculationStatus",
+    "SignalCalculationV1",
+    "SignalContractError",
+    "SignalDirection",
+    "SignalEventV1",
 ]
