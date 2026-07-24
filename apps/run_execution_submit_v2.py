@@ -37,6 +37,10 @@ from ibmd.execution.adapters import (
     SQLiteExecutionStateReader,
     SQLiteExecutionStore,
 )
+from ibmd.execution.application.new_risk_window import (
+    NewRiskWindowError,
+    NewRiskWindowV1,
+)
 from ibmd.execution.domain import (
     BrokerAttemptDomainError,
     BrokerReconciliationDomainError,
@@ -44,7 +48,7 @@ from ibmd.execution.domain import (
 from ibmd.foundation.config import load_deployment_settings
 from ibmd.foundation.identity import new_id
 from ibmd.foundation.process_lock import ServiceProcessLock
-from ibmd.foundation.time import utc_now
+from ibmd.foundation.time import format_utc, utc_now
 from ibmd.ib_gateway import (
     BrokerOrderSubmitError,
     BrokerReconciliationReadError,
@@ -179,6 +183,20 @@ async def run(arguments: argparse.Namespace) -> int:
     instrument_id = str(arguments.instrument or "").strip()
     instrument = bundle.instrument_master.require(instrument_id)
     instrument_policy = bundle.strategy_policy.require(instrument_id)
+    daily_flat_session = bundle.session_calendar.require(
+        instrument_policy.daily_flat.session_id
+    )
+    new_risk_window = NewRiskWindowV1(
+        enabled=instrument_policy.daily_flat.enabled,
+        timezone_name=daily_flat_session.timezone,
+        liquidation_start_local=(
+            instrument_policy.daily_flat.liquidation_start_local
+        ),
+        risk_blocked_until_local=(
+            instrument_policy.daily_flat.risk_blocked_until_local
+        ),
+    )
+
     observed = utc_now()
     resolution = resolve_active_contract(bundle.contract_calendar, observed)
     active_contract = None
@@ -292,6 +310,10 @@ async def run(arguments: argparse.Namespace) -> int:
             deployment_id=settings.deployment_id,
             instance_id=instance_id,
         ):
+            new_risk_window.require_allows_new_risk(
+                observed_at_utc=format_utc(utc_now()),
+                lead_seconds=60,
+            )
             result = await coordinator.run_once(command_id=command_id)
             print(
                 json.dumps(
@@ -329,6 +351,7 @@ def main(argv: list[str] | None = None) -> int:
         BrokerReconciliationReadError,
         BrokerReconciliationStoreError,
         ExecutionDecisionSourceError,
+        NewRiskWindowError,
         PaperSubmitError,
         ValueError,
     ) as exc:
