@@ -1,0 +1,17 @@
+{
+  "store_name": "decision",
+  "migrations": [
+    {
+      "version": 1,
+      "name": "create_decision_shadow_store_v1",
+      "statements": [
+        "CREATE TABLE internal_decision_records (\n    decision_id TEXT PRIMARY KEY,\n    strategy_id TEXT NOT NULL,\n    strategy_version INTEGER NOT NULL CHECK (strategy_version > 0),\n    deployment_id TEXT NOT NULL,\n    instrument_id TEXT NOT NULL,\n    source_signal_id TEXT NOT NULL,\n    evaluated_at_ts INTEGER NOT NULL,\n    evaluated_at_utc TEXT NOT NULL,\n    outcome TEXT NOT NULL CHECK (outcome IN ('COMMAND', 'NO_ACTION', 'REJECTED')),\n    reason_code TEXT NOT NULL,\n    command_id TEXT,\n    input_hash TEXT NOT NULL,\n    policy_hash TEXT NOT NULL,\n    input_payload_json TEXT NOT NULL,\n    payload_json TEXT NOT NULL,\n    UNIQUE (\n        strategy_id,\n        strategy_version,\n        deployment_id,\n        instrument_id,\n        source_signal_id,\n        input_hash,\n        policy_hash\n    )\n)",
+        "CREATE INDEX internal_decision_records_time_idx\nON internal_decision_records (\n    instrument_id,\n    evaluated_at_ts\n)",
+        "CREATE TABLE internal_strategy_command_requests (\n    command_id TEXT PRIMARY KEY,\n    decision_id TEXT NOT NULL UNIQUE,\n    strategy_id TEXT NOT NULL,\n    strategy_version INTEGER NOT NULL CHECK (strategy_version > 0),\n    deployment_id TEXT NOT NULL,\n    instrument_id TEXT NOT NULL,\n    source_signal_id TEXT NOT NULL,\n    created_at_ts INTEGER NOT NULL,\n    expires_at_ts INTEGER NOT NULL,\n    command_kind TEXT NOT NULL CHECK (command_kind IN ('OPEN', 'REVERSE')),\n    desired_target_side TEXT NOT NULL CHECK (desired_target_side IN ('LONG', 'SHORT')),\n    desired_target_quantity INTEGER NOT NULL CHECK (desired_target_quantity > 0),\n    policy_hash TEXT NOT NULL,\n    payload_json TEXT NOT NULL,\n    FOREIGN KEY (decision_id)\n        REFERENCES internal_decision_records(decision_id),\n    UNIQUE (\n        strategy_id,\n        strategy_version,\n        deployment_id,\n        instrument_id,\n        source_signal_id,\n        policy_hash\n    )\n)",
+        "CREATE INDEX internal_strategy_command_requests_time_idx\nON internal_strategy_command_requests (\n    instrument_id,\n    created_at_ts\n)",
+        "CREATE VIEW public_decision_records_v1 AS\nSELECT\n    decision_id,\n    strategy_id,\n    strategy_version,\n    deployment_id,\n    instrument_id,\n    source_signal_id,\n    evaluated_at_ts,\n    evaluated_at_utc,\n    outcome,\n    reason_code,\n    command_id,\n    input_hash,\n    policy_hash,\n    payload_json\nFROM internal_decision_records",
+        "CREATE VIEW public_strategy_command_requests_v1 AS\nSELECT\n    command_id,\n    decision_id,\n    strategy_id,\n    strategy_version,\n    deployment_id,\n    instrument_id,\n    source_signal_id,\n    created_at_ts,\n    expires_at_ts,\n    command_kind,\n    desired_target_side,\n    desired_target_quantity,\n    policy_hash,\n    payload_json\nFROM internal_strategy_command_requests"
+      ]
+    }
+  ]
+}
