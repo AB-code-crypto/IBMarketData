@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime
 
 from ibmd.execution.application.protective_submit import (
     PaperProtectiveSubmitCoordinator,
