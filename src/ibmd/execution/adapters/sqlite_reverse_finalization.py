@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from pathlib import Path
-
 from ibmd.execution.domain.protection import PositionEpisodeProtectionPlan
 from ibmd.execution.domain.reverse_finalization import (
     ReversePositionFinalizationV1,
