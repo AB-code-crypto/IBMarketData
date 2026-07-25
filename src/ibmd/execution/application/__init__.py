@@ -11,6 +11,11 @@ from .ports import (
     ExecutionRepository,
     ServiceHealthPublisher,
 )
+from .protection import (
+    PositionEpisodeProtectionService,
+    ProtectionPlanningServiceError,
+    protection_plan_payload,
+)
 from .read_only_reconciliation import (
     BrokerAttemptSource,
     BrokerReconciliationRepository,
@@ -36,12 +41,15 @@ __all__ = [
     "PaperSubmitError",
     "PaperSubmitPolicy",
     "PaperSubmitRun",
+    "PositionEpisodeProtectionService",
+    "ProtectionPlanningServiceError",
     "ReadOnlyBrokerReconciliationService",
     "ReadOnlyBrokerSnapshotSource",
     "ReadOnlyReconciliationRun",
     "ReconciledBrokerAttempt",
     "ServiceHealthPublisher",
     "paper_submit_payload",
+    "protection_plan_payload",
     "reconciliation_run_payload",
     "require_paper_submit_gate",
 ]
