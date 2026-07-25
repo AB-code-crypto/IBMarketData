@@ -37,11 +37,21 @@ from ibmd.execution.adapters import (
     SQLiteExecutionDecisionReader,
     SQLiteExecutionStateReader,
     SQLiteExecutionStore,
+    SQLiteProtectionReader,
+)
+from ibmd.execution.adapters.sqlite_liquidation import (
+    LiquidationSchemaError,
+    LiquidationStoreError,
+    SQLiteLiquidationStore,
 )
 from ibmd.execution.application.new_risk_window import (
     NewRiskWindowError,
     NewRiskWindowV1,
     broker_operation_requires_new_risk_gate,
+)
+from ibmd.execution.application.reverse_handoff import (
+    PaperReverseHandoffError,
+    PersistedReverseSubmitGuard,
 )
 from ibmd.execution.domain import (
     BrokerAttemptDomainError,
@@ -137,11 +147,15 @@ async def run(arguments: argparse.Namespace) -> int:
     execution_state = SQLiteExecutionStateReader(execution_database)
     attempt_store = SQLiteBrokerAttemptStore(execution_database)
     reconciliation_store = SQLiteBrokerReconciliationStore(execution_database)
+    protection_reader = SQLiteProtectionReader(execution_database)
+    liquidation_store = SQLiteLiquidationStore(execution_database)
     try:
         execution_store.validate_schema()
         execution_state.validate_schema()
         attempt_store.validate_schema()
         reconciliation_store.validate_schema()
+        protection_reader.validate_schema()
+        liquidation_store.validate_schema()
     except (
         ExecutionSchemaError,
         ExecutionStateReadError,
@@ -300,6 +314,10 @@ async def run(arguments: argparse.Namespace) -> int:
         reconciliation_repository=reconciliation_store,
         order_gateway=submit_gateway,
         broker_snapshot_source=reconciliation_source,
+        reverse_submit_guard=PersistedReverseSubmitGuard(
+            protection_state_source=protection_reader,
+            liquidation_state_source=liquidation_store,
+        ),
     )
 
     instance_id = new_id("instance")
@@ -392,7 +410,10 @@ def main(argv: list[str] | None = None) -> int:
         BrokerReconciliationReadError,
         BrokerReconciliationStoreError,
         ExecutionDecisionSourceError,
+        LiquidationSchemaError,
+        LiquidationStoreError,
         NewRiskWindowError,
+        PaperReverseHandoffError,
         PaperSubmitError,
         ValueError,
     ) as exc:

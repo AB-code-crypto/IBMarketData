@@ -36,7 +36,10 @@ from ibmd.public_contracts.broker_execution import (
 from ibmd.public_contracts.broker_reconciliation import (
     BrokerReconciliationSnapshotV1,
 )
-from ibmd.public_contracts.decision import StrategyCommandRequestV1
+from ibmd.public_contracts.decision import (
+    StrategyCommandKind,
+    StrategyCommandRequestV1,
+)
 from ibmd.public_contracts.execution import (
     DailyRiskStateV1,
     DailyRiskStatus,
@@ -136,6 +139,15 @@ class BrokerSnapshotSource(Protocol):
         *,
         account_id: str,
     ) -> BrokerReconciliationSnapshotV1: ...
+
+
+class ReverseSubmitGuard(Protocol):
+    def require_ready(
+        self,
+        *,
+        command: ExecutionCommandStateV1,
+        position: StrategyPositionV1,
+    ) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -340,6 +352,8 @@ def _validate_current_state(
     daily_risk: DailyRiskStateV1,
     policy: PaperSubmitPolicy,
     observed_at_utc: str,
+    command_kind: StrategyCommandKind,
+    reverse_handoff_ready: bool,
 ) -> None:
     expected_position_scope = (
         policy.account_id,
@@ -379,7 +393,28 @@ def _validate_current_state(
     )
     if risk_scope != expected_risk_scope:
         raise PaperSubmitError("daily risk belongs to another execution scope")
-    if (
+    if command_kind == StrategyCommandKind.REVERSE:
+        if not reverse_handoff_ready:
+            raise PaperSubmitError(
+                "REVERSE submission requires completed protective handoff"
+            )
+        unrelated_reasons = tuple(
+            item
+            for item in readiness.blocking_reasons
+            if not item.startswith("protection:")
+            and not item.startswith("reverse_handoff:")
+        )
+        if (
+            not readiness.broker_actions_enabled
+            or not readiness.reconciliation_complete
+            or not readiness.clock_healthy
+            or unrelated_reasons
+        ):
+            raise PaperSubmitError(
+                "REVERSE submission has non-handoff execution blockers: "
+                f"{unrelated_reasons}"
+            )
+    elif (
         readiness.status != ExecutionReadinessStatus.READY
         or not readiness.command_intake_enabled
         or not readiness.broker_actions_enabled
@@ -456,6 +491,7 @@ class PaperOrderSubmitCoordinator:
         reconciliation_repository: BrokerReconciliationRepository,
         order_gateway: PaperOrderGateway,
         broker_snapshot_source: BrokerSnapshotSource,
+        reverse_submit_guard: ReverseSubmitGuard | None = None,
         clock: Callable[[], datetime] = utc_now,
     ) -> None:
         self.policy = policy
@@ -466,6 +502,7 @@ class PaperOrderSubmitCoordinator:
         self.reconciliation_repository = reconciliation_repository
         self.order_gateway = order_gateway
         self.broker_snapshot_source = broker_snapshot_source
+        self.reverse_submit_guard = reverse_submit_guard
         self.clock = clock
 
     def _load_command(
@@ -720,12 +757,25 @@ class PaperOrderSubmitCoordinator:
             observed_at_utc=observed_at,
         )
         position, readiness, daily_risk = self._load_current_state()
+        reverse_handoff_ready = False
+        if command_state.command_kind == StrategyCommandKind.REVERSE:
+            if self.reverse_submit_guard is None:
+                raise PaperSubmitError(
+                    "REVERSE submission has no protective handoff guard"
+                )
+            self.reverse_submit_guard.require_ready(
+                command=command_state,
+                position=position,
+            )
+            reverse_handoff_ready = True
         _validate_current_state(
             position=position,
             readiness=readiness,
             daily_risk=daily_risk,
             policy=self.policy,
             observed_at_utc=observed_at,
+            command_kind=command_state.command_kind,
+            reverse_handoff_ready=reverse_handoff_ready,
         )
         if self.policy.active_contract is None or self.policy.order_route is None:
             raise PaperSubmitError(

@@ -581,6 +581,57 @@ class PaperReverseHandoffCoordinator:
         )
 
 
+class PersistedReverseSubmitGuard:
+    def __init__(
+        self,
+        *,
+        protection_state_source: ProtectionStateSource,
+        liquidation_state_source: LiquidationStateSource,
+    ) -> None:
+        self.protection_state_source = protection_state_source
+        self.liquidation_state_source = liquidation_state_source
+
+    def require_ready(
+        self,
+        *,
+        command: ExecutionCommandStateV1,
+        position: StrategyPositionV1,
+    ) -> None:
+        if position.position_episode_id is None:
+            raise PaperReverseHandoffError(
+                "REVERSE position has no position_episode_id"
+            )
+        episode = self.protection_state_source.read_episode(
+            position.position_episode_id
+        )
+        protection = self.protection_state_source.read_protection_by_episode(
+            position.position_episode_id
+        )
+        if episode is None or protection is None:
+            raise PaperReverseHandoffError(
+                "REVERSE source episode/protection state is missing"
+            )
+        if self.liquidation_state_source.read_snapshot_by_episode(
+            position.position_episode_id
+        ) is not None:
+            raise PaperReverseHandoffError(
+                "REVERSE is forbidden because liquidation already owns the episode"
+            )
+        try:
+            from ibmd.execution.domain.reverse_handoff import (
+                require_reverse_ready_for_submit,
+            )
+
+            require_reverse_ready_for_submit(
+                command=command,
+                position=position,
+                episode=episode,
+                protection=protection,
+            )
+        except ReverseHandoffError as exc:
+            raise PaperReverseHandoffError(str(exc)) from exc
+
+
 def paper_reverse_handoff_payload(
     run: PaperReverseHandoffRunV1,
 ) -> dict:
