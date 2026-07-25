@@ -9,9 +9,11 @@ from ibmd.execution.domain.protection import apply_protective_observation
 from ibmd.execution.domain.protective_submission import (
     ProtectiveOrderReconciliationResult,
     mark_protective_order_submitting,
+    reconcile_protective_order_snapshot,
+)
+from ibmd.execution.domain.protective_uncertainty import (
     mark_protective_order_unknown,
     readiness_for_protection,
-    reconcile_protective_order_snapshot,
 )
 from ibmd.foundation.time import format_utc, parse_utc, utc_now
 from ibmd.ib_gateway.paper_orders import (
