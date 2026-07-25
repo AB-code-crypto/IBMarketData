@@ -9,6 +9,7 @@ from .paper_orders import (
     BrokerOrderSubmitError,
     PaperMarketOrderRequest,
     PaperOrderSubmissionReceipt,
+    PaperProtectiveOrderRequest,
 )
 
 
@@ -18,7 +19,11 @@ class ScriptedPaperOrderGateway:
         *,
         broker_order_id: int,
         submit_error: Exception | None = None,
-        before_submit: Callable[[PaperMarketOrderRequest], None] | None = None,
+        before_submit: Callable[
+            [PaperMarketOrderRequest | PaperProtectiveOrderRequest],
+            None,
+        ]
+        | None = None,
         clock: Callable[[], datetime] = utc_now,
     ) -> None:
         self.broker_order_id = int(broker_order_id)
@@ -29,6 +34,7 @@ class ScriptedPaperOrderGateway:
         self.clock = clock
         self.allocated_accounts: list[str] = []
         self.requests: list[PaperMarketOrderRequest] = []
+        self.protective_requests: list[PaperProtectiveOrderRequest] = []
         self.closed = False
 
     async def allocate_order_id(self, *, account_id: str) -> int:
@@ -38,11 +44,10 @@ class ScriptedPaperOrderGateway:
         self.allocated_accounts.append(account)
         return self.broker_order_id
 
-    async def submit_market_order(
+    def _receipt(
         self,
-        request: PaperMarketOrderRequest,
+        request: PaperMarketOrderRequest | PaperProtectiveOrderRequest,
     ) -> PaperOrderSubmissionReceipt:
-        self.requests.append(request)
         if self.before_submit is not None:
             self.before_submit(request)
         if self.submit_error is not None:
@@ -52,6 +57,20 @@ class ScriptedPaperOrderGateway:
             order_ref=request.order_ref,
             submitted_at_utc=format_utc(self.clock()),
         )
+
+    async def submit_market_order(
+        self,
+        request: PaperMarketOrderRequest,
+    ) -> PaperOrderSubmissionReceipt:
+        self.requests.append(request)
+        return self._receipt(request)
+
+    async def submit_protective_order(
+        self,
+        request: PaperProtectiveOrderRequest,
+    ) -> PaperOrderSubmissionReceipt:
+        self.protective_requests.append(request)
+        return self._receipt(request)
 
     async def close(self) -> None:
         self.closed = True
