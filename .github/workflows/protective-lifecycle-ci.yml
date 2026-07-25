@@ -1,0 +1,97 @@
+name: Protective lifecycle CI
+
+on:
+  pull_request:
+    branches:
+      - master
+      - agent/architecture-rewrite
+  push:
+    branches:
+      - agent/protective-fill-oca-lifecycle
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-protective-lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      IB_HOST: 127.0.0.1
+      IB_PORT: "7497"
+      IB_CLIENT_ID: "200"
+      IB_ACCOUNT_ID: DU000000
+      IBMD_ENVIRONMENT: paper
+      IBMD_DEPLOYMENT_ID: protective-lifecycle-ci
+      IBMD_DATA_ROOT: /tmp/ibmd-protective-lifecycle-ci
+      IBMD_APPLICATION_VERSION: ci
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install ruff
+
+      - name: Verify architecture boundaries
+        run: python scripts/verify_target_architecture.py .
+
+      - name: Run protective lifecycle tests
+        run: |
+          python -m unittest \
+            tester.target_execution_protective_lifecycle_tester \
+            tester.target_execution_protective_submit_tester \
+            tester.target_execution_protection_tester \
+            tester.target_ib_broker_reconciliation_store_tester \
+            -v
+
+      - name: Validate fresh target schemas and entrypoint
+        run: |
+          rm -rf "$IBMD_DATA_ROOT"
+          python scripts/run_target_migrations.py \
+            --manifest migrations/execution.v1.json \
+            --database "$IBMD_DATA_ROOT/execution/execution.sqlite3" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --apply
+          python scripts/run_execution_protective_lifecycle_schema.py \
+            --database "$IBMD_DATA_ROOT/execution/execution.sqlite3" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --apply
+          python scripts/run_target_migrations.py \
+            --manifest migrations/position_feed.v1.json \
+            --database "$IBMD_DATA_ROOT/position_feed/broker_positions.sqlite3" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --apply
+          python apps/run_execution_protective_lifecycle_v2.py \
+            --validate-store-only
+          python apps/run_execution_protective_lifecycle_v2.py --help >/dev/null
+
+      - name: Compile and lint lifecycle files
+        run: |
+          python -m compileall -q \
+            apps/run_execution_protective_lifecycle_v2.py \
+            scripts/run_execution_protective_lifecycle_schema.py \
+            src/ibmd/execution/domain/protective_lifecycle.py \
+            src/ibmd/execution/application/protective_lifecycle.py \
+            src/ibmd/execution/adapters/sqlite_protective_lifecycle.py \
+            tester/target_execution_protective_lifecycle_tester.py
+          ruff check \
+            --select E4,E7,E9,F \
+            --ignore E402 \
+            apps/run_execution_protective_lifecycle_v2.py \
+            scripts/run_execution_protective_lifecycle_schema.py \
+            src/ibmd/execution/domain/protective_lifecycle.py \
+            src/ibmd/execution/application/protective_lifecycle.py \
+            src/ibmd/execution/adapters/sqlite_protective_lifecycle.py \
+            tester/target_execution_protective_lifecycle_tester.py
