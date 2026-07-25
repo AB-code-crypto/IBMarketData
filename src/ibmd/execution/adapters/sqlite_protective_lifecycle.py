@@ -20,7 +20,6 @@ from ibmd.public_contracts.execution import (
 from ibmd.public_contracts.protection import (
     PositionEpisodeV1,
     ProtectionStateV1,
-    ProtectiveOrderKind,
     ProtectiveOrderV1,
 )
 
@@ -46,15 +45,21 @@ _REQUIRED_OBJECTS = {
 }
 
 
+class ProtectiveLifecycleStoreError(ProtectionStoreError):
+    pass
+
+
 def _json_object(payload: str, *, context: str) -> dict:
     try:
         value = json.loads(payload)
     except json.JSONDecodeError as exc:
-        raise ProtectionStoreError(
+        raise ProtectiveLifecycleStoreError(
             f"stored {context} JSON is invalid: {exc}"
         ) from exc
     if not isinstance(value, dict):
-        raise ProtectionStoreError(f"stored {context} payload must be an object")
+        raise ProtectiveLifecycleStoreError(
+            f"stored {context} payload must be an object"
+        )
     return value
 
 
@@ -75,7 +80,31 @@ def _stable_id(kind: str, payload: str) -> str:
     return f"{kind}_{digest}"
 
 
+def _fill_without_commission(fill: BrokerFillFactV1) -> BrokerFillFactV1:
+    return replace(fill, commission=None)
+
+
+def _fill_material(fill: BrokerFillFactV1) -> dict:
+    value = _fill_without_commission(fill).to_dict()
+    value.pop("observed_at_utc", None)
+    return value
+
+
+def _commission_material(commission: BrokerCommissionFactV1) -> dict:
+    value = commission.to_dict()
+    value.pop("reported_at_utc", None)
+    return value
+
+
 class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
+    def __init__(
+        self,
+        database_path: str | Path,
+        *,
+        busy_timeout_ms: int = 5_000,
+    ) -> None:
+        super().__init__(database_path, busy_timeout_ms=busy_timeout_ms)
+
     def validate_schema(self) -> None:
         super().validate_schema()
         connection = self._connect()
@@ -124,7 +153,7 @@ class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
                 """,
                 (str(position_episode_id),),
             ).fetchall()
-            values = []
+            values: list[BrokerFillFactV1] = []
             for row in rows:
                 fill = BrokerFillFactV1.from_dict(
                     _json_object(
@@ -132,13 +161,12 @@ class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
                         context="protective fill evidence",
                     )
                 )
-                commission_payload = row["commission_payload_json"]
-                if commission_payload is not None:
+                if row["commission_payload_json"] is not None:
                     fill = replace(
                         fill,
                         commission=BrokerCommissionFactV1.from_dict(
                             _json_object(
-                                str(commission_payload),
+                                str(row["commission_payload_json"]),
                                 context="protective commission evidence",
                             )
                         ),
@@ -168,7 +196,7 @@ class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
             connection.close()
 
     @staticmethod
-    def _next_sequence(
+    def _next_reconciliation_sequence(
         connection: sqlite3.Connection,
         *,
         protective_order_id: str,
@@ -182,7 +210,7 @@ class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
         return int(row[0])
 
     @classmethod
-    def _append_observation(
+    def _append_reconciliation_observation(
         cls,
         connection: sqlite3.Connection,
         *,
@@ -190,8 +218,8 @@ class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
         protection: ProtectionStateV1,
         evidence,
     ) -> None:
-        observation_payload = canonical_json_text(evidence.result.observation.to_dict())
-        identity_payload = canonical_json_text(
+        payload = canonical_json_text(evidence.result.observation.to_dict())
+        identity = canonical_json_text(
             {
                 "protective_order_id": order.protective_order_id,
                 "source_session_id": evidence.result.source_session_id,
@@ -199,22 +227,29 @@ class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
                 "observation": evidence.result.observation.to_dict(),
             }
         )
-        observation_id = _stable_id(
-            "protective_observation",
-            identity_payload,
-        )
+        observation_id = _stable_id("protective_observation", identity)
         existing = connection.execute(
-            "SELECT payload_json FROM internal_protective_reconciliation_observations "
+            "SELECT protective_order_id, protection_set_id, "
+            "position_episode_id, payload_json "
+            "FROM internal_protective_reconciliation_observations "
             "WHERE observation_id=? LIMIT 1",
             (observation_id,),
         ).fetchone()
         if existing is not None:
-            if str(existing["payload_json"]) != observation_payload:
-                raise ProtectionStoreError(
+            if (
+                str(existing["protective_order_id"])
+                != order.protective_order_id
+                or str(existing["protection_set_id"])
+                != protection.protection_set_id
+                or str(existing["position_episode_id"])
+                != protection.position_episode_id
+                or str(existing["payload_json"]) != payload
+            ):
+                raise ProtectiveLifecycleStoreError(
                     "protective reconciliation observation identity conflicted"
                 )
             return
-        sequence = cls._next_sequence(
+        sequence = cls._next_reconciliation_sequence(
             connection,
             protective_order_id=order.protective_order_id,
         )
@@ -241,7 +276,7 @@ class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
                 captured,
                 int(parse_utc(observed).timestamp()),
                 observed,
-                observation_payload,
+                payload,
             ),
         )
 
@@ -254,10 +289,10 @@ class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
         fill: BrokerFillFactV1,
     ) -> None:
         if fill.order_ref != order.order_ref:
-            raise ProtectionStoreError(
+            raise ProtectiveLifecycleStoreError(
                 "protective fill order_ref differs from protective order"
             )
-        base_fill = replace(fill, commission=None)
+        base_fill = _fill_without_commission(fill)
         fill_payload = canonical_json_text(base_fill.to_dict())
         existing = connection.execute(
             """
@@ -293,24 +328,33 @@ class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
                     fill_payload,
                 ),
             )
-        elif (
-            str(existing["protective_order_id"]) != order.protective_order_id
-            or str(existing["protection_set_id"])
-            != protection.protection_set_id
-            or str(existing["position_episode_id"])
-            != protection.position_episode_id
-            or str(existing["payload_json"]) != fill_payload
-        ):
-            raise ProtectionStoreError(
-                f"conflicting protective fill evidence for execId={fill.exec_id}"
+        else:
+            stored_fill = BrokerFillFactV1.from_dict(
+                _json_object(
+                    str(existing["payload_json"]),
+                    context="protective fill evidence",
+                )
             )
+            if (
+                str(existing["protective_order_id"])
+                != order.protective_order_id
+                or str(existing["protection_set_id"])
+                != protection.protection_set_id
+                or str(existing["position_episode_id"])
+                != protection.position_episode_id
+                or _fill_material(stored_fill) != _fill_material(fill)
+            ):
+                raise ProtectiveLifecycleStoreError(
+                    f"conflicting protective fill evidence for execId={fill.exec_id}"
+                )
 
         if fill.commission is None:
             return
         commission = fill.commission
         commission_payload = canonical_json_text(commission.to_dict())
         existing_commission = connection.execute(
-            "SELECT protective_order_id, payload_json "
+            "SELECT protective_order_id, protection_set_id, "
+            "position_episode_id, payload_json "
             "FROM internal_protective_commission_evidence "
             "WHERE exec_id=? LIMIT 1",
             (fill.exec_id,),
@@ -334,15 +378,27 @@ class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
                     commission_payload,
                 ),
             )
-        elif (
-            str(existing_commission["protective_order_id"])
-            != order.protective_order_id
-            or str(existing_commission["payload_json"]) != commission_payload
-        ):
-            raise ProtectionStoreError(
-                "conflicting protective commission evidence for "
-                f"execId={fill.exec_id}"
+        else:
+            stored_commission = BrokerCommissionFactV1.from_dict(
+                _json_object(
+                    str(existing_commission["payload_json"]),
+                    context="protective commission evidence",
+                )
             )
+            if (
+                str(existing_commission["protective_order_id"])
+                != order.protective_order_id
+                or str(existing_commission["protection_set_id"])
+                != protection.protection_set_id
+                or str(existing_commission["position_episode_id"])
+                != protection.position_episode_id
+                or _commission_material(stored_commission)
+                != _commission_material(commission)
+            ):
+                raise ProtectiveLifecycleStoreError(
+                    "conflicting protective commission evidence for "
+                    f"execId={fill.exec_id}"
+                )
 
     @staticmethod
     def _update_episode(
@@ -366,7 +422,7 @@ class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
             ),
         )
         if cursor.rowcount != 1:
-            raise ProtectionStoreError(
+            raise ProtectiveLifecycleStoreError(
                 f"position episode does not exist: {episode.position_episode_id}"
             )
 
@@ -378,7 +434,7 @@ class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
         current: ProtectionStateV1,
         updated: ProtectionStateV1,
     ) -> None:
-        connection.execute(
+        cursor = connection.execute(
             """
             UPDATE internal_protection_sets
             SET status=?, updated_at_ts=?, updated_at_utc=?,
@@ -397,18 +453,24 @@ class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
                 updated.protection_set_id,
             ),
         )
+        if cursor.rowcount != 1:
+            raise ProtectiveLifecycleStoreError(
+                f"protection state does not exist: {updated.protection_set_id}"
+            )
         previous_orders = {
             item.protective_order_id: item for item in current.orders
         }
+        if set(previous_orders) != {
+            item.protective_order_id for item in updated.orders
+        }:
+            raise ProtectiveLifecycleStoreError(
+                "protective order identities changed during lifecycle update"
+            )
         for order in updated.orders:
-            previous = previous_orders.get(order.protective_order_id)
-            if previous is None:
-                raise ProtectionStoreError(
-                    "protective order identity changed during lifecycle update"
-                )
-            if previous.to_dict() == order.to_dict():
+            previous = previous_orders[order.protective_order_id]
+            if previous == order:
                 continue
-            connection.execute(
+            order_cursor = connection.execute(
                 """
                 UPDATE internal_protective_orders
                 SET state=?, filled_qty=?, remaining_qty=?, broker_order_id=?,
@@ -437,6 +499,11 @@ class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
                     order.protective_order_id,
                 ),
             )
+            if order_cursor.rowcount != 1:
+                raise ProtectiveLifecycleStoreError(
+                    "protective order does not exist: "
+                    f"{order.protective_order_id}"
+                )
             if previous.state != order.state:
                 cls._append_order_transition(
                     connection,
@@ -500,7 +567,7 @@ class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
             ),
         )
         if position_cursor.rowcount != 1 or readiness_cursor.rowcount != 1:
-            raise ProtectionStoreError(
+            raise ProtectiveLifecycleStoreError(
                 "execution position/readiness does not exist for lifecycle scope"
             )
 
@@ -514,9 +581,12 @@ class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
         update: ProtectiveLifecycleUpdate,
     ) -> ProtectiveLifecycleUpdate:
         if update.episode.position_episode_id != current_episode.position_episode_id:
-            raise ProtectionStoreError("position episode identity changed")
+            raise ProtectiveLifecycleStoreError(
+                "position episode identity changed"
+            )
         if update.protection.protection_set_id != current_protection.protection_set_id:
-            raise ProtectionStoreError("protection set identity changed")
+            raise ProtectiveLifecycleStoreError("protection set identity changed")
+
         with self._writer_lock:
             connection = self._connect()
             try:
@@ -553,29 +623,32 @@ class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
                         current_readiness.instrument_id,
                     ),
                 ).fetchone()
-                if None in {
-                    episode_row,
-                    protection_row,
-                    position_row,
-                    readiness_row,
-                }:
-                    raise ProtectionStoreError(
+                if any(
+                    row is None
+                    for row in (
+                        episode_row,
+                        protection_row,
+                        position_row,
+                        readiness_row,
+                    )
+                ):
+                    raise ProtectiveLifecycleStoreError(
                         "protective lifecycle current state is incomplete"
                     )
                 if _episode(str(episode_row["payload_json"])) != current_episode:
-                    raise ProtectionStoreError(
+                    raise ProtectiveLifecycleStoreError(
                         "position episode changed concurrently"
                     )
                 if _protection(str(protection_row["payload_json"])) != current_protection:
-                    raise ProtectionStoreError(
+                    raise ProtectiveLifecycleStoreError(
                         "protection state changed concurrently"
                     )
                 if _position(str(position_row["payload_json"])) != current_position:
-                    raise ProtectionStoreError(
+                    raise ProtectiveLifecycleStoreError(
                         "strategy position changed concurrently"
                     )
                 if _readiness(str(readiness_row["payload_json"])) != current_readiness:
-                    raise ProtectionStoreError(
+                    raise ProtectiveLifecycleStoreError(
                         "execution readiness changed concurrently"
                     )
 
@@ -584,7 +657,7 @@ class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
                 }
                 for evidence in update.evidence:
                     order = orders_by_kind[evidence.kind]
-                    self._append_observation(
+                    self._append_reconciliation_observation(
                         connection,
                         order=order,
                         protection=update.protection,
@@ -621,7 +694,7 @@ class SQLiteProtectiveLifecycleStore(SQLiteProtectionStore):
                 connection.rollback()
                 if isinstance(exc, ProtectionStoreError):
                     raise
-                raise ProtectionStoreError(
+                raise ProtectiveLifecycleStoreError(
                     "cannot publish protective lifecycle: "
                     f"{type(exc).__name__}: {exc}"
                 ) from exc
