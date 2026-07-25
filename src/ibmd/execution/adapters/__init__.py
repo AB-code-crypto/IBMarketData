@@ -26,6 +26,7 @@ from .sqlite_protection import (
     SQLiteProtectionReader,
     SQLiteProtectionStore,
 )
+from .sqlite_protective_lifecycle import SQLiteProtectiveLifecycleStore
 from .sqlite_protective_submit import SQLiteProtectiveSubmitStore
 from .sqlite_state import (
     ExecutionStateReadError,
@@ -61,5 +62,6 @@ __all__ = [
     "SQLiteExecutionStore",
     "SQLiteProtectionReader",
     "SQLiteProtectionStore",
+    "SQLiteProtectiveLifecycleStore",
     "SQLiteProtectiveSubmitStore",
 ]
