@@ -1,0 +1,31 @@
+name: Temporary reverse handoff lint patch
+
+on:
+  push:
+    branches:
+      - agent/reverse-handoff
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/reverse-handoff
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply exact lint patch
+        run: python scripts/_patch_reverse_handoff_lint_temp.py
+      - name: Commit patched test
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add tester/target_execution_reverse_handoff_tester.py
+          git diff --cached --quiet || git commit -m "Remove unused reverse handoff test imports"
+          git push origin HEAD:agent/reverse-handoff
