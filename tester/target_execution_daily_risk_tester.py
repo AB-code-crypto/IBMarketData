@@ -46,9 +46,6 @@ from ibmd.public_contracts.execution import (
     ExecutionCommandStateV1,
     ExecutionReadinessStatus,
     ExecutionReadinessV1,
-    StrategyPositionSide,
-    StrategyPositionStatus,
-    StrategyPositionV1,
 )
 from tester.target_execution_protection_tester import (
     ACCOUNT,
@@ -56,7 +53,6 @@ from tester.target_execution_protection_tester import (
     INSTRUMENT,
     STRATEGY,
     T0,
-    T1,
     T2,
     T3,
     apply_schema,
