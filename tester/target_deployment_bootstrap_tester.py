@@ -72,7 +72,7 @@ class TargetDeploymentBootstrapperTest(unittest.TestCase):
             self.assertFalse(target.exists())
             self.assertFalse(plan["historical_price_import_included"])
             self.assertFalse(plan["legacy_database_compatibility_required"])
-            self.assertEqual(len(plan["artifact_hashes"]), 11)
+            self.assertEqual(len(plan["artifact_hashes"]), 14)
             self.assertEqual(
                 {item["store_name"] for item in plan["stores"]},
                 {

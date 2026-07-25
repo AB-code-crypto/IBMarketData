@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from ibmd.catalog import load_catalog_bundle
+from ibmd.catalog import CatalogError, load_catalog_bundle
 from ibmd.foundation.atomic_json import (
     atomic_write_json,
     canonical_json_text,
@@ -421,12 +421,20 @@ class TargetDeploymentBootstrapper:
             values[str(relative).replace("\\", "/")] = _sha256_file(path)
         return values
 
+    def _load_catalog_bundle(self, root: Path):
+        try:
+            return load_catalog_bundle(
+                root,
+                require_production_sessions=self.require_production_sessions,
+            )
+        except CatalogError as exc:
+            raise TargetBootstrapError(
+                f"target bootstrap catalog is invalid: {exc}"
+            ) from exc
+
     def plan(self) -> dict[str, Any]:
         catalog_root = self._source_path(self.manifest.catalog_root)
-        bundle = load_catalog_bundle(
-            catalog_root,
-            require_production_sessions=self.require_production_sessions,
-        )
+        bundle = self._load_catalog_bundle(catalog_root)
         artifact_hashes = self._artifact_hashes()
         return {
             "bootstrap_name": self.manifest.bootstrap_name,
@@ -620,11 +628,7 @@ class TargetDeploymentBootstrapper:
         source = self._source_path(self.manifest.catalog_root)
         target = staging_root / "catalog"
         shutil.copytree(source, target)
-        bundle = load_catalog_bundle(
-            target,
-            require_production_sessions=self.require_production_sessions,
-        )
-        return bundle.bundle_hash
+        return self._load_catalog_bundle(target).bundle_hash
 
     def apply(self) -> TargetBootstrapResultV1:
         if self.target_root.exists():
@@ -697,9 +701,8 @@ class TargetDeploymentBootstrapper:
             raise TargetBootstrapError(
                 "target bootstrap source artifact hashes differ from current application"
             )
-        catalog_hash = load_catalog_bundle(
-            self.target_root / "catalog",
-            require_production_sessions=self.require_production_sessions,
+        catalog_hash = self._load_catalog_bundle(
+            self.target_root / "catalog"
         ).bundle_hash
         if metadata.get("catalog_bundle_hash") != catalog_hash:
             raise TargetBootstrapError(
