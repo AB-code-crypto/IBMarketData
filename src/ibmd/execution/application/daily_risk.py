@@ -61,13 +61,14 @@ class OwnedFillSource(Protocol):
         instrument_id: str,
     ) -> tuple[DailyRiskOwnedFillV1, ...]: ...
 
-    def read_latest_liquidation_operation(
+    def read_liquidation_operation(
         self,
         *,
         account_id: str,
         strategy_id: str,
         deployment_id: str,
         instrument_id: str,
+        position_episode_id: str | None,
     ) -> LiquidationOperationV1 | None: ...
 
 
@@ -151,6 +152,11 @@ class DailyRiskService:
                 raise DailyRiskServiceError(
                     f"position episode does not exist: {episode_id}"
                 )
+        current_state = self.repository.read_latest_state(
+            account_id=self.policy.account_id,
+            strategy_id=self.policy.strategy_id,
+            deployment_id=self.policy.deployment_id,
+        )
         fills = self.owned_fill_source.read_owned_fills(
             account_id=self.policy.account_id,
             strategy_id=self.policy.strategy_id,
@@ -164,16 +170,22 @@ class DailyRiskService:
             if position.projection_status == StrategyPositionStatus.OPEN
             else None
         )
-        liquidation = self.owned_fill_source.read_latest_liquidation_operation(
-            account_id=self.policy.account_id,
-            strategy_id=self.policy.strategy_id,
-            deployment_id=self.policy.deployment_id,
-            instrument_id=self.policy.instrument_id,
+        needs_cleanup_state = (
+            current_state is not None
+            and current_state.status.value in {"TRIGGERED", "CLOSING"}
         )
-        current_state = self.repository.read_latest_state(
-            account_id=self.policy.account_id,
-            strategy_id=self.policy.strategy_id,
-            deployment_id=self.policy.deployment_id,
+        liquidation = (
+            self.owned_fill_source.read_liquidation_operation(
+                account_id=self.policy.account_id,
+                strategy_id=self.policy.strategy_id,
+                deployment_id=self.policy.deployment_id,
+                instrument_id=self.policy.instrument_id,
+                position_episode_id=(
+                    None if episode is None else episode.position_episode_id
+                ),
+            )
+            if episode is not None or needs_cleanup_state
+            else None
         )
         update = calculate_daily_risk(
             policy=self.policy,

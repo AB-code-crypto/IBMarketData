@@ -451,6 +451,13 @@ def calculate_daily_risk(
             raise DailyRiskDomainError(
                 "liquidation operation belongs to another daily-risk scope"
             )
+        if (
+            episode is not None
+            and liquidation.position_episode_id != episode.position_episode_id
+        ):
+            raise DailyRiskDomainError(
+                "liquidation operation belongs to another position episode"
+            )
     observed = format_utc(parse_utc(observed_at_utc))
     zone = ZoneInfo(policy.timezone_name)
     trading_day = parse_utc(observed).astimezone(zone).date().isoformat()

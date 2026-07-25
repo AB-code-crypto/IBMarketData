@@ -318,14 +318,25 @@ class SQLiteDailyRiskExecutionReader:
         finally:
             connection.close()
 
-    def read_latest_liquidation_operation(
+    def read_liquidation_operation(
         self,
         *,
         account_id: str,
         strategy_id: str,
         deployment_id: str,
         instrument_id: str,
+        position_episode_id: str | None,
     ) -> LiquidationOperationV1 | None:
+        episode_id = str(position_episode_id or "").strip()
+        episode_clause = " AND position_episode_id = ?" if episode_id else ""
+        parameters = [
+            str(account_id),
+            str(strategy_id),
+            str(deployment_id),
+            str(instrument_id),
+        ]
+        if episode_id:
+            parameters.append(episode_id)
         connection = self._connect()
         try:
             row = connection.execute(
@@ -336,15 +347,11 @@ class SQLiteDailyRiskExecutionReader:
                   AND strategy_id = ?
                   AND deployment_id = ?
                   AND instrument_id = ?
+                """ + episode_clause + """
                 ORDER BY updated_at_ts DESC, liquidation_operation_id DESC
                 LIMIT 1
                 """,
-                (
-                    str(account_id),
-                    str(strategy_id),
-                    str(deployment_id),
-                    str(instrument_id),
-                ),
+                tuple(parameters),
             ).fetchone()
             return (
                 None

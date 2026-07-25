@@ -329,7 +329,7 @@ class MemoryEvidenceSource:
     def read_owned_fills(self, **_scope):
         return self.fills
 
-    def read_latest_liquidation_operation(self, **_scope):
+    def read_liquidation_operation(self, **_scope):
         return self.liquidation
 
 
