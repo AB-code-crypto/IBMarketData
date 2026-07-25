@@ -21,7 +21,7 @@ from ibmd.public_contracts.execution import (
 )
 
 EXECUTION_STORE_NAME = "execution"
-EXECUTION_SCHEMA_VERSION = 2
+EXECUTION_SCHEMA_VERSION = 3
 
 _REQUIRED_OBJECTS = {
     ("table", "schema_migrations"),
@@ -53,7 +53,9 @@ def _json_object(payload: str, *, context: str) -> dict:
             f"stored {context} JSON is invalid: {exc}"
         ) from exc
     if not isinstance(value, dict):
-        raise ExecutionStoreError(f"stored {context} payload must be an object")
+        raise ExecutionStoreError(
+            f"stored {context} payload must be an object"
+        )
     return value
 
 
@@ -88,7 +90,9 @@ class SQLiteExecutionReader:
         uri = f"file:{self.database_path.resolve().as_posix()}?mode=ro"
         connection = sqlite3.connect(uri, uri=True)
         connection.row_factory = sqlite3.Row
-        connection.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
+        connection.execute(
+            f"PRAGMA busy_timeout = {self.busy_timeout_ms}"
+        )
         connection.execute("PRAGMA query_only = ON")
         return connection
 
@@ -115,7 +119,10 @@ class SQLiteExecutionReader:
         finally:
             connection.close()
 
-    def read_transition_states(self, command_id: str) -> tuple[str, ...]:
+    def read_transition_states(
+        self,
+        command_id: str,
+    ) -> tuple[str, ...]:
         connection = self._connect()
         try:
             rows = connection.execute(
@@ -153,7 +160,9 @@ class SQLiteExecutionStore:
         connection = sqlite3.connect(str(self.database_path))
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
+        connection.execute(
+            f"PRAGMA busy_timeout = {self.busy_timeout_ms}"
+        )
         return connection
 
     def validate_schema(self) -> None:
@@ -190,10 +199,13 @@ class SQLiteExecutionStore:
                     (EXECUTION_STORE_NAME,),
                 ).fetchall()
             ]
-            if versions != list(range(1, EXECUTION_SCHEMA_VERSION + 1)):
+            if versions != list(
+                range(1, EXECUTION_SCHEMA_VERSION + 1)
+            ):
                 raise ExecutionSchemaError(
                     "execution schema version mismatch: "
-                    f"expected=1..{EXECUTION_SCHEMA_VERSION}, actual={versions}"
+                    f"expected=1..{EXECUTION_SCHEMA_VERSION}, "
+                    f"actual={versions}"
                 )
         except sqlite3.Error as exc:
             raise ExecutionSchemaError(
@@ -326,7 +338,11 @@ class SQLiteExecutionStore:
     def publish_fixture(
         self,
         fixture: ExecutionFoundationFixtureV1,
-    ) -> tuple[ExecutionReadinessV1, StrategyPositionV1, DailyRiskStateV1]:
+    ) -> tuple[
+        ExecutionReadinessV1,
+        StrategyPositionV1,
+        DailyRiskStateV1,
+    ]:
         with self._writer_lock:
             connection = self._connect()
             try:
@@ -374,7 +390,9 @@ class SQLiteExecutionStore:
                     (state.command_id,),
                 ).fetchone()
                 if existing is not None:
-                    stored = _command_from_payload(str(existing["payload_json"]))
+                    stored = _command_from_payload(
+                        str(existing["payload_json"])
+                    )
                     if (
                         stored.to_dict() != state.to_dict()
                         or str(existing["fixture_hash"]) != fixture_hash
@@ -432,7 +450,9 @@ class SQLiteExecutionStore:
                         (
                             None
                             if state.terminal_at_utc is None
-                            else int(parse_utc(state.terminal_at_utc).timestamp())
+                            else int(
+                                parse_utc(state.terminal_at_utc).timestamp()
+                            )
                         ),
                         state.terminal_at_utc,
                         state.blocking_reason,
@@ -443,7 +463,12 @@ class SQLiteExecutionStore:
                 )
 
                 transitions = [
-                    (1, None, ExecutionCommandState.RECEIVED.value, None),
+                    (
+                        1,
+                        None,
+                        ExecutionCommandState.RECEIVED.value,
+                        None,
+                    ),
                     (
                         2,
                         ExecutionCommandState.RECEIVED.value,
@@ -466,13 +491,20 @@ class SQLiteExecutionStore:
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
-                            _stable_transition_id(state.command_id, sequence_no),
+                            _stable_transition_id(
+                                state.command_id,
+                                sequence_no,
+                            ),
                             state.command_id,
                             sequence_no,
                             from_state,
                             to_state,
                             reason,
-                            int(parse_utc(state.updated_at_utc).timestamp()),
+                            int(
+                                parse_utc(
+                                    state.updated_at_utc
+                                ).timestamp()
+                            ),
                             state.updated_at_utc,
                         ),
                     )
@@ -495,5 +527,8 @@ class SQLiteExecutionStore:
     ) -> ExecutionCommandStateV1 | None:
         return self.reader.read_command_state(command_id)
 
-    def read_transition_states(self, command_id: str) -> tuple[str, ...]:
+    def read_transition_states(
+        self,
+        command_id: str,
+    ) -> tuple[str, ...]:
         return self.reader.read_transition_states(command_id)
