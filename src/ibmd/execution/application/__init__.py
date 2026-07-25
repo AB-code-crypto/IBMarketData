@@ -16,6 +16,11 @@ from .protection import (
     ProtectionPlanningServiceError,
     protection_plan_payload,
 )
+from .protective_lifecycle import (
+    ProtectiveLifecycleService,
+    ProtectiveLifecycleServiceError,
+    protective_lifecycle_payload,
+)
 from .protective_submit import (
     PaperProtectiveSubmitCoordinator,
     PaperProtectiveSubmitError,
@@ -55,6 +60,8 @@ __all__ = [
     "PaperSubmitRun",
     "PositionEpisodeProtectionService",
     "ProtectionPlanningServiceError",
+    "ProtectiveLifecycleService",
+    "ProtectiveLifecycleServiceError",
     "ReadOnlyBrokerReconciliationService",
     "ReadOnlyBrokerSnapshotSource",
     "ReadOnlyReconciliationRun",
@@ -63,6 +70,7 @@ __all__ = [
     "paper_protective_submit_payload",
     "paper_submit_payload",
     "protection_plan_payload",
+    "protective_lifecycle_payload",
     "reconciliation_run_payload",
     "require_paper_protective_gate",
     "require_paper_submit_gate",
