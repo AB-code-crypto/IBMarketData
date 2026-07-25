@@ -419,10 +419,8 @@ async def run(arguments: argparse.Namespace) -> int:
         fill_source=fill_source,
         position_snapshot_source=position_source,
         execution_state_source=execution_state,
-        protection_repository=protection_reader,
+        protection_repository=lifecycle_store,
     )
-    # SQLiteProtectionReader is read-only; use the lifecycle store for plan writes.
-    open_finalizer.protection_repository = lifecycle_store
     reverse_finalizer = ReverseFinalizationService(
         policy=ReverseFinalizationPolicyV1(
             account_id=account_id,

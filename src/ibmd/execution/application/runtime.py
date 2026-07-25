@@ -380,10 +380,13 @@ class ExecutionRuntimeCoordinator:
             if results and results[-1].blocks_lower_priority
             else None
         )
+        finished_value = utc_now()
+        if finished_value < parse_utc(started):
+            finished_value = parse_utc(started)
         return ExecutionRuntimeTickV1(
             tick_id=self._tick_id(started),
             started_at_utc=started,
-            finished_at_utc=format_utc(utc_now()),
+            finished_at_utc=format_utc(finished_value),
             status=status,
             results=tuple(results),
             broker_mutation_count=mutation_count,

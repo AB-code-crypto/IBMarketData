@@ -14,7 +14,7 @@ from ibmd.execution.application.runtime import (
     ExecutionRuntimeTickStatus,
 )
 
-T0 = "2026-07-27T10:00:00Z"
+T0 = "2026-07-25T10:00:00Z"
 
 
 @dataclass
