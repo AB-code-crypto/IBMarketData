@@ -659,9 +659,6 @@ def _next_daily_risk_state(
         and current_state.cleanup_status != DailyRiskCleanupStatus.COMPLETE
     )
 
-    if same_day and prior_status == DailyRiskStatus.HALTED:
-        return current_state
-
     if sticky or carryover:
         if _flat_and_cleanup_safe(
             position=position,
