@@ -6,15 +6,17 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable
 
-from ib_async import Contract, IB, MarketOrder
+from ib_async import Contract, IB, LimitOrder, MarketOrder, StopOrder
 from ib_async.ib import StartupFetchNONE
 
 from ibmd.foundation.time import format_utc, utc_now
+from ibmd.public_contracts.protection import ProtectiveOrderType
 
 from .paper_orders import (
     BrokerOrderSubmitError,
     PaperMarketOrderRequest,
     PaperOrderSubmissionReceipt,
+    PaperProtectiveOrderRequest,
 )
 
 
@@ -66,7 +68,9 @@ def _multiplier_text(value: float) -> str:
     return str(int(number)) if number.is_integer() else format(number, "g")
 
 
-def build_paper_order_contract(request: PaperMarketOrderRequest) -> Contract:
+def build_paper_order_contract(
+    request: PaperMarketOrderRequest | PaperProtectiveOrderRequest,
+) -> Contract:
     route = request.route
     return Contract(
         secType=route.sec_type,
@@ -90,6 +94,35 @@ def build_paper_market_order(request: PaperMarketOrderRequest) -> Any:
         orderRef=request.order_ref,
         tif="DAY",
         transmit=True,
+    )
+
+
+def build_paper_protective_order(
+    request: PaperProtectiveOrderRequest,
+) -> Any:
+    kwargs: dict[str, Any] = {
+        "orderId": request.broker_order_id,
+        "account": request.account_id,
+        "orderRef": request.order_ref,
+        "tif": request.time_in_force,
+        "outsideRth": request.outside_rth,
+        "transmit": True,
+    }
+    if request.oca_group is not None:
+        kwargs["ocaGroup"] = request.oca_group
+        kwargs["ocaType"] = 1
+    if request.order_type == ProtectiveOrderType.STOP:
+        return StopOrder(
+            request.side.value,
+            request.quantity,
+            request.stop_price,
+            **kwargs,
+        )
+    return LimitOrder(
+        request.side.value,
+        request.quantity,
+        request.limit_price,
+        **kwargs,
     )
 
 
@@ -204,6 +237,60 @@ class IBAsyncPaperOrderGateway:
             self._allocated_order_ids.add(order_id)
             return order_id
 
+    def _require_allocated(self, order_id: int) -> None:
+        if order_id not in self._allocated_order_ids:
+            raise BrokerOrderSubmitError(
+                "broker order id was not allocated by this gateway session: "
+                f"{order_id}"
+            )
+
+    async def _place(
+        self,
+        *,
+        request: PaperMarketOrderRequest | PaperProtectiveOrderRequest,
+        order: Any,
+    ) -> tuple[Any, str]:
+        await self._ensure_connected()
+        self._require_allocated(request.broker_order_id)
+        contract = build_paper_order_contract(request)
+        self._allocated_order_ids.discard(request.broker_order_id)
+        submitted_at = format_utc(self._clock())
+        try:
+            trade = self._ib.placeOrder(contract, order)
+            await asyncio.sleep(0)
+        except Exception as exc:
+            if not self.connected:
+                self._disconnect_best_effort()
+            raise BrokerOrderSubmitError(
+                "IB placeOrder raised after the persisted SUBMITTING boundary: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        returned_order = getattr(trade, "order", None)
+        if returned_order is None:
+            raise BrokerOrderSubmitError(
+                "IB placeOrder returned no trade.order after possible submission"
+            )
+        returned_id = int(getattr(returned_order, "orderId", 0) or 0)
+        returned_ref = str(
+            getattr(returned_order, "orderRef", "") or ""
+        ).strip()
+        returned_account = str(
+            getattr(returned_order, "account", "") or ""
+        ).strip()
+        if (
+            returned_id != request.broker_order_id
+            or returned_ref != request.order_ref
+            or returned_account != request.account_id
+        ):
+            raise BrokerOrderSubmitError(
+                "IB placeOrder returned a conflicting order identity after possible "
+                "submission: "
+                f"expected=({request.broker_order_id}, {request.order_ref}, "
+                f"{request.account_id}), returned=({returned_id}, "
+                f"{returned_ref}, {returned_account})"
+            )
+        return returned_order, submitted_at
+
     async def submit_market_order(
         self,
         request: PaperMarketOrderRequest,
@@ -214,54 +301,80 @@ class IBAsyncPaperOrderGateway:
             )
         self._require_account(request.account_id)
         async with self._operation_lock:
-            await self._ensure_connected()
-            if request.broker_order_id not in self._allocated_order_ids:
-                raise BrokerOrderSubmitError(
-                    "broker order id was not allocated by this gateway session: "
-                    f"{request.broker_order_id}"
-                )
-            contract = build_paper_order_contract(request)
-            order = build_paper_market_order(request)
-            self._allocated_order_ids.discard(request.broker_order_id)
-            submitted_at = format_utc(self._clock())
-            try:
-                trade = self._ib.placeOrder(contract, order)
-                await asyncio.sleep(0)
-            except Exception as exc:
-                if not self.connected:
-                    self._disconnect_best_effort()
-                raise BrokerOrderSubmitError(
-                    "IB placeOrder raised after the persisted SUBMITTING boundary: "
-                    f"{type(exc).__name__}: {exc}"
-                ) from exc
+            returned_order, submitted_at = await self._place(
+                request=request,
+                order=build_paper_market_order(request),
+            )
+            return PaperOrderSubmissionReceipt(
+                broker_order_id=int(returned_order.orderId),
+                order_ref=str(returned_order.orderRef),
+                submitted_at_utc=submitted_at,
+            )
 
-            returned_order = getattr(trade, "order", None)
-            if returned_order is None:
+    async def submit_protective_order(
+        self,
+        request: PaperProtectiveOrderRequest,
+    ) -> PaperOrderSubmissionReceipt:
+        if not isinstance(request, PaperProtectiveOrderRequest):
+            raise BrokerOrderSubmitError(
+                "request must be PaperProtectiveOrderRequest"
+            )
+        self._require_account(request.account_id)
+        async with self._operation_lock:
+            returned_order, submitted_at = await self._place(
+                request=request,
+                order=build_paper_protective_order(request),
+            )
+            actual_type = str(
+                getattr(returned_order, "orderType", "") or ""
+            ).upper()
+            expected_type = (
+                "STP"
+                if request.order_type == ProtectiveOrderType.STOP
+                else "LMT"
+            )
+            if actual_type != expected_type:
                 raise BrokerOrderSubmitError(
-                    "IB placeOrder returned no trade.order after possible submission"
+                    "IB returned a conflicting protective order type after possible "
+                    f"submission: expected={expected_type}, actual={actual_type}"
                 )
-            returned_id = int(getattr(returned_order, "orderId", 0) or 0)
-            returned_ref = str(
-                getattr(returned_order, "orderRef", "") or ""
-            ).strip()
-            returned_account = str(
-                getattr(returned_order, "account", "") or ""
-            ).strip()
-            if (
-                returned_id != request.broker_order_id
-                or returned_ref != request.order_ref
-                or returned_account != request.account_id
+            if str(getattr(returned_order, "tif", "") or "").upper() != (
+                request.time_in_force
             ):
                 raise BrokerOrderSubmitError(
-                    "IB placeOrder returned a conflicting order identity after possible "
-                    "submission: "
-                    f"expected=({request.broker_order_id}, {request.order_ref}, "
-                    f"{request.account_id}), returned=({returned_id}, "
-                    f"{returned_ref}, {returned_account})"
+                    "IB returned a conflicting protective TIF after possible submission"
+                )
+            if bool(getattr(returned_order, "outsideRth", False)) != (
+                request.outside_rth
+            ):
+                raise BrokerOrderSubmitError(
+                    "IB returned conflicting outsideRth after possible submission"
+                )
+            returned_group = str(
+                getattr(returned_order, "ocaGroup", "") or ""
+            ).strip() or None
+            if returned_group != request.oca_group:
+                raise BrokerOrderSubmitError(
+                    "IB returned a conflicting OCA group after possible submission"
+                )
+            if request.order_type == ProtectiveOrderType.STOP:
+                actual_price = float(
+                    getattr(returned_order, "auxPrice", 0.0) or 0.0
+                )
+                expected_price = float(request.stop_price)
+            else:
+                actual_price = float(
+                    getattr(returned_order, "lmtPrice", 0.0) or 0.0
+                )
+                expected_price = float(request.limit_price)
+            if abs(actual_price - expected_price) > 1e-9:
+                raise BrokerOrderSubmitError(
+                    "IB returned a conflicting protective price after possible "
+                    f"submission: expected={expected_price}, actual={actual_price}"
                 )
             return PaperOrderSubmissionReceipt(
-                broker_order_id=returned_id,
-                order_ref=returned_ref,
+                broker_order_id=int(returned_order.orderId),
+                order_ref=str(returned_order.orderRef),
                 submitted_at_utc=submitted_at,
             )
 
