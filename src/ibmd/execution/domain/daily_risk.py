@@ -246,6 +246,8 @@ def _owned_fills_for_day(
 
 def _realized_pnl(
     fills: tuple[DailyRiskOwnedFillV1, ...],
+    *,
+    expected_currency: str,
 ) -> tuple[float | None, tuple[str, ...], str | None]:
     missing = []
     total = 0.0
@@ -255,6 +257,14 @@ def _realized_pnl(
         if commission is None:
             missing.append(fill.exec_id)
             continue
+        if commission.currency != expected_currency:
+            return (
+                None,
+                (),
+                "owned execution commission currency differs from daily-risk "
+                f"currency: exec_id={fill.exec_id}, expected={expected_currency}, "
+                f"actual={commission.currency}",
+            )
         if item.kind == DailyRiskFillKind.STRATEGIC_OPEN:
             total -= float(commission.commission)
             continue
@@ -467,7 +477,10 @@ def calculate_daily_risk(
         zone=zone,
         policy=policy,
     )
-    realized, missing_exec_ids, realized_error = _realized_pnl(daily_fills)
+    realized, missing_exec_ids, realized_error = _realized_pnl(
+        daily_fills,
+        expected_currency="USD",
+    )
     unrealized, unrealized_error = _unrealized_pnl(
         position=position,
         episode=episode,

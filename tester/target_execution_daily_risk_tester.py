@@ -249,6 +249,36 @@ class DailyRiskDomainTest(unittest.TestCase):
         )
         self.assertFalse(update.execution_readiness.command_intake_enabled)
 
+    def test_non_usd_commission_is_not_ready(self) -> None:
+        value = plan()
+        wrong_currency = BrokerCommissionFactV1(
+            exec_id="daily-risk-exec-1",
+            commission=1.25,
+            currency="EUR",
+            realized_pnl=0.0,
+            reported_at_utc=T4,
+        )
+        update = calculate_daily_risk(
+            policy=policy(),
+            owned_fills=(owned_fill(commission_fact=wrong_currency),),
+            position=value.strategy_position,
+            episode=value.episode,
+            market_mark=mark(28_610.0),
+            current_state=None,
+            current_readiness=ready_readiness(),
+            liquidation=None,
+            observed_at_utc=T5,
+        )
+        self.assertEqual(update.state.status, DailyRiskStatus.NOT_READY)
+        self.assertEqual(
+            update.calculation.reason_code,
+            "EXECUTION_EVIDENCE_INCOMPLETE",
+        )
+        self.assertIn(
+            "currency",
+            update.calculation.reason_detail,
+        )
+
     def test_trigger_is_sticky_even_when_mark_retraces(self) -> None:
         triggered = calculate_open(mark_price=28_900.0)
         self.assertEqual(triggered.state.status, DailyRiskStatus.TRIGGERED)
