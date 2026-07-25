@@ -31,7 +31,7 @@ from ibmd.execution.domain.liquidation_reconciliation import (
     LiquidationReconciliationResult,
     reconcile_liquidation_attempt_snapshot,
 )
-from ibmd.foundation.time import format_utc, parse_utc, utc_now
+from ibmd.foundation.time import format_utc, utc_now
 from ibmd.ib_gateway.paper_cancellations import (
     PaperOrderCancelReceipt,
     PaperOrderCancelRequest,
@@ -62,7 +62,6 @@ from ibmd.public_contracts.liquidation import (
 )
 from ibmd.public_contracts.positions import BrokerPositionSnapshotV1
 from ibmd.public_contracts.protection import (
-    PositionEpisodeStatus,
     PositionEpisodeV1,
     ProtectionStateV1,
     ProtectiveOrderKind,
@@ -319,12 +318,11 @@ class PaperLiquidationCoordinator:
                 "execution/liquidation state is incomplete"
             )
         if (
-            not readiness.broker_actions_enabled
-            or not readiness.reconciliation_complete
+            not readiness.reconciliation_complete
             or not readiness.clock_healthy
         ):
             raise PaperLiquidationError(
-                "liquidation requires broker actions, reconciliation and clock health"
+                "liquidation recovery requires reconciliation and clock health"
             )
         return episode, protection, position, readiness, liquidation
 
@@ -357,6 +355,15 @@ class PaperLiquidationCoordinator:
             operation=liquidation.operation,
             observed_at_utc=observed_at_utc,
         )
+
+    @staticmethod
+    def _require_broker_mutation(
+        readiness: ExecutionReadinessV1,
+    ) -> None:
+        if not readiness.broker_actions_enabled:
+            raise PaperLiquidationError(
+                "liquidation broker mutation requires broker_actions_enabled=true"
+            )
 
     async def _read_broker_snapshot(self) -> BrokerReconciliationSnapshotV1:
         return await self.broker_snapshot_source.read_snapshot(
@@ -453,6 +460,7 @@ class PaperLiquidationCoordinator:
         kind: ProtectiveOrderKind,
         proof: LiquidationBrokerPositionProof,
     ) -> PaperLiquidationRun:
+        self._require_broker_mutation(readiness)
         before = liquidation
         order = (
             protection.stop_order
@@ -695,6 +703,7 @@ class PaperLiquidationCoordinator:
         readiness: ExecutionReadinessV1,
         proof: LiquidationBrokerPositionProof,
     ) -> PaperLiquidationRun:
+        self._require_broker_mutation(readiness)
         before = liquidation
         working = liquidation
         working_readiness = readiness
@@ -868,6 +877,26 @@ class PaperLiquidationCoordinator:
                 submission_receipt=None,
                 submission_error=None,
                 mutation_performed=False,
+            )
+
+        unresolved_protection = any(
+            item.state
+            in {
+                ProtectiveOrderState.SUBMITTING,
+                ProtectiveOrderState.LIVE,
+                ProtectiveOrderState.CANCEL_REQUESTED,
+                ProtectiveOrderState.UNKNOWN_OUTCOME,
+            }
+            for item in protection.orders
+        )
+        if proof.state == "FLAT" and not unresolved_protection:
+            return self._complete_flat(
+                episode=episode,
+                protection=protection,
+                position=position,
+                readiness=readiness,
+                liquidation=liquidation,
+                proof=proof,
             )
 
         assessed = assess_next_action(
