@@ -1,0 +1,87 @@
+name: CME session calendar CI
+
+on:
+  pull_request:
+    branches:
+      - agent/architecture-rewrite
+      - master
+  push:
+    branches:
+      - agent/session-calendar-qualification
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-session-calendar:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install ruff
+
+      - name: Verify architecture boundaries
+        run: python scripts/verify_target_architecture.py .
+
+      - name: Run catalog and risk-gate tests
+        run: |
+          python -m unittest \
+            tester.target_catalog_tester \
+            tester.target_cme_session_calendar_tester \
+            tester.target_execution_new_risk_window_tester \
+            tester.target_execution_liquidation_trigger_tester \
+            -v
+
+      - name: Build and validate a bounded qualified calendar
+        run: |
+          rm -rf /tmp/ibmd-cme-calendar-ci
+          mkdir -p /tmp/ibmd-cme-calendar-ci/catalog
+          cp catalog/*.json /tmp/ibmd-cme-calendar-ci/catalog/
+          python scripts/build_cme_session_calendar.py \
+            --base-calendar catalog/sessions.v1.json \
+            --cme-export tester/fixtures/cme_trading_schedules_sample.json \
+            --output /tmp/ibmd-cme-calendar-ci/catalog/sessions.v1.json \
+            --session-id CME_EQUITY_INDEX \
+            --globex-group-code NQ \
+            --trading-schedule-id 42 \
+            --coverage-start-date 2026-07-06 \
+            --coverage-end-date 2026-07-08 \
+            --calendar-version sessions.cme.synthetic.ci.v1 \
+            --force
+          python scripts/validate_target_catalog.py \
+            /tmp/ibmd-cme-calendar-ci/catalog \
+            --require-production-sessions
+          python scripts/build_cme_session_calendar.py --help >/dev/null
+
+      - name: Compile and lint calendar files
+        run: |
+          python -m compileall -q \
+            scripts/build_cme_session_calendar.py \
+            src/ibmd/catalog/cme_schedules.py \
+            src/ibmd/catalog/sessions.py \
+            src/ibmd/catalog/resolver.py \
+            src/ibmd/execution/application/liquidation_triggers.py \
+            tester/target_cme_session_calendar_tester.py
+          ruff check \
+            --select E4,E7,E9,F \
+            --ignore E402 \
+            scripts/build_cme_session_calendar.py \
+            src/ibmd/catalog/cme_schedules.py \
+            src/ibmd/catalog/sessions.py \
+            src/ibmd/catalog/resolver.py \
+            src/ibmd/execution/application/liquidation_triggers.py \
+            tester/target_cme_session_calendar_tester.py
