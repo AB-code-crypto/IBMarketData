@@ -38,6 +38,13 @@ from .protection import (
     apply_protective_observation,
     create_position_episode_protection_plan,
 )
+from .protective_lifecycle import (
+    ProtectiveLifecycleError,
+    ProtectiveLifecyclePolicyV1,
+    ProtectiveLifecycleUpdate,
+    ProtectiveOrderLifecycleEvidence,
+    reconcile_protective_lifecycle,
+)
 from .protective_submission import (
     ProtectiveOrderReconciliationResult,
     ProtectiveSubmissionDomainError,
@@ -65,6 +72,10 @@ __all__ = [
     "PositionProjectionResult",
     "ProtectionPlanningError",
     "ProtectionPlanningPolicyV1",
+    "ProtectiveLifecycleError",
+    "ProtectiveLifecyclePolicyV1",
+    "ProtectiveLifecycleUpdate",
+    "ProtectiveOrderLifecycleEvidence",
     "ProtectiveOrderReconciliationResult",
     "ProtectiveSubmissionDomainError",
     "RegisteredFuturesContractV1",
@@ -84,6 +95,7 @@ __all__ = [
     "project_strategy_position",
     "readiness_for_protection",
     "reconcile_broker_attempt_snapshot",
+    "reconcile_protective_lifecycle",
     "reconcile_protective_order_snapshot",
     "require_operator_resolution",
 ]
