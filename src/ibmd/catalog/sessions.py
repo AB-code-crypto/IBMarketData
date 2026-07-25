@@ -230,6 +230,7 @@ class SessionDefinitionV1:
     weekly_days: tuple[WeeklySessionDayV1, ...]
     exceptions: tuple[SessionExceptionV1, ...]
     production_qualified: bool
+    exception_coverage_start_date: str | None
     exception_coverage_end_date: str | None
     qualification_note: str
 
@@ -239,6 +240,7 @@ class SessionDefinitionV1:
         "weekly_days",
         "exceptions",
         "production_qualified",
+        "exception_coverage_start_date",
         "exception_coverage_end_date",
         "qualification_note",
     }
@@ -267,11 +269,44 @@ class SessionDefinitionV1:
             raise CatalogError("duplicate session exception dates")
         if tuple(sorted(dates)) != tuple(dates):
             raise CatalogError("session exceptions must be ordered by local_date")
-        if self.exception_coverage_end_date is not None:
-            parse_date(
+        coverage_start = (
+            None
+            if self.exception_coverage_start_date is None
+            else parse_date(
+                self.exception_coverage_start_date,
+                field_name="exception_coverage_start_date",
+            )
+        )
+        coverage_end = (
+            None
+            if self.exception_coverage_end_date is None
+            else parse_date(
                 self.exception_coverage_end_date,
                 field_name="exception_coverage_end_date",
             )
+        )
+        if (coverage_start is None) != (coverage_end is None):
+            raise CatalogError(
+                "session qualification coverage requires both start and end dates"
+            )
+        if (
+            coverage_start is not None
+            and coverage_end is not None
+            and coverage_end < coverage_start
+        ):
+            raise CatalogError(
+                "session qualification coverage end precedes start"
+            )
+        object.__setattr__(
+            self,
+            "exception_coverage_start_date",
+            None if coverage_start is None else coverage_start.isoformat(),
+        )
+        object.__setattr__(
+            self,
+            "exception_coverage_end_date",
+            None if coverage_end is None else coverage_end.isoformat(),
+        )
         object.__setattr__(
             self,
             "production_qualified",
@@ -280,9 +315,9 @@ class SessionDefinitionV1:
                 field_name="production_qualified",
             ),
         )
-        if self.production_qualified and self.exception_coverage_end_date is None:
+        if self.production_qualified and coverage_start is None:
             raise CatalogError(
-                "production-qualified session requires exception_coverage_end_date"
+                "production-qualified session requires bounded exception coverage"
             )
         object.__setattr__(
             self,
@@ -292,6 +327,20 @@ class SessionDefinitionV1:
                 field_name="qualification_note",
             ),
         )
+
+    def is_production_qualified_for(self, local_date: object) -> bool:
+        if not self.production_qualified:
+            return False
+        observed = parse_date(local_date, field_name="local_date")
+        start = parse_date(
+            self.exception_coverage_start_date,
+            field_name="exception_coverage_start_date",
+        )
+        end = parse_date(
+            self.exception_coverage_end_date,
+            field_name="exception_coverage_end_date",
+        )
+        return start <= observed <= end
 
     @property
     def zone(self) -> ZoneInfo:
@@ -304,7 +353,8 @@ class SessionDefinitionV1:
         exceptions = value["exceptions"]
         if not isinstance(weekly, list) or not isinstance(exceptions, list):
             raise CatalogError("weekly_days and exceptions must be lists")
-        coverage = value["exception_coverage_end_date"]
+        coverage_start = value["exception_coverage_start_date"]
+        coverage_end = value["exception_coverage_end_date"]
         return cls(
             session_id=str(value["session_id"]),
             timezone=str(value["timezone"]),
@@ -315,8 +365,11 @@ class SessionDefinitionV1:
                 SessionExceptionV1.from_dict(item) for item in exceptions
             ),
             production_qualified=value["production_qualified"],
+            exception_coverage_start_date=(
+                None if coverage_start is None else str(coverage_start)
+            ),
             exception_coverage_end_date=(
-                None if coverage is None else str(coverage)
+                None if coverage_end is None else str(coverage_end)
             ),
             qualification_note=str(value["qualification_note"]),
         )
@@ -328,6 +381,9 @@ class SessionDefinitionV1:
             "weekly_days": [item.to_dict() for item in self.weekly_days],
             "exceptions": [item.to_dict() for item in self.exceptions],
             "production_qualified": self.production_qualified,
+            "exception_coverage_start_date": (
+                self.exception_coverage_start_date
+            ),
             "exception_coverage_end_date": self.exception_coverage_end_date,
             "qualification_note": self.qualification_note,
         }

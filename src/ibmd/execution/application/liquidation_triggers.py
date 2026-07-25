@@ -322,7 +322,10 @@ def _daily_flat_candidate(
         current += timedelta(days=1)
     if due_boundary is None:
         return None, None
-    if require_production_session and not session.production_qualified:
+    if (
+        require_production_session
+        and not session.is_production_qualified_for(due_local.date())
+    ):
         return (
             None,
             "daily_flat_session_not_production_qualified:"

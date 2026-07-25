@@ -129,6 +129,7 @@ def resolve_session(
     seconds = local.hour * 3600 + local.minute * 60 + local.second
     local_date = local.date().isoformat()
     local_time = local.time().replace(microsecond=0).isoformat()
+    production_qualified = session.is_production_qualified_for(local_date)
 
     exception = next(
         (item for item in session.exceptions if item.local_date == local_date),
@@ -150,7 +151,7 @@ def resolve_session(
             local_time=local_time,
             phase=phase,
             reason=f"exception:{exception.reason}",
-            production_qualified=session.production_qualified,
+            production_qualified=production_qualified,
         )
 
     day = session.weekly_days[local.weekday()]
@@ -167,13 +168,32 @@ def resolve_session(
         local_time=local_time,
         phase=phase,
         reason="weekly_template",
-        production_qualified=session.production_qualified,
+        production_qualified=production_qualified,
     )
 
 
-def require_production_qualified_session(session: SessionDefinitionV1) -> None:
-    if not session.production_qualified:
+def require_production_qualified_session(
+    session: SessionDefinitionV1,
+    *,
+    at_utc: datetime | str | None = None,
+) -> None:
+    if at_utc is None:
+        qualified = session.production_qualified
+        local_date = None
+    else:
+        observed = (
+            parse_utc(at_utc)
+            if isinstance(at_utc, str)
+            else ensure_utc(at_utc)
+        )
+        local_date = observed.astimezone(session.zone).date().isoformat()
+        qualified = session.is_production_qualified_for(local_date)
+    if not qualified:
         raise CatalogError(
-            "session calendar is not production-qualified: "
-            f"session={session.session_id}, note={session.qualification_note}"
+            "session calendar is not production-qualified for the requested "
+            "date: "
+            f"session={session.session_id}, local_date={local_date}, "
+            f"coverage={session.exception_coverage_start_date}.."
+            f"{session.exception_coverage_end_date}, "
+            f"note={session.qualification_note}"
         )

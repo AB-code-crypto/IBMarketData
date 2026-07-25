@@ -254,6 +254,7 @@ class SessionCalendarTest(unittest.TestCase):
 
     def test_parity_session_is_deliberately_not_live_qualified(self):
         self.assertFalse(self.session.production_qualified)
+        self.assertIsNone(self.session.exception_coverage_start_date)
         self.assertIsNone(self.session.exception_coverage_end_date)
         with self.assertRaisesRegex(CatalogError, "not production-qualified"):
             require_production_qualified_session(self.session)
