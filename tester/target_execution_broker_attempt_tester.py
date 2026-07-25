@@ -342,7 +342,7 @@ class BrokerAttemptReconciliationTest(unittest.TestCase):
 
 
 class BrokerAttemptPersistenceTest(unittest.TestCase):
-    def test_existing_v1_database_upgrades_to_v2(self) -> None:
+    def test_existing_v1_database_upgrades_to_v3(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             database = Path(temp) / "execution.sqlite3"
             store_name, migrations = load_migration_manifest(MANIFEST)
@@ -358,7 +358,7 @@ class BrokerAttemptPersistenceTest(unittest.TestCase):
                 migrations=migrations,
                 application_version="new",
             ).apply()
-            self.assertEqual(result.current_version, 2)
+            self.assertEqual(result.current_version, 3)
             SQLiteBrokerAttemptStore(database).validate_schema()
 
     def test_restart_adopts_live_order_by_same_order_ref(self) -> None:
