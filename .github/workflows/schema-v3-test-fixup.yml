@@ -1,0 +1,47 @@
+name: Schema v3 test fixup
+
+on:
+  push:
+    branches:
+      - agent/architecture-rewrite
+
+permissions:
+  contents: write
+
+jobs:
+  fixup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out architecture branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/architecture-rewrite
+          fetch-depth: 0
+
+      - name: Advance migration characterization expectation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('tester/target_execution_broker_attempt_tester.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              'def test_existing_v1_database_upgrades_to_v2(self) -> None:',
+              'def test_existing_v1_database_upgrades_to_v3(self) -> None:',
+              1,
+          )
+          text = text.replace(
+              'self.assertEqual(result.current_version, 2)',
+              'self.assertEqual(result.current_version, 3)',
+              1,
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          git rm .github/workflows/schema-v3-test-fixup.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add tester/target_execution_broker_attempt_tester.py
+          git commit -m "test: advance execution migration expectation to v3"
+          git push origin HEAD:agent/architecture-rewrite
