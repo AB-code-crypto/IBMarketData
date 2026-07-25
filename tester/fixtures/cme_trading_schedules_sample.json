@@ -1,0 +1,71 @@
+{
+  "tradingSchedules": [
+    {
+      "applicableGlobexGroupCodes": [
+        "NQ"
+      ],
+      "marketEventsByDate": [
+        {
+          "marketEvents": [
+            {
+              "marketEventTime": "05072026-22:00:00.000Z",
+              "marketEventType": "open"
+            }
+          ],
+          "tradingDate": "070626"
+        },
+        {
+          "marketEvents": [
+            {
+              "marketEventTime": "06072026-18:00:00.000Z",
+              "marketEventType": "paused"
+            },
+            {
+              "marketEventTime": "06072026-21:45:00.000Z",
+              "marketEventType": "preopen"
+            },
+            {
+              "marketEventTime": "06072026-22:00:00.000Z",
+              "marketEventType": "open"
+            }
+          ],
+          "tradingDate": "070626"
+        },
+        {
+          "marketEvents": [
+            {
+              "marketEventTime": "07072026-21:00:00.000Z",
+              "marketEventType": "paused"
+            },
+            {
+              "marketEventTime": "07072026-21:45:00.000Z",
+              "marketEventType": "pcp"
+            },
+            {
+              "marketEventTime": "07072026-22:00:00.000Z",
+              "marketEventType": "open"
+            }
+          ],
+          "tradingDate": "070726"
+        },
+        {
+          "marketEvents": [
+            {
+              "marketEventTime": "08072026-05:00:00.000Z",
+              "marketEventType": "closed"
+            },
+            {
+              "marketEventTime": "09072026-05:00:00.000Z",
+              "marketEventType": "closed"
+            }
+          ],
+          "tradingDate": "070826"
+        }
+      ],
+      "scheduleNames": [
+        "Synthetic Equity Index Futures"
+      ],
+      "tradingScheduleId": "42"
+    }
+  ]
+}
