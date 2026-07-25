@@ -15,7 +15,7 @@ from ibmd.public_contracts.broker_execution import (
     BrokerOrderOperationV1,
 )
 
-BROKER_ATTEMPT_SCHEMA_VERSION = 2
+BROKER_ATTEMPT_SCHEMA_VERSION = 3
 _REQUIRED_OBJECTS = {
     ("table", "schema_migrations"),
     ("table", "internal_broker_order_operations"),
