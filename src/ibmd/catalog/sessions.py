@@ -319,6 +319,19 @@ class SessionDefinitionV1:
             raise CatalogError(
                 "production-qualified session requires bounded exception coverage"
             )
+        if coverage_start is not None and coverage_end is not None:
+            outside = [
+                value
+                for value in dates
+                if not coverage_start
+                <= parse_date(value, field_name="exception.local_date")
+                <= coverage_end
+            ]
+            if outside:
+                raise CatalogError(
+                    "session exceptions fall outside qualification coverage: "
+                    f"{outside}"
+                )
         object.__setattr__(
             self,
             "qualification_note",

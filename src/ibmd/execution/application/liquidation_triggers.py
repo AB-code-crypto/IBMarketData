@@ -322,6 +322,7 @@ def _daily_flat_candidate(
         current += timedelta(days=1)
     if due_boundary is None:
         return None, None
+    due_local = due_boundary.astimezone(session.zone)
     if (
         require_production_session
         and not session.is_production_qualified_for(due_local.date())
@@ -331,7 +332,6 @@ def _daily_flat_candidate(
             "daily_flat_session_not_production_qualified:"
             f"{session.session_id}",
         )
-    due_local = due_boundary.astimezone(session.zone)
     return (
         LiquidationTriggerCandidateV1(
             reason=LiquidationReason.DAILY_FLAT,

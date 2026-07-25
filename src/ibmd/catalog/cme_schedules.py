@@ -124,7 +124,15 @@ def _text_values(value: object) -> tuple[str, ...]:
         )
     if isinstance(value, Mapping):
         candidates = []
-        for key in ("code", "name", "value", "groupCode", "scheduleName"):
+        for key in (
+            "code",
+            "name",
+            "value",
+            "groupCode",
+            "globexGroupCode",
+            "applicableGlobexGroupCode",
+            "scheduleName",
+        ):
             if key in value:
                 candidates.extend(_text_values(value[key]))
         return tuple(candidates)
@@ -181,16 +189,16 @@ def _phase(event_type: object) -> tuple[str, CmeMarketPhase]:
     )
     if normalized == "open":
         return "open", CmeMarketPhase.TRADING
-    if normalized in {"paused", "pause"}:
-        return "paused", CmeMarketPhase.MAINTENANCE
     if normalized in {
+        "paused",
+        "pause",
         "preopen",
         "preopenhalt",
         "pcp",
         "postclosepreopen",
-        "closed",
-        "close",
     }:
+        return normalized, CmeMarketPhase.MAINTENANCE
+    if normalized in {"closed", "close"}:
         return normalized, CmeMarketPhase.CLOSED
     raise CmeScheduleError(f"unsupported CME marketEventType: {event_type!r}")
 
@@ -336,6 +344,8 @@ def project_cme_schedule_day(
     ]
     for event in events:
         local_event = event.occurred_at_utc.astimezone(zone)
+        if event.phase == state:
+            continue
         if state == CmeMarketPhase.TRADING:
             _append_interval(
                 trading,
