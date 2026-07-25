@@ -396,6 +396,13 @@ def apply_component(database: Path, manifest_name: str) -> None:
     connection = sqlite3.connect(str(database))
     try:
         connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS execution_target_schema_components ("
+            "component_name TEXT PRIMARY KEY, "
+            "component_version INTEGER NOT NULL CHECK (component_version > 0), "
+            "checksum TEXT NOT NULL, applied_at_utc TEXT NOT NULL, "
+            "application_version TEXT NOT NULL)"
+        )
         for statement in manifest["statements"]:
             connection.execute(statement)
         connection.execute(
