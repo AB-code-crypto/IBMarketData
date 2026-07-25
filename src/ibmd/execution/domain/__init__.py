@@ -31,6 +31,13 @@ from .position_projection import (
     merge_position_projection_readiness,
     project_strategy_position,
 )
+from .protection import (
+    PositionEpisodeProtectionPlan,
+    ProtectionPlanningError,
+    ProtectionPlanningPolicyV1,
+    apply_protective_observation,
+    create_position_episode_protection_plan,
+)
 
 __all__ = [
     "BrokerAttemptDomainError",
@@ -42,14 +49,19 @@ __all__ = [
     "ExecutionFoundationFixtureV1",
     "ExecutionFoundationPolicyV1",
     "POSITION_PROJECTION_REASON_PREFIX",
+    "PositionEpisodeProtectionPlan",
     "PositionProjectionError",
     "PositionProjectionPolicyV1",
     "PositionProjectionResult",
+    "ProtectionPlanningError",
+    "ProtectionPlanningPolicyV1",
     "RegisteredFuturesContractV1",
     "admit_strategy_command",
     "apply_broker_observation",
+    "apply_protective_observation",
     "begin_reconciliation",
     "build_order_ref",
+    "create_position_episode_protection_plan",
     "mark_attempt_submitting",
     "mark_unknown_outcome",
     "merge_position_projection_readiness",
