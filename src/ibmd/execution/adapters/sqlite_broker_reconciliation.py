@@ -16,8 +16,7 @@ from ibmd.public_contracts.broker_reconciliation import (
     BrokerFillFactV1,
 )
 
-
-BROKER_RECONCILIATION_SCHEMA_VERSION = 2
+BROKER_RECONCILIATION_SCHEMA_VERSION = 3
 _REQUIRED_OBJECTS = {
     ("table", "schema_migrations"),
     ("table", "internal_broker_order_operations"),
@@ -116,7 +115,9 @@ class SQLiteBrokerReconciliationReader:
         uri = f"file:{self.database_path.resolve().as_posix()}?mode=ro"
         connection = sqlite3.connect(uri, uri=True)
         connection.row_factory = sqlite3.Row
-        connection.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
+        connection.execute(
+            f"PRAGMA busy_timeout = {self.busy_timeout_ms}"
+        )
         connection.execute("PRAGMA query_only = ON")
         return connection
 
@@ -136,7 +137,8 @@ class SQLiteBrokerReconciliationReader:
             missing = sorted(_REQUIRED_OBJECTS - objects)
             if missing:
                 raise BrokerReconciliationSchemaError(
-                    f"broker reconciliation schema objects are missing: {missing}"
+                    "broker reconciliation schema objects are missing: "
+                    f"{missing}"
                 )
             versions = [
                 int(row["version"])
@@ -185,7 +187,10 @@ class SQLiteBrokerReconciliationReader:
         finally:
             connection.close()
 
-    def read_fills(self, attempt_id: str) -> tuple[BrokerFillFactV1, ...]:
+    def read_fills(
+        self,
+        attempt_id: str,
+    ) -> tuple[BrokerFillFactV1, ...]:
         fills: dict[str, BrokerFillFactV1] = {}
         commissions: dict[str, BrokerCommissionFactV1] = {}
         expected_attempt = str(attempt_id)
@@ -222,8 +227,12 @@ class SQLiteBrokerReconciliationReader:
             else:
                 commission = BrokerCommissionFactV1.from_dict(payload)
                 commissions.add(commission.exec_id)
-        return tuple(sorted({
-            operation_id
-            for exec_id, operation_id in fills.items()
-            if exec_id not in commissions
-        }))
+        return tuple(
+            sorted(
+                {
+                    operation_id
+                    for exec_id, operation_id in fills.items()
+                    if exec_id not in commissions
+                }
+            )
+        )
