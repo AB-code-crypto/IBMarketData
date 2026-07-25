@@ -17,6 +17,7 @@ from .ib_async_paper_orders import (
     IBPaperOrderConnectionSettings,
     build_paper_market_order,
     build_paper_order_contract,
+    build_paper_protective_order,
 )
 from .market_data import (
     BrokerMarketDataReadError,
@@ -29,6 +30,7 @@ from .paper_orders import (
     PaperOrderGateway,
     PaperOrderRoute,
     PaperOrderSubmissionReceipt,
+    PaperProtectiveOrderRequest,
 )
 from .positions import (
     BrokerPositionReadError,
@@ -52,6 +54,7 @@ __all__ = [
     "PaperOrderGateway",
     "PaperOrderRoute",
     "PaperOrderSubmissionReceipt",
+    "PaperProtectiveOrderRequest",
     "RawBrokerPosition",
     "RealtimeQuoteSubscription",
     "ScriptedBrokerReconciliationReader",
@@ -60,4 +63,5 @@ __all__ = [
     "ScriptedPositionReader",
     "build_paper_market_order",
     "build_paper_order_contract",
+    "build_paper_protective_order",
 ]
