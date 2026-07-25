@@ -1,0 +1,104 @@
+name: Reverse finalization CI
+
+on:
+  pull_request:
+    branches:
+      - agent/architecture-rewrite
+      - master
+  push:
+    branches:
+      - agent/reverse-finalization
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-reverse-finalization:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    env:
+      IB_HOST: 127.0.0.1
+      IB_PORT: "7497"
+      IB_CLIENT_ID: "200"
+      IB_ACCOUNT_ID: DU000000
+      IBMD_ENVIRONMENT: paper
+      IBMD_DEPLOYMENT_ID: reverse-finalization-test
+      IBMD_DATA_ROOT: /tmp/ibmd-reverse-finalization-ci
+      IBMD_APPLICATION_VERSION: ci
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install ruff
+
+      - name: Verify architecture boundaries
+        run: python scripts/verify_target_architecture.py .
+
+      - name: Run reverse finalization and safety tests
+        run: |
+          python -m unittest \
+            tester.target_execution_reverse_finalization_tester \
+            tester.target_execution_reverse_handoff_tester \
+            tester.target_execution_paper_order_regression_tester \
+            tester.target_execution_protection_tester \
+            tester.target_execution_broker_attempt_tester \
+            -v
+
+      - name: Validate fresh target schemas and entrypoint
+        run: |
+          rm -rf "$IBMD_DATA_ROOT"
+          python scripts/run_target_migrations.py \
+            --manifest migrations/execution.v1.json \
+            --database "$IBMD_DATA_ROOT/execution/execution.sqlite3" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --apply
+          python scripts/run_execution_liquidation_schema.py \
+            --database "$IBMD_DATA_ROOT/execution/execution.sqlite3" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --apply
+          python scripts/run_execution_reverse_finalization_schema.py \
+            --database "$IBMD_DATA_ROOT/execution/execution.sqlite3" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --apply
+          python scripts/run_target_migrations.py \
+            --manifest migrations/position_feed.v1.json \
+            --database "$IBMD_DATA_ROOT/position_feed/broker_positions.sqlite3" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --apply
+          python apps/run_execution_reverse_finalization_v2.py \
+            --validate-store-only
+          python apps/run_execution_reverse_finalization_v2.py --help >/dev/null
+
+      - name: Compile and lint reverse finalization files
+        run: |
+          python -m compileall -q \
+            apps/run_execution_reverse_finalization_v2.py \
+            scripts/run_execution_reverse_finalization_schema.py \
+            src/ibmd/public_contracts/reverse.py \
+            src/ibmd/execution/domain/reverse_finalization.py \
+            src/ibmd/execution/application/reverse_finalization.py \
+            src/ibmd/execution/adapters/sqlite_reverse_finalization.py \
+            tester/target_execution_reverse_finalization_tester.py
+          ruff check \
+            --select E4,E7,E9,F \
+            --ignore E402 \
+            apps/run_execution_reverse_finalization_v2.py \
+            scripts/run_execution_reverse_finalization_schema.py \
+            src/ibmd/public_contracts/reverse.py \
+            src/ibmd/execution/domain/reverse_finalization.py \
+            src/ibmd/execution/application/reverse_finalization.py \
+            src/ibmd/execution/adapters/sqlite_reverse_finalization.py \
+            tester/target_execution_reverse_finalization_tester.py
