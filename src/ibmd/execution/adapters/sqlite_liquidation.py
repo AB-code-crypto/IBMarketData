@@ -12,7 +12,6 @@ from ibmd.execution.domain.liquidation import (
     LiquidationSnapshot,
 )
 from ibmd.foundation.atomic_json import canonical_json_text
-from ibmd.foundation.time import parse_utc
 from ibmd.public_contracts.broker_execution import BrokerOrderObservationV1
 from ibmd.public_contracts.broker_reconciliation import (
     BrokerCommissionFactV1,
@@ -35,7 +34,6 @@ from ibmd.public_contracts.protection import (
 from .sqlite_protection import (
     ProtectionStoreError,
     SQLiteProtectionStore,
-    _episode,
     _protection,
     _ts,
 )
@@ -96,18 +94,6 @@ def _attempt(payload: str) -> LiquidationAttemptV1:
 def _trigger(payload: str) -> LiquidationTriggerV1:
     return LiquidationTriggerV1.from_dict(
         _json_object(payload, context="liquidation trigger")
-    )
-
-
-def _readiness(payload: str) -> ExecutionReadinessV1:
-    return ExecutionReadinessV1.from_dict(
-        _json_object(payload, context="execution readiness")
-    )
-
-
-def _position(payload: str) -> StrategyPositionV1:
-    return StrategyPositionV1.from_dict(
-        _json_object(payload, context="strategy position")
     )
 
 
@@ -274,7 +260,6 @@ class SQLiteLiquidationStore(SQLiteProtectionStore):
             id_column="liquidation_operation_id",
             entity_id=operation.liquidation_operation_id,
         )
-        payload = canonical_json_text(operation.to_dict())
         connection.execute(
             """
             INSERT INTO internal_liquidation_operation_transitions (
@@ -299,7 +284,7 @@ class SQLiteLiquidationStore(SQLiteProtectionStore):
                 operation.blocking_reason,
                 _ts(operation.updated_at_utc),
                 operation.updated_at_utc,
-                payload,
+                canonical_json_text(operation.to_dict()),
             ),
         )
 
@@ -317,7 +302,6 @@ class SQLiteLiquidationStore(SQLiteProtectionStore):
             id_column="liquidation_attempt_id",
             entity_id=attempt.liquidation_attempt_id,
         )
-        payload = canonical_json_text(attempt.to_dict())
         connection.execute(
             """
             INSERT INTO internal_liquidation_attempt_transitions (
@@ -342,7 +326,7 @@ class SQLiteLiquidationStore(SQLiteProtectionStore):
                 attempt.failure_reason,
                 _ts(attempt.updated_at_utc),
                 attempt.updated_at_utc,
-                payload,
+                canonical_json_text(attempt.to_dict()),
             ),
         )
 
@@ -666,7 +650,12 @@ class SQLiteLiquidationStore(SQLiteProtectionStore):
                             "liquidation attempt changed concurrently"
                         )
 
-                if current.attempt is None and updated.attempt is not None:
+                if updated.attempt is None:
+                    if current.attempt is not None:
+                        raise LiquidationStoreError(
+                            "liquidation update cannot remove an attempt"
+                        )
+                elif current.attempt is None:
                     self._insert_attempt(connection, updated.attempt)
                     self._append_attempt_transition(
                         connection,
@@ -674,17 +663,32 @@ class SQLiteLiquidationStore(SQLiteProtectionStore):
                         from_state=None,
                     )
                 elif (
-                    stored_attempt is not None
-                    and updated.attempt is not None
-                    and stored_attempt.to_dict() != updated.attempt.to_dict()
+                    updated.attempt.liquidation_attempt_id
+                    == current.attempt.liquidation_attempt_id
                 ):
-                    self._update_attempt(connection, updated.attempt)
-                    if stored_attempt.state != updated.attempt.state:
-                        self._append_attempt_transition(
-                            connection,
-                            attempt=updated.attempt,
-                            from_state=stored_attempt.state.value,
+                    if stored_attempt is None:
+                        raise LiquidationStoreError(
+                            "stored liquidation attempt is missing"
                         )
+                    if stored_attempt.to_dict() != updated.attempt.to_dict():
+                        self._update_attempt(connection, updated.attempt)
+                        if stored_attempt.state != updated.attempt.state:
+                            self._append_attempt_transition(
+                                connection,
+                                attempt=updated.attempt,
+                                from_state=stored_attempt.state.value,
+                            )
+                else:
+                    if updated.attempt.attempt_no != current.attempt.attempt_no + 1:
+                        raise LiquidationStoreError(
+                            "replacement liquidation attempt number is not sequential"
+                        )
+                    self._insert_attempt(connection, updated.attempt)
+                    self._append_attempt_transition(
+                        connection,
+                        attempt=updated.attempt,
+                        from_state=None,
+                    )
 
                 if stored_operation.to_dict() != updated.operation.to_dict():
                     self._update_operation(connection, updated.operation)
