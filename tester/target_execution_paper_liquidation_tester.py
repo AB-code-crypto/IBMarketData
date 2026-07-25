@@ -26,10 +26,7 @@ from ibmd.public_contracts.broker_reconciliation import (
     BrokerOrderSource,
     BrokerReconciliationSnapshotV1,
 )
-from ibmd.public_contracts.execution import (
-    ExecutionReadinessStatus,
-    ExecutionReadinessV1,
-)
+from ibmd.public_contracts.execution import ExecutionReadinessStatus
 from ibmd.public_contracts.liquidation import (
     LiquidationAttemptState,
     LiquidationNextAction,
@@ -51,7 +48,6 @@ from tester.target_execution_protective_submit_tester import (
     DEPLOYMENT,
     INSTRUMENT,
     STRATEGY,
-    T1,
     T2,
     T3,
     blocked_readiness,
