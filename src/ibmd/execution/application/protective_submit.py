@@ -8,7 +8,6 @@ from typing import Callable, Protocol
 from ibmd.execution.domain.protection import apply_protective_observation
 from ibmd.execution.domain.protective_submission import (
     ProtectiveOrderReconciliationResult,
-    ProtectiveSubmissionDomainError,
     mark_protective_order_submitting,
     mark_protective_order_unknown,
     readiness_for_protection,
@@ -615,7 +614,6 @@ class PaperProtectiveSubmitCoordinator:
         readiness: ExecutionReadinessV1,
         kind: ProtectiveOrderKind,
     ) -> PaperProtectiveSubmitRun:
-        order = _order_by_kind(protection, kind)
         broker_order_id = await self.order_gateway.allocate_order_id(
             account_id=self.policy.account_id
         )
