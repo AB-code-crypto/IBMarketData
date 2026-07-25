@@ -1,11 +1,12 @@
 {
   "calendar_version": "sessions.parity.v1",
-  "content_hash": "4320a0f1b7b874c033eabff19bdf374906b462dc2bd4d93e188b31d3d9046437",
+  "content_hash": "2f107ca53888a2f7690b8f696b47d2f7a219abee651e3c3f9bd3ae273dbb3e04",
   "schema_name": "SessionCalendar",
   "schema_version": 1,
   "sessions": [
     {
       "exception_coverage_end_date": null,
+      "exception_coverage_start_date": null,
       "exceptions": [],
       "production_qualified": false,
       "qualification_note": "Parity baseline only; holiday and early-close exceptions are not populated.",
