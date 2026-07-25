@@ -42,9 +42,9 @@ from tester.target_execution_liquidation_tester import (
     live_protection,
 )
 from tester.target_execution_protective_lifecycle_tester import (
-    broker_snapshot,
-    completed_order,
-    open_order,
+    _broker_snapshot as broker_snapshot,
+    _completed_order as completed_order,
+    _open_order as open_order,
 )
 from tester.target_execution_protective_submit_tester import (
     ACCOUNT,
