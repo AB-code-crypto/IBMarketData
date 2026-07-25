@@ -1,0 +1,36 @@
+name: Temporary liquidation invariant patch
+
+on:
+  push:
+    branches:
+      - agent/liquidation-coordinator
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/liquidation-coordinator
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply exact invariant patch
+        run: python scripts/_patch_liquidation_invariants_temp.py
+      - name: Commit patched invariants
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            src/ibmd/public_contracts/protection.py \
+            src/ibmd/execution/domain/liquidation.py \
+            src/ibmd/execution/domain/liquidation_completion.py \
+            src/ibmd/execution/domain/liquidation_position.py \
+            src/ibmd/execution/application/liquidation.py
+          git diff --cached --quiet || git commit -m "Harden liquidation ownership and closure invariants"
+          git push origin HEAD:agent/liquidation-coordinator
