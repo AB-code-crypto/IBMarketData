@@ -16,6 +16,7 @@ from ibmd.catalog.cme_schedules import (
 )
 from ibmd.catalog.common import compute_content_hash
 from ibmd.catalog.resolver import require_production_qualified_session
+from ibmd.catalog.sessions import SessionCalendarV1
 from ibmd.foundation.atomic_json import atomic_write_json, read_json_object
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -279,8 +280,6 @@ class CmeSessionCalendarBuildTest(unittest.TestCase):
         raw["sessions"][0]["exceptions"].append(extra)
         raw["content_hash"] = compute_content_hash(raw)
         with self.assertRaisesRegex(CatalogError, "outside qualification"):
-            from ibmd.catalog.sessions import SessionCalendarV1
-
             SessionCalendarV1.from_dict(raw)
 
 

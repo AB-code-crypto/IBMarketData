@@ -68,6 +68,7 @@ def qualified_bundle(*, early_close: bool = False):
         session,
         exceptions=exceptions,
         production_qualified=True,
+        exception_coverage_start_date="2026-01-01",
         exception_coverage_end_date="2026-12-31",
         qualification_note="test-qualified calendar",
     )
