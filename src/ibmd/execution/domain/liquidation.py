@@ -350,25 +350,32 @@ def request_liquidation(
             raise LiquidationDomainError(
                 "existing liquidation operation belongs to another episode"
             )
-        trigger_created = all(
-            item.trigger_id != trigger.trigger_id for item in existing.triggers
+        existing_trigger = next(
+            (
+                item
+                for item in existing.triggers
+                if item.trigger_id == trigger.trigger_id
+            ),
+            None,
         )
-        triggers = (
-            existing.triggers + (trigger,)
-            if trigger_created
-            else existing.triggers
-        )
-        reasons = tuple(
-            sorted(
-                {*existing.operation.trigger_reasons, reason},
-                key=lambda item: item.value,
+        trigger_created = existing_trigger is None
+        if trigger_created:
+            triggers = existing.triggers + (trigger,)
+            reasons = tuple(
+                sorted(
+                    {*existing.operation.trigger_reasons, reason},
+                    key=lambda item: item.value,
+                )
             )
-        )
-        operation = replace(
-            existing.operation,
-            trigger_reasons=reasons,
-            updated_at_utc=observed,
-        )
+            operation = replace(
+                existing.operation,
+                trigger_reasons=reasons,
+                updated_at_utc=observed,
+            )
+        else:
+            trigger = existing_trigger
+            triggers = existing.triggers
+            operation = existing.operation
         snapshot = LiquidationSnapshot(
             operation=operation,
             attempt=existing.attempt,
