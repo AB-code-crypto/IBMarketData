@@ -20,6 +20,12 @@ from .sqlite_position_feed import (
     ExecutionPositionFeedError,
     SQLiteExecutionPositionFeedReader,
 )
+from .sqlite_protection import (
+    ProtectionSchemaError,
+    ProtectionStoreError,
+    SQLiteProtectionReader,
+    SQLiteProtectionStore,
+)
 from .sqlite_state import (
     ExecutionStateReadError,
     SQLiteExecutionStateReader,
@@ -41,6 +47,8 @@ __all__ = [
     "ExecutionSchemaError",
     "ExecutionStateReadError",
     "ExecutionStoreError",
+    "ProtectionSchemaError",
+    "ProtectionStoreError",
     "SQLiteBrokerAttemptReader",
     "SQLiteBrokerAttemptStore",
     "SQLiteBrokerReconciliationReader",
@@ -50,4 +58,6 @@ __all__ = [
     "SQLiteExecutionReader",
     "SQLiteExecutionStateReader",
     "SQLiteExecutionStore",
+    "SQLiteProtectionReader",
+    "SQLiteProtectionStore",
 ]
