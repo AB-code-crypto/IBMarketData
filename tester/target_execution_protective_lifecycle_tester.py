@@ -4,7 +4,6 @@ import json
 import sqlite3
 import tempfile
 import unittest
-from dataclasses import replace
 from pathlib import Path
 
 from ibmd.execution.adapters import (
@@ -24,6 +23,7 @@ from ibmd.execution.domain.protective_submission import (
     mark_protective_order_submitting,
 )
 from ibmd.execution.domain.protective_uncertainty import readiness_for_protection
+from ibmd.foundation.identity import new_id
 from ibmd.operations.migrations import SQLiteMigrationRunner, load_migration_manifest
 from ibmd.public_contracts.broker_execution import (
     BrokerObservationOutcome,
@@ -70,9 +70,10 @@ BASE_MANIFEST = ROOT / "migrations" / "execution.v1.json"
 LIFECYCLE_MANIFEST = (
     ROOT / "migrations" / "execution.protective_lifecycle.v1.json"
 )
+T4 = "2026-07-27T10:00:04Z"
 
 
-def observation(order, outcome, *, observed_at, status=None):
+def _observation(order, outcome, *, observed_at, status=None):
     return BrokerOrderObservationV1(
         order_ref=order.order_ref,
         outcome=outcome,
@@ -85,14 +86,21 @@ def observation(order, outcome, *, observed_at, status=None):
         broker_perm_id=9000 + order.planned_sequence,
         broker_status=status or outcome.value,
         requested_qty=order.quantity,
-        filled_qty=(order.quantity if outcome == BrokerObservationOutcome.FILLED else 0),
-        remaining_qty=(0 if outcome == BrokerObservationOutcome.FILLED else order.quantity),
+        filled_qty=(
+            order.quantity
+            if outcome == BrokerObservationOutcome.FILLED
+            else 0
+        ),
+        remaining_qty=(
+            0
+            if outcome == BrokerObservationOutcome.FILLED
+            else order.quantity
+        ),
         detail=None,
     )
 
 
-def live_protection():
-    episode, planned = episode_and_protection()
+def _live_protection(planned):
     stop_submitting = mark_protective_order_submitting(
         planned,
         kind=ProtectiveOrderKind.STOP_LOSS,
@@ -102,7 +110,7 @@ def live_protection():
     stop_live = apply_protective_observation(
         protection=stop_submitting,
         kind=ProtectiveOrderKind.STOP_LOSS,
-        observation=observation(
+        observation=_observation(
             stop_submitting.stop_order,
             BrokerObservationOutcome.LIVE,
             observed_at=T1,
@@ -119,7 +127,7 @@ def live_protection():
     protected = apply_protective_observation(
         protection=tp_submitting,
         kind=ProtectiveOrderKind.TAKE_PROFIT,
-        observation=observation(
+        observation=_observation(
             tp_submitting.take_profit_order,
             BrokerObservationOutcome.LIVE,
             observed_at=T2,
@@ -132,10 +140,10 @@ def live_protection():
         protection=protected,
         observed_at_utc=T2,
     )
-    return episode, protected, strategy_position(episode), readiness
+    return protected, readiness
 
 
-def completed_order(order, *, state, filled, remaining, captured_at):
+def _completed_order(order, *, state, filled, remaining, captured_at):
     return BrokerOrderFactV1(
         account_id=ACCOUNT,
         order_ref=order.order_ref,
@@ -161,7 +169,7 @@ def completed_order(order, *, state, filled, remaining, captured_at):
     )
 
 
-def open_order(order, *, captured_at):
+def _open_order(order, *, captured_at):
     return BrokerOrderFactV1(
         account_id=ACCOUNT,
         order_ref=order.order_ref,
@@ -187,7 +195,18 @@ def open_order(order, *, captured_at):
     )
 
 
-def protective_fill(order, *, exec_id, commission=None):
+def _protective_fill(
+    order,
+    *,
+    exec_id,
+    observed_at=T3,
+    commission=None,
+):
+    price = (
+        28_450.0
+        if order.kind == ProtectiveOrderKind.STOP_LOSS
+        else 28_675.0
+    )
     return BrokerFillFactV1(
         exec_id=exec_id,
         account_id=ACCOUNT,
@@ -199,21 +218,27 @@ def protective_fill(order, *, exec_id, commission=None):
         local_symbol=LOCAL_SYMBOL,
         side=order.side,
         shares=order.quantity,
-        price=28_450.0 if order.kind == ProtectiveOrderKind.STOP_LOSS else 28_675.0,
+        price=price,
         cumulative_qty=order.quantity,
-        average_price=28_450.0 if order.kind == ProtectiveOrderKind.STOP_LOSS else 28_675.0,
+        average_price=price,
         exchange="CME",
         executed_at_utc=T2,
-        observed_at_utc=T3,
+        observed_at_utc=observed_at,
         commission=commission,
     )
 
 
-def broker_snapshot(*, open_orders=(), completed_orders=(), fills=()):
+def _broker_snapshot(
+    *,
+    captured_at=T3,
+    open_orders=(),
+    completed_orders=(),
+    fills=(),
+):
     return BrokerReconciliationSnapshotV1(
-        source_session_id="ib_session_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        source_session_id=new_id("ib_session"),
         account_id=ACCOUNT,
-        captured_at_utc=T3,
+        captured_at_utc=captured_at,
         open_orders=tuple(open_orders),
         completed_orders=tuple(completed_orders),
         fills=tuple(fills),
@@ -221,18 +246,18 @@ def broker_snapshot(*, open_orders=(), completed_orders=(), fills=()):
     )
 
 
-def flat_snapshot():
+def _flat_snapshot(*, captured_at=T3):
     return BrokerPositionSnapshotV1.complete(
-        snapshot_id="position_snapshot_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        snapshot_id=new_id("position_snapshot"),
         account_id=ACCOUNT,
-        captured_at_utc=T3,
-        published_at_utc=T3,
-        source_session_id="ib_session_cccccccccccccccccccccccccccccccc",
+        captured_at_utc=captured_at,
+        published_at_utc=captured_at,
+        source_session_id=new_id("ib_session"),
         rows=(),
     )
 
 
-def lifecycle_policy():
+def _policy():
     return ProtectiveLifecyclePolicyV1(
         account_id=ACCOUNT,
         strategy_id=STRATEGY,
@@ -243,7 +268,7 @@ def lifecycle_policy():
     )
 
 
-def apply_schema(database: Path) -> None:
+def _apply_schema(database: Path) -> None:
     store_name, migrations = load_migration_manifest(BASE_MANIFEST)
     SQLiteMigrationRunner(
         database_path=database,
@@ -270,7 +295,8 @@ def apply_schema(database: Path) -> None:
         for statement in component["statements"]:
             connection.execute(statement)
         connection.execute(
-            "INSERT INTO execution_target_schema_components VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO execution_target_schema_components "
+            "VALUES (?, ?, ?, ?, ?)",
             (
                 component["component_name"],
                 component["component_version"],
@@ -284,38 +310,60 @@ def apply_schema(database: Path) -> None:
         connection.close()
 
 
-class ProtectiveLifecycleDomainTest(unittest.TestCase):
-    def test_stop_fill_and_terminal_oca_sibling_wait_for_flat(self) -> None:
-        episode, protection, position, readiness = live_protection()
-        stop = protection.stop_order
-        tp = protection.take_profit_order
-        update = reconcile_protective_lifecycle(
-            episode=episode,
-            protection=protection,
-            strategy_position=position,
-            execution_readiness=readiness,
-            broker_snapshot=broker_snapshot(
-                completed_orders=(
-                    completed_order(
-                        stop,
-                        state="Filled",
-                        filled=1,
-                        remaining=0,
-                        captured_at=T3,
-                    ),
-                    completed_order(
-                        tp,
-                        state="Cancelled",
-                        filled=0,
-                        remaining=1,
-                        captured_at=T3,
-                    ),
-                ),
-                fills=(protective_fill(stop, exec_id="stop-exec-1"),),
+def _terminal_snapshot(protection, *, captured_at=T3, commission=None):
+    stop = protection.stop_order
+    tp = protection.take_profit_order
+    return _broker_snapshot(
+        captured_at=captured_at,
+        completed_orders=(
+            _completed_order(
+                stop,
+                state="Filled",
+                filled=1,
+                remaining=0,
+                captured_at=captured_at,
             ),
-            position_snapshot=position_snapshot(),
-            policy=lifecycle_policy(),
-            observed_at_utc=T3,
+            _completed_order(
+                tp,
+                state="Cancelled",
+                filled=0,
+                remaining=1,
+                captured_at=captured_at,
+            ),
+        ),
+        fills=(
+            _protective_fill(
+                stop,
+                exec_id="stop-exec-1",
+                observed_at=captured_at,
+                commission=commission,
+            ),
+        ),
+    )
+
+
+class ProtectiveLifecycleDomainTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.episode, planned = episode_and_protection()
+        self.protection, self.readiness = _live_protection(planned)
+        self.position = strategy_position(self.episode)
+
+    def _reconcile(self, *, broker_snapshot, position_snapshot_value):
+        return reconcile_protective_lifecycle(
+            episode=self.episode,
+            protection=self.protection,
+            strategy_position=self.position,
+            execution_readiness=self.readiness,
+            broker_snapshot=broker_snapshot,
+            position_snapshot=position_snapshot_value,
+            policy=_policy(),
+            observed_at_utc=broker_snapshot.captured_at_utc,
+        )
+
+    def test_stop_fill_and_terminal_oca_sibling_wait_for_flat(self) -> None:
+        update = self._reconcile(
+            broker_snapshot=_terminal_snapshot(self.protection),
+            position_snapshot_value=position_snapshot(),
         )
         self.assertEqual(update.protection.status, ProtectionSetStatus.EXITED)
         self.assertFalse(update.episode_closed)
@@ -327,76 +375,77 @@ class ProtectiveLifecycleDomainTest(unittest.TestCase):
             update.execution_readiness.status,
             ExecutionReadinessStatus.BLOCKED,
         )
-        self.assertEqual(update.protection.stop_order.state, ProtectiveOrderState.FILLED)
-        self.assertEqual(update.protection.take_profit_order.state, ProtectiveOrderState.CANCELLED)
+        self.assertEqual(
+            update.protection.stop_order.state,
+            ProtectiveOrderState.FILLED,
+        )
+        self.assertEqual(
+            update.protection.take_profit_order.state,
+            ProtectiveOrderState.CANCELLED,
+        )
 
     def test_flat_position_closes_episode_after_oca_terminal(self) -> None:
-        episode, protection, position, readiness = live_protection()
-        stop = protection.stop_order
-        tp = protection.take_profit_order
-        first = reconcile_protective_lifecycle(
-            episode=episode,
-            protection=protection,
-            strategy_position=position,
-            execution_readiness=readiness,
-            broker_snapshot=broker_snapshot(
-                completed_orders=(
-                    completed_order(stop, state="Filled", filled=1, remaining=0, captured_at=T3),
-                    completed_order(tp, state="Cancelled", filled=0, remaining=1, captured_at=T3),
-                ),
-                fills=(protective_fill(stop, exec_id="stop-exec-1"),),
-            ),
-            position_snapshot=position_snapshot(),
-            policy=lifecycle_policy(),
-            observed_at_utc=T3,
+        first = self._reconcile(
+            broker_snapshot=_terminal_snapshot(self.protection),
+            position_snapshot_value=position_snapshot(),
         )
         second = reconcile_protective_lifecycle(
             episode=first.episode,
             protection=first.protection,
             strategy_position=first.strategy_position,
             execution_readiness=first.execution_readiness,
-            broker_snapshot=broker_snapshot(
-                completed_orders=(
-                    completed_order(first.protection.stop_order, state="Filled", filled=1, remaining=0, captured_at=T3),
-                    completed_order(first.protection.take_profit_order, state="Cancelled", filled=0, remaining=1, captured_at=T3),
-                ),
-                fills=(protective_fill(first.protection.stop_order, exec_id="stop-exec-1"),),
+            broker_snapshot=_terminal_snapshot(
+                first.protection,
+                captured_at=T4,
             ),
-            position_snapshot=flat_snapshot(),
-            policy=lifecycle_policy(),
-            observed_at_utc=T3,
+            position_snapshot=_flat_snapshot(captured_at=T4),
+            policy=_policy(),
+            observed_at_utc=T4,
         )
         self.assertTrue(second.episode_closed)
         self.assertEqual(second.episode.status, PositionEpisodeStatus.CLOSED)
         self.assertEqual(second.protection.status, ProtectionSetStatus.CLOSED)
-        self.assertEqual(second.strategy_position.projection_status, StrategyPositionStatus.FLAT)
-        self.assertEqual(second.execution_readiness.status, ExecutionReadinessStatus.READY)
+        self.assertEqual(
+            second.strategy_position.projection_status,
+            StrategyPositionStatus.FLAT,
+        )
+        self.assertEqual(
+            second.execution_readiness.status,
+            ExecutionReadinessStatus.READY,
+        )
         self.assertTrue(second.execution_readiness.command_intake_enabled)
 
     def test_live_oca_sibling_after_fill_requires_operator(self) -> None:
-        episode, protection, position, readiness = live_protection()
-        stop = protection.stop_order
-        tp = protection.take_profit_order
-        update = reconcile_protective_lifecycle(
-            episode=episode,
-            protection=protection,
-            strategy_position=position,
-            execution_readiness=readiness,
-            broker_snapshot=broker_snapshot(
-                open_orders=(open_order(tp, captured_at=T3),),
+        stop = self.protection.stop_order
+        tp = self.protection.take_profit_order
+        update = self._reconcile(
+            broker_snapshot=_broker_snapshot(
+                open_orders=(_open_order(tp, captured_at=T3),),
                 completed_orders=(
-                    completed_order(stop, state="Filled", filled=1, remaining=0, captured_at=T3),
+                    _completed_order(
+                        stop,
+                        state="Filled",
+                        filled=1,
+                        remaining=0,
+                        captured_at=T3,
+                    ),
                 ),
-                fills=(protective_fill(stop, exec_id="stop-exec-1"),),
+                fills=(
+                    _protective_fill(stop, exec_id="stop-exec-1"),
+                ),
             ),
-            position_snapshot=flat_snapshot(),
-            policy=lifecycle_policy(),
-            observed_at_utc=T3,
+            position_snapshot_value=_flat_snapshot(),
         )
-        self.assertEqual(update.protection.status, ProtectionSetStatus.OPERATOR_REQUIRED)
+        self.assertEqual(
+            update.protection.status,
+            ProtectionSetStatus.OPERATOR_REQUIRED,
+        )
         self.assertFalse(update.episode_closed)
         self.assertIn("oca_sibling", update.protection.blocking_reason)
-        self.assertEqual(update.strategy_position.projection_status, StrategyPositionStatus.UNKNOWN)
+        self.assertEqual(
+            update.strategy_position.projection_status,
+            StrategyPositionStatus.UNKNOWN,
+        )
 
     def test_manual_flat_before_submission_marks_orders_not_required(self) -> None:
         episode, protection = episode_and_protection()
@@ -405,9 +454,9 @@ class ProtectiveLifecycleDomainTest(unittest.TestCase):
             protection=protection,
             strategy_position=strategy_position(episode),
             execution_readiness=blocked_readiness(),
-            broker_snapshot=broker_snapshot(),
-            position_snapshot=flat_snapshot(),
-            policy=lifecycle_policy(),
+            broker_snapshot=_broker_snapshot(),
+            position_snapshot=_flat_snapshot(),
+            policy=_policy(),
             observed_at_utc=T3,
         )
         self.assertTrue(update.episode_closed)
@@ -424,7 +473,7 @@ class ProtectiveLifecyclePersistenceTest(unittest.TestCase):
     def test_fill_is_immutable_and_late_commission_is_appended(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             database = Path(temp) / "execution.sqlite3"
-            apply_schema(database)
+            _apply_schema(database)
             episode, planned = episode_and_protection()
             position = strategy_position(episode)
             initial_readiness = blocked_readiness()
@@ -436,56 +485,21 @@ class ProtectiveLifecyclePersistenceTest(unittest.TestCase):
                     protection=planned,
                 )
             )
-            live_episode, live, _, ready = live_protection()
-            live_episode = replace(
-                live_episode,
-                position_episode_id=episode.position_episode_id,
-                source_command_id=episode.source_command_id,
-                source_operation_id=episode.source_operation_id,
-                source_attempt_id=episode.source_attempt_id,
-            )
-            live = replace(
-                live,
-                protection_set_id=planned.protection_set_id,
-                position_episode_id=episode.position_episode_id,
-                orders=tuple(
-                    replace(
-                        item,
-                        protection_set_id=planned.protection_set_id,
-                        position_episode_id=episode.position_episode_id,
-                        protective_order_id=planned.orders[index].protective_order_id,
-                        order_ref=planned.orders[index].order_ref,
-                        oca_group=planned.orders[index].oca_group,
-                    )
-                    for index, item in enumerate(live.orders)
-                ),
-            )
-            ready = replace(
-                ready,
-                deployment_id=episode.deployment_id,
-            )
+            live, ready = _live_protection(planned)
             SQLiteProtectiveSubmitStore(database).publish_state_and_readiness(
                 current=planned,
                 updated=live,
                 readiness=ready,
             )
-            stop = live.stop_order
-            tp = live.take_profit_order
-            snapshot_without_commission = broker_snapshot(
-                completed_orders=(
-                    completed_order(stop, state="Filled", filled=1, remaining=0, captured_at=T3),
-                    completed_order(tp, state="Cancelled", filled=0, remaining=1, captured_at=T3),
-                ),
-                fills=(protective_fill(stop, exec_id="stop-exec-1"),),
-            )
+
             first = reconcile_protective_lifecycle(
                 episode=episode,
                 protection=live,
                 strategy_position=position,
                 execution_readiness=ready,
-                broker_snapshot=snapshot_without_commission,
+                broker_snapshot=_terminal_snapshot(live),
                 position_snapshot=position_snapshot(),
-                policy=lifecycle_policy(),
+                policy=_policy(),
                 observed_at_utc=T3,
             )
             store = SQLiteProtectiveLifecycleStore(database)
@@ -497,32 +511,36 @@ class ProtectiveLifecyclePersistenceTest(unittest.TestCase):
                 current_readiness=ready,
                 update=first,
             )
-            self.assertEqual(store.read_commission_pending_exec_ids(episode.position_episode_id), ("stop-exec-1",))
-            stored_fill = store.read_fills(episode.position_episode_id)[0]
-            self.assertIsNone(stored_fill.commission)
+            self.assertEqual(
+                store.read_commission_pending_exec_ids(
+                    episode.position_episode_id
+                ),
+                ("stop-exec-1",),
+            )
+            self.assertIsNone(
+                store.read_fills(episode.position_episode_id)[0].commission
+            )
 
             commission = BrokerCommissionFactV1(
                 exec_id="stop-exec-1",
                 commission=0.62,
                 currency="USD",
                 realized_pnl=-300.0,
-                reported_at_utc=T3,
+                reported_at_utc=T4,
             )
             second = reconcile_protective_lifecycle(
                 episode=first.episode,
                 protection=first.protection,
                 strategy_position=first.strategy_position,
                 execution_readiness=first.execution_readiness,
-                broker_snapshot=broker_snapshot(
-                    completed_orders=(
-                        completed_order(first.protection.stop_order, state="Filled", filled=1, remaining=0, captured_at=T3),
-                        completed_order(first.protection.take_profit_order, state="Cancelled", filled=0, remaining=1, captured_at=T3),
-                    ),
-                    fills=(protective_fill(first.protection.stop_order, exec_id="stop-exec-1", commission=commission),),
+                broker_snapshot=_terminal_snapshot(
+                    first.protection,
+                    captured_at=T4,
+                    commission=commission,
                 ),
                 position_snapshot=position_snapshot(),
-                policy=lifecycle_policy(),
-                observed_at_utc=T3,
+                policy=_policy(),
+                observed_at_utc=T4,
             )
             store.publish_lifecycle(
                 current_episode=first.episode,
@@ -536,7 +554,12 @@ class ProtectiveLifecyclePersistenceTest(unittest.TestCase):
             self.assertEqual(values[0].exec_id, "stop-exec-1")
             self.assertIsNotNone(values[0].commission)
             self.assertEqual(values[0].commission.commission, 0.62)
-            self.assertEqual(store.read_commission_pending_exec_ids(episode.position_episode_id), ())
+            self.assertEqual(
+                store.read_commission_pending_exec_ids(
+                    episode.position_episode_id
+                ),
+                (),
+            )
 
 
 if __name__ == "__main__":
