@@ -35,11 +35,13 @@ jobs:
             apps/run_execution_protective_submit_v2.py \
             src/ibmd/execution/application/protective_submit.py \
             src/ibmd/execution/domain/protective_submission.py \
+            src/ibmd/execution/domain/protective_uncertainty.py \
             src/ibmd/execution/adapters/sqlite_protective_submit.py \
             src/ibmd/ib_gateway/paper_orders.py \
             src/ibmd/ib_gateway/ib_async_paper_orders.py \
             src/ibmd/ib_gateway/fake_paper_orders.py \
             tester/target_execution_protective_submit_tester.py \
+            tester/target_execution_protective_uncertainty_tester.py \
             2>&1 | tee protective-submit-lint.log
 
       - name: Upload lint diagnostics
@@ -89,6 +91,7 @@ jobs:
         run: |
           python -m unittest \
             tester.target_execution_protective_submit_tester \
+            tester.target_execution_protective_uncertainty_tester \
             tester.target_execution_protection_tester \
             tester.target_execution_paper_submit_tester \
             tester.target_execution_paper_order_regression_tester \
@@ -118,8 +121,10 @@ jobs:
             apps/run_execution_protective_submit_v2.py \
             src/ibmd/execution/application/protective_submit.py \
             src/ibmd/execution/domain/protective_submission.py \
+            src/ibmd/execution/domain/protective_uncertainty.py \
             src/ibmd/execution/adapters/sqlite_protective_submit.py \
             src/ibmd/ib_gateway/paper_orders.py \
             src/ibmd/ib_gateway/ib_async_paper_orders.py \
             src/ibmd/ib_gateway/fake_paper_orders.py \
-            tester/target_execution_protective_submit_tester.py
+            tester/target_execution_protective_submit_tester.py \
+            tester/target_execution_protective_uncertainty_tester.py
