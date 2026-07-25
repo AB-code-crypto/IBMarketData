@@ -83,7 +83,10 @@ jobs:
           python apps/run_execution_reverse_finalization_v2.py --help >/dev/null
 
       - name: Compile and lint reverse finalization files
+        id: lint
+        continue-on-error: true
         run: |
+          set -o pipefail
           python -m compileall -q \
             apps/run_execution_reverse_finalization_v2.py \
             scripts/run_execution_reverse_finalization_schema.py \
@@ -101,4 +104,16 @@ jobs:
             src/ibmd/execution/domain/reverse_finalization.py \
             src/ibmd/execution/application/reverse_finalization.py \
             src/ibmd/execution/adapters/sqlite_reverse_finalization.py \
-            tester/target_execution_reverse_finalization_tester.py
+            tester/target_execution_reverse_finalization_tester.py \
+            2>&1 | tee reverse-finalization-lint.log
+
+      - name: Upload reverse finalization lint diagnostics
+        if: steps.lint.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: reverse-finalization-lint
+          path: reverse-finalization-lint.log
+
+      - name: Fail when reverse finalization lint failed
+        if: steps.lint.outcome == 'failure'
+        run: exit 1
