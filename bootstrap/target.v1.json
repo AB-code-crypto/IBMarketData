@@ -1,0 +1,42 @@
+{
+  "bootstrap_name": "IBMarketData.target",
+  "bootstrap_version": 1,
+  "catalog_root": "catalog",
+  "stores": [
+    {
+      "component_manifests": [],
+      "migration_manifest": "migrations/market_data.v1.json",
+      "relative_database_path": "market_data/MNQ.sqlite3",
+      "store_name": "market_data"
+    },
+    {
+      "component_manifests": [],
+      "migration_manifest": "migrations/position_feed.v1.json",
+      "relative_database_path": "position_feed/broker_positions.sqlite3",
+      "store_name": "position_feed"
+    },
+    {
+      "component_manifests": [],
+      "migration_manifest": "migrations/signal.v1.json",
+      "relative_database_path": "signal/signal.sqlite3",
+      "store_name": "signal"
+    },
+    {
+      "component_manifests": [],
+      "migration_manifest": "migrations/decision.v1.json",
+      "relative_database_path": "decision/decision.sqlite3",
+      "store_name": "decision"
+    },
+    {
+      "component_manifests": [
+        "migrations/execution.protective_lifecycle.v1.json",
+        "migrations/execution.liquidation.v1.json",
+        "migrations/execution.reverse_finalization.v1.json",
+        "migrations/execution.daily_risk.v1.json"
+      ],
+      "migration_manifest": "migrations/execution.v1.json",
+      "relative_database_path": "execution/execution.sqlite3",
+      "store_name": "execution"
+    }
+  ]
+}
