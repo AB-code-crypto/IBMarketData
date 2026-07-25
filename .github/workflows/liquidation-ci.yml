@@ -54,6 +54,7 @@ jobs:
           set -o pipefail
           python -m unittest \
             tester.target_execution_liquidation_tester \
+            tester.target_execution_paper_liquidation_tester \
             tester.target_execution_protective_lifecycle_tester \
             tester.target_execution_protective_submit_tester \
             tester.target_execution_broker_attempt_tester \
@@ -111,7 +112,8 @@ jobs:
             src/ibmd/ib_gateway/paper_cancellations.py \
             src/ibmd/ib_gateway/fake_paper_cancellations.py \
             src/ibmd/ib_gateway/ib_async_paper_cancellations.py \
-            tester/target_execution_liquidation_tester.py
+            tester/target_execution_liquidation_tester.py \
+            tester/target_execution_paper_liquidation_tester.py
           ruff check \
             --select E4,E7,E9,F \
             --ignore E402 \
@@ -130,6 +132,7 @@ jobs:
             src/ibmd/ib_gateway/fake_paper_cancellations.py \
             src/ibmd/ib_gateway/ib_async_paper_cancellations.py \
             tester/target_execution_liquidation_tester.py \
+            tester/target_execution_paper_liquidation_tester.py \
             2>&1 | tee liquidation-lint.log
 
       - name: Upload liquidation lint diagnostics
