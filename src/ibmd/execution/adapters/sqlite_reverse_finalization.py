@@ -527,8 +527,6 @@ class SQLiteReverseFinalizationStore(SQLiteProtectionStore):
                         "reverse finalization disappeared before commission refresh"
                     )
                 stored = _finalization(str(row["payload_json"]))
-                if stored.to_dict() if hasattr(stored, "to_dict") else False:
-                    pass
                 if canonical_json_text(_payload(stored)) != canonical_json_text(
                     _payload(current)
                 ):
