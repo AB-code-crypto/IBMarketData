@@ -136,6 +136,81 @@ class ReversePositionFinalizationV1:
             "opening_started_at_utc",
             format_utc(parse_utc(self.opening_started_at_utc)),
         )
+        if parse_utc(self.opening_started_at_utc) < parse_utc(
+            self.closing_completed_at_utc
+        ):
+            raise ReverseFinalizationError(
+                "reverse opening cannot precede completion of the source close"
+            )
+        allocations = tuple(self.allocations)
+        if any(not isinstance(item, ReverseFillAllocationV1) for item in allocations):
+            raise ReverseFinalizationError(
+                "allocations must contain ReverseFillAllocationV1 values"
+            )
+        if tuple(item.sequence_no for item in allocations) != tuple(
+            range(1, len(allocations) + 1)
+        ):
+            raise ReverseFinalizationError(
+                "reverse allocation sequence numbers must be contiguous"
+            )
+        if len({item.reverse_allocation_id for item in allocations}) != len(
+            allocations
+        ) or len({item.exec_id for item in allocations}) != len(allocations):
+            raise ReverseFinalizationError(
+                "reverse allocation identities and execIds must be unique"
+            )
+        operation_id = self.new_plan.episode.source_operation_id
+        attempt_id = self.new_plan.episode.source_attempt_id
+        closing_id = self.closed_episode.position_episode_id
+        opening_id = self.new_plan.episode.position_episode_id
+        if any(
+            item.source_operation_id != operation_id
+            or item.source_attempt_id != attempt_id
+            or item.closing_position_episode_id != closing_id
+            or item.opening_position_episode_id != opening_id
+            for item in allocations
+        ):
+            raise ReverseFinalizationError(
+                "reverse allocations disagree with finalization identities"
+            )
+        if self.closed_protection.position_episode_id != closing_id:
+            raise ReverseFinalizationError(
+                "closed protection belongs to another source episode"
+            )
+        if (
+            self.new_plan.protection.position_episode_id != opening_id
+            or self.new_plan.strategy_position.position_episode_id != opening_id
+        ):
+            raise ReverseFinalizationError(
+                "new protection/position does not reference the opening episode"
+            )
+        if self.closed_episode.closing_operation_id != operation_id:
+            raise ReverseFinalizationError(
+                "closed source episode does not reference the reverse operation"
+            )
+        if sum(item.close_quantity for item in allocations) != self.closed_episode.quantity:
+            raise ReverseFinalizationError(
+                "reverse allocations do not close the source episode quantity"
+            )
+        if sum(item.open_quantity for item in allocations) != self.new_plan.episode.quantity:
+            raise ReverseFinalizationError(
+                "reverse allocations do not open the target episode quantity"
+            )
+        opening_exec_ids = tuple(
+            item.exec_id for item in allocations if item.open_quantity > 0
+        )
+        if opening_exec_ids != self.new_plan.episode.source_exec_ids:
+            raise ReverseFinalizationError(
+                "opening episode execIds differ from reverse allocations"
+            )
+        expected_commission_complete = all(
+            item.commission_complete for item in allocations
+        )
+        if self.commission_complete != expected_commission_complete:
+            raise ReverseFinalizationError(
+                "reverse commission completeness differs from allocations"
+            )
+        object.__setattr__(self, "allocations", allocations)
 
 
 def _stable_id(kind: str, payload: dict[str, object]) -> str:
