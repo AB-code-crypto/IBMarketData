@@ -44,6 +44,7 @@ from ibmd.public_contracts.liquidation import (
     LiquidationOperationState,
     LiquidationReason,
 )
+from ibmd.public_contracts.positions import BrokerPositionSnapshotV1
 from ibmd.public_contracts.protection import (
     PositionEpisodeStatus,
     ProtectionSetStatus,
@@ -51,13 +52,13 @@ from ibmd.public_contracts.protection import (
     ProtectiveOrderState,
 )
 from tester.target_execution_protective_submit_tester import (
+    ACCOUNT,
     T0,
     T1,
     T2,
     T3,
     blocked_readiness,
     episode_and_protection,
-    position_snapshot,
     strategy_position,
 )
 
@@ -146,8 +147,15 @@ def live_protection():
     return episode, protection
 
 
-def request_snapshot(*, existing=None, reason=LiquidationReason.DAILY_FLAT, source="a"):
-    episode, _ = episode_and_protection()
+def request_snapshot(
+    *,
+    episode=None,
+    existing=None,
+    reason=LiquidationReason.DAILY_FLAT,
+    source="a",
+):
+    if episode is None:
+        episode, _ = episode_and_protection()
     return request_liquidation(
         episode=episode,
         position=strategy_position(episode),
@@ -156,6 +164,17 @@ def request_snapshot(*, existing=None, reason=LiquidationReason.DAILY_FLAT, sour
         source_ref=source,
         observed_at_utc=T1,
         existing=existing,
+    )
+
+
+def flat_snapshot() -> BrokerPositionSnapshotV1:
+    return BrokerPositionSnapshotV1.complete(
+        snapshot_id="position_snapshot_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        account_id=ACCOUNT,
+        captured_at_utc=T3,
+        published_at_utc=T3,
+        source_session_id="ib_session_cccccccccccccccccccccccccccccccc",
+        rows=(),
     )
 
 
@@ -202,9 +221,11 @@ def apply_schema(database: Path) -> None:
 
 class LiquidationDomainTest(unittest.TestCase):
     def test_repeated_and_concurrent_reasons_share_one_operation(self) -> None:
-        first = request_snapshot()
-        repeated = request_snapshot(existing=first.snapshot)
+        episode, _ = episode_and_protection()
+        first = request_snapshot(episode=episode)
+        repeated = request_snapshot(episode=episode, existing=first.snapshot)
         second_reason = request_snapshot(
+            episode=episode,
             existing=repeated.snapshot,
             reason=LiquidationReason.MISSING_STOP,
             source="missing-stop",
@@ -223,7 +244,8 @@ class LiquidationDomainTest(unittest.TestCase):
         )
 
     def test_unknown_outcome_never_plans_second_attempt(self) -> None:
-        requested = request_snapshot().snapshot
+        episode, protection = episode_and_protection()
+        requested = request_snapshot(episode=episode).snapshot
         planned = plan_close_attempt(
             requested,
             broker_quantity=1,
@@ -259,7 +281,7 @@ class LiquidationDomainTest(unittest.TestCase):
         )
         assessed = assess_next_action(
             snapshot=unknown,
-            protection=episode_and_protection()[1],
+            protection=protection,
             broker_position_state="OPEN",
             observed_at_utc=T3,
         )
@@ -352,6 +374,7 @@ class LiquidationDomainTest(unittest.TestCase):
                     state=ProtectiveOrderState.CANCELLED,
                     updated_at_utc=T3,
                     terminal_at_utc=T3,
+                    last_broker_proof_at_utc=T3,
                     broker_terminal_proven=True,
                 )
                 if item.protective_order_id == tp.protective_order_id
@@ -372,10 +395,10 @@ class LiquidationDomainTest(unittest.TestCase):
 
     def test_completion_requires_terminal_exits_and_fresh_flat(self) -> None:
         episode, protection = episode_and_protection()
-        requested = request_snapshot().snapshot
+        requested = request_snapshot(episode=episode).snapshot
         terminal = mark_broker_flat(requested, observed_at_utc=T3)
         proof = prove_liquidation_broker_position(
-            snapshot=replace(position_snapshot(), rows=()),
+            snapshot=flat_snapshot(),
             episode=episode,
             observed_at_utc=T3,
             max_age_seconds=10.0,
