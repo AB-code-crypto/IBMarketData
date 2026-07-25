@@ -144,6 +144,18 @@ def prove_liquidation_broker_position(
             side=None,
             reason=f"fractional_or_invalid_futures_quantity:{signed}",
         )
+    if quantity > episode.quantity:
+        return LiquidationBrokerPositionProof(
+            state="INCIDENT",
+            snapshot_id=snapshot.snapshot_id,
+            freshness_seconds=freshness.age_seconds,
+            quantity=0,
+            side=None,
+            reason=(
+                "broker_quantity_exceeds_owned_episode:"
+                f"episode={episode.quantity}, broker={quantity}"
+            ),
+        )
     side = (
         StrategyPositionSide.LONG
         if signed > 0.0

@@ -513,14 +513,20 @@ class PositionEpisodeV1:
             if self.closed_at_utc is None
             else _utc(self.closed_at_utc, field_name="closed_at_utc")
         )
-        closing_operation = (
-            None
-            if self.closing_operation_id is None
-            else validate_id(
-                self.closing_operation_id,
-                expected_kind="broker_operation",
-            )
-        )
+        if self.closing_operation_id is None:
+            closing_operation = None
+        else:
+            closing_candidate = str(self.closing_operation_id).strip()
+            try:
+                closing_operation = validate_id(
+                    closing_candidate,
+                    expected_kind="broker_operation",
+                )
+            except ValueError:
+                closing_operation = validate_id(
+                    closing_candidate,
+                    expected_kind="liquidation_operation",
+                )
         if self.status == PositionEpisodeStatus.OPEN:
             if closed is not None or closing_operation is not None:
                 raise ProtectionContractError(

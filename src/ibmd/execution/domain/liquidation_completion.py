@@ -115,7 +115,9 @@ def complete_liquidation_after_flat(
         episode,
         status=PositionEpisodeStatus.CLOSED,
         closed_at_utc=observed,
-        closing_operation_id=None,
+        closing_operation_id=(
+            liquidation.operation.liquidation_operation_id
+        ),
     )
     updated_position = StrategyPositionV1(
         account_id=episode.account_id,

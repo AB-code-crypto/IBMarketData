@@ -298,11 +298,21 @@ class LiquidationFoundationService:
             observed_at_utc=observed_at_utc,
         )
         completion = None
-        if proof.state == "FLAT" and updated.operation.next_action not in {
-            LiquidationNextAction.RECONCILE_EXITS,
-            LiquidationNextAction.CANCEL_TAKE_PROFIT,
-            LiquidationNextAction.CANCEL_STOP,
-        }:
+        close_outcome_unresolved = (
+            updated.attempt is not None
+            and updated.attempt.state.value
+            in {"SUBMITTING", "LIVE", "UNKNOWN_OUTCOME"}
+        )
+        unresolved_protection = any(
+            item.state.value
+            in {"SUBMITTING", "LIVE", "CANCEL_REQUESTED", "UNKNOWN_OUTCOME"}
+            for item in protection.orders
+        )
+        if (
+            proof.state == "FLAT"
+            and not close_outcome_unresolved
+            and not unresolved_protection
+        ):
             updated = mark_broker_flat(
                 updated,
                 observed_at_utc=observed_at_utc,

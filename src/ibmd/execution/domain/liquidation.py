@@ -214,10 +214,8 @@ def _validate_request_state(
         raise LiquidationDomainError(
             "execution position belongs to another position episode"
         )
-    if not readiness.broker_actions_enabled:
-        raise LiquidationDomainError(
-            "liquidation requires broker_actions_enabled=true"
-        )
+    # A liquidation request is a durable safety fact, not a broker call.
+    # It must be recorded even while broker actions are temporarily disabled.
 
 
 def liquidation_readiness(
@@ -759,6 +757,15 @@ def apply_close_observation(
         raise LiquidationDomainError(
             "broker observation order id differs from liquidation attempt"
         )
+    cumulative_filled = (
+        snapshot.operation.liquidation_filled_quantity
+        - attempt.filled_qty
+        + int(observation.filled_qty)
+    )
+    if cumulative_filled < 0:
+        raise LiquidationDomainError(
+            "liquidation cumulative fill quantity became negative"
+        )
     if observation.outcome == BrokerObservationOutcome.LIVE:
         live_attempt = replace(
             attempt,
@@ -776,6 +783,7 @@ def apply_close_observation(
             snapshot.operation,
             state=LiquidationOperationState.LIVE,
             broker_remaining_quantity=int(observation.remaining_qty),
+            liquidation_filled_quantity=cumulative_filled,
             next_action=LiquidationNextAction.RECONCILE_MARKET_CLOSE,
             updated_at_utc=observed,
             blocking_reason="market_close_live",
@@ -810,10 +818,7 @@ def apply_close_observation(
         operation = replace(
             snapshot.operation,
             state=LiquidationOperationState.RECONCILING,
-            liquidation_filled_quantity=(
-                snapshot.operation.liquidation_filled_quantity
-                + terminal_attempt.filled_qty
-            ),
+            liquidation_filled_quantity=cumulative_filled,
             next_action=LiquidationNextAction.WAIT_FOR_FLAT,
             updated_at_utc=observed,
             blocking_reason="liquidation_fill_waiting_for_flat_position",
@@ -823,6 +828,7 @@ def apply_close_observation(
             snapshot.operation,
             state=LiquidationOperationState.FAILED_RETRYABLE,
             broker_remaining_quantity=terminal_attempt.remaining_qty,
+            liquidation_filled_quantity=cumulative_filled,
             next_action=LiquidationNextAction.OPERATOR_REQUIRED,
             updated_at_utc=observed,
             blocking_reason=(
