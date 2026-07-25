@@ -92,7 +92,7 @@ from ibmd.foundation.atomic_json import canonical_json_text
 from ibmd.foundation.config import load_deployment_settings
 from ibmd.foundation.identity import new_id
 from ibmd.foundation.process_lock import ServiceProcessLock
-from ibmd.foundation.time import format_utc, parse_utc, utc_now
+from ibmd.foundation.time import parse_utc
 from ibmd.ib_gateway.ib_async_broker_reconciliation import (
     IBAsyncBrokerReconciliationReader,
     IBBrokerReconciliationConnectionSettings,
