@@ -9,7 +9,11 @@ from ibmd.execution.application.paper_liquidation import (
     PaperLiquidationError,
     PaperLiquidationPolicy,
 )
-from ibmd.execution.domain.liquidation import request_liquidation
+from ibmd.execution.domain.liquidation import (
+    mark_close_submitting,
+    plan_close_attempt,
+    request_liquidation,
+)
 from ibmd.execution.domain.protective_uncertainty import readiness_for_protection
 from ibmd.foundation.identity import new_id
 from ibmd.ib_gateway.fake_paper_cancellations import (
@@ -434,21 +438,6 @@ class PaperLiquidationCoordinatorTest(unittest.TestCase):
 
     def test_read_only_recovery_works_when_broker_actions_are_disabled(self) -> None:
         repository = requested_state()
-        planned = replace(
-            repository.liquidation,
-            operation=replace(
-                repository.liquidation.operation,
-                state=LiquidationOperationState.PREPARING,
-                next_action=LiquidationNextAction.SUBMIT_MARKET_CLOSE,
-                updated_at_utc=T2,
-                blocking_reason="market_close_preparation_required",
-            ),
-        )
-        from ibmd.execution.domain.liquidation import (
-            mark_close_submitting,
-            plan_close_attempt,
-        )
-
         planned = plan_close_attempt(
             repository.liquidation,
             broker_quantity=1,
