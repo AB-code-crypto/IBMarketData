@@ -42,9 +42,11 @@ from .protective_submission import (
     ProtectiveOrderReconciliationResult,
     ProtectiveSubmissionDomainError,
     mark_protective_order_submitting,
+    reconcile_protective_order_snapshot,
+)
+from .protective_uncertainty import (
     mark_protective_order_unknown,
     readiness_for_protection,
-    reconcile_protective_order_snapshot,
 )
 
 __all__ = [
