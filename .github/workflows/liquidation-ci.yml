@@ -48,14 +48,28 @@ jobs:
         run: python scripts/verify_target_architecture.py .
 
       - name: Run liquidation and recovery tests
+        id: tests
+        continue-on-error: true
         run: |
+          set -o pipefail
           python -m unittest \
             tester.target_execution_liquidation_tester \
             tester.target_execution_protective_lifecycle_tester \
             tester.target_execution_protective_submit_tester \
             tester.target_execution_broker_attempt_tester \
             tester.target_ib_broker_reconciliation_tester \
-            -v
+            -v 2>&1 | tee liquidation-tests.log
+
+      - name: Upload liquidation test diagnostics
+        if: steps.tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: liquidation-tests
+          path: liquidation-tests.log
+
+      - name: Fail when liquidation tests failed
+        if: steps.tests.outcome == 'failure'
+        run: exit 1
 
       - name: Validate fresh target schemas and entrypoint
         run: |
@@ -78,7 +92,10 @@ jobs:
           python apps/run_execution_liquidation_v2.py --help >/dev/null
 
       - name: Compile and lint liquidation files
+        id: lint
+        continue-on-error: true
         run: |
+          set -o pipefail
           python -m compileall -q \
             apps/run_execution_liquidation_v2.py \
             scripts/run_execution_liquidation_schema.py \
@@ -112,4 +129,16 @@ jobs:
             src/ibmd/ib_gateway/paper_cancellations.py \
             src/ibmd/ib_gateway/fake_paper_cancellations.py \
             src/ibmd/ib_gateway/ib_async_paper_cancellations.py \
-            tester/target_execution_liquidation_tester.py
+            tester/target_execution_liquidation_tester.py \
+            2>&1 | tee liquidation-lint.log
+
+      - name: Upload liquidation lint diagnostics
+        if: steps.lint.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: liquidation-lint
+          path: liquidation-lint.log
+
+      - name: Fail when liquidation lint failed
+        if: steps.lint.outcome == 'failure'
+        run: exit 1
