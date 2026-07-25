@@ -1,0 +1,118 @@
+name: Target deployment bootstrap CI
+
+on:
+  pull_request:
+    branches:
+      - agent/architecture-rewrite
+      - master
+  push:
+    branches:
+      - agent/target-bootstrap
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-target-bootstrap:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    env:
+      IB_HOST: 127.0.0.1
+      IB_PORT: "7497"
+      IB_CLIENT_ID: "200"
+      IB_ACCOUNT_ID: DU000000
+      IBMD_ENVIRONMENT: paper
+      IBMD_DEPLOYMENT_ID: bootstrap-test
+      IBMD_DATA_ROOT: /tmp/ibmd-target-bootstrap-ci/account1
+      IBMD_APPLICATION_VERSION: ci
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install ruff
+
+      - name: Verify architecture boundaries
+        run: python scripts/verify_target_architecture.py .
+
+      - name: Run bootstrap and store safety tests
+        run: |
+          python -m unittest \
+            tester.target_deployment_bootstrap_tester \
+            tester.target_market_data_migration_tester \
+            tester.target_execution_broker_attempt_tester \
+            tester.target_execution_daily_risk_tester \
+            tester.target_execution_liquidation_tester \
+            tester.target_execution_reverse_finalization_tester \
+            -v
+
+      - name: Plan, apply and validate a fresh deployment
+        run: |
+          rm -rf /tmp/ibmd-target-bootstrap-ci
+          python scripts/bootstrap_target_deployment.py \
+            --target-root "$IBMD_DATA_ROOT" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --plan
+          python scripts/bootstrap_target_deployment.py \
+            --target-root "$IBMD_DATA_ROOT" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --apply
+          python scripts/bootstrap_target_deployment.py \
+            --target-root "$IBMD_DATA_ROOT" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --validate-target
+
+      - name: Validate bootstrapped runtime dependencies
+        run: |
+          python apps/run_signal_v2.py \
+            --market-database "$IBMD_DATA_ROOT/market_data/MNQ.sqlite3" \
+            --signal-database "$IBMD_DATA_ROOT/signal/signal.sqlite3" \
+            --validate-store-only
+          python apps/run_execution_runtime_v2.py --validate-store-only
+          python apps/run_execution_protective_lifecycle_v2.py \
+            --validate-store-only
+          python apps/run_execution_liquidation_v2.py \
+            --validate-store-only
+          python apps/run_execution_reverse_finalization_v2.py \
+            --validate-store-only
+          python apps/run_execution_daily_risk_v2.py \
+            --validate-store-only
+
+      - name: Production qualification fails before publishing a root
+        run: |
+          export PROD_ROOT=/tmp/ibmd-target-bootstrap-ci-production/account1
+          rm -rf /tmp/ibmd-target-bootstrap-ci-production
+          if python scripts/bootstrap_target_deployment.py \
+            --target-root "$PROD_ROOT" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --require-production-sessions \
+            --apply; then
+            echo "unqualified parity calendar unexpectedly passed production bootstrap"
+            exit 1
+          fi
+          test ! -e "$PROD_ROOT"
+
+      - name: Compile and lint bootstrap files
+        run: |
+          python -m compileall -q \
+            scripts/bootstrap_target_deployment.py \
+            src/ibmd/operations/bootstrap \
+            tester/target_deployment_bootstrap_tester.py
+          ruff check \
+            --select E4,E7,E9,F \
+            --ignore E402 \
+            scripts/bootstrap_target_deployment.py \
+            src/ibmd/operations/bootstrap \
+            tester/target_deployment_bootstrap_tester.py
