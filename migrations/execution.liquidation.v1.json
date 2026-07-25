@@ -1,8 +1,7 @@
 {
   "component_name": "execution_liquidation",
   "component_version": 1,
-  "requires_store": "execution",
-  "requires_store_version": 3,
+  "required_execution_schema_version": 3,
   "statements": [
     "CREATE TABLE IF NOT EXISTS execution_target_schema_components (\n    component_name TEXT PRIMARY KEY,\n    component_version INTEGER NOT NULL CHECK (component_version > 0),\n    checksum TEXT NOT NULL,\n    applied_at_utc TEXT NOT NULL,\n    application_version TEXT NOT NULL\n)",
     "CREATE TABLE internal_liquidation_operations (\n    liquidation_operation_id TEXT PRIMARY KEY,\n    position_episode_id TEXT NOT NULL UNIQUE,\n    account_id TEXT NOT NULL,\n    strategy_id TEXT NOT NULL,\n    strategy_version INTEGER NOT NULL CHECK (strategy_version > 0),\n    deployment_id TEXT NOT NULL,\n    instrument_id TEXT NOT NULL,\n    state TEXT NOT NULL,\n    next_action TEXT NOT NULL,\n    current_attempt_id TEXT,\n    current_attempt_no INTEGER NOT NULL CHECK (current_attempt_no >= 0),\n    broker_remaining_quantity INTEGER NOT NULL CHECK (broker_remaining_quantity >= 0),\n    updated_at_ts INTEGER NOT NULL,\n    updated_at_utc TEXT NOT NULL,\n    terminal_at_ts INTEGER,\n    terminal_at_utc TEXT,\n    blocking_reason TEXT,\n    payload_json TEXT NOT NULL,\n    FOREIGN KEY (position_episode_id) REFERENCES internal_position_episodes(position_episode_id)\n)",
