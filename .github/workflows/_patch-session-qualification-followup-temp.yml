@@ -1,0 +1,32 @@
+name: Temporary session qualification follow-up
+
+on:
+  push:
+    branches:
+      - agent/session-calendar-qualification
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/session-calendar-qualification
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python scripts/_patch_session_qualification_followup_temp.py
+      - run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            src/ibmd/catalog/cme_schedules.py \
+            src/ibmd/catalog/sessions.py \
+            src/ibmd/execution/application/liquidation_triggers.py
+          git diff --cached --quiet || git commit -m "Harden CME session qualification"
+          git push origin HEAD:agent/session-calendar-qualification
