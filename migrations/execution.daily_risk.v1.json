@@ -1,0 +1,13 @@
+{
+  "component_name": "execution_daily_risk",
+  "component_version": 1,
+  "required_execution_schema_version": 3,
+  "statements": [
+    "CREATE TABLE IF NOT EXISTS execution_target_schema_components (\n    component_name TEXT PRIMARY KEY,\n    component_version INTEGER NOT NULL CHECK (component_version > 0),\n    checksum TEXT NOT NULL,\n    applied_at_utc TEXT NOT NULL,\n    application_version TEXT NOT NULL\n)",
+    "CREATE TABLE internal_daily_risk_calculations (\n    calculation_id TEXT PRIMARY KEY,\n    account_id TEXT NOT NULL,\n    strategy_id TEXT NOT NULL,\n    strategy_version INTEGER NOT NULL CHECK (strategy_version > 0),\n    deployment_id TEXT NOT NULL,\n    instrument_id TEXT NOT NULL,\n    trading_day TEXT NOT NULL,\n    pnl_ready INTEGER NOT NULL CHECK (pnl_ready IN (0, 1)),\n    reason_code TEXT NOT NULL,\n    calculated_at_ts INTEGER NOT NULL,\n    calculated_at_utc TEXT NOT NULL,\n    payload_json TEXT NOT NULL\n)",
+    "CREATE INDEX internal_daily_risk_calculations_scope_idx\nON internal_daily_risk_calculations (\n    account_id, strategy_id, deployment_id, instrument_id,\n    trading_day, calculated_at_ts\n)",
+    "CREATE TABLE internal_daily_risk_transitions (\n    transition_id TEXT PRIMARY KEY,\n    account_id TEXT NOT NULL,\n    strategy_id TEXT NOT NULL,\n    deployment_id TEXT NOT NULL,\n    trading_day TEXT NOT NULL,\n    sequence_no INTEGER NOT NULL CHECK (sequence_no > 0),\n    from_status TEXT,\n    to_status TEXT NOT NULL,\n    from_cleanup_status TEXT,\n    to_cleanup_status TEXT NOT NULL,\n    calculation_id TEXT NOT NULL,\n    occurred_at_ts INTEGER NOT NULL,\n    occurred_at_utc TEXT NOT NULL,\n    payload_json TEXT NOT NULL,\n    FOREIGN KEY (calculation_id) REFERENCES internal_daily_risk_calculations(calculation_id),\n    UNIQUE (account_id, strategy_id, deployment_id, trading_day, sequence_no)\n)",
+    "CREATE VIEW public_daily_risk_calculations_v1 AS\nSELECT\n    calculation_id,\n    account_id,\n    strategy_id,\n    strategy_version,\n    deployment_id,\n    instrument_id,\n    trading_day,\n    pnl_ready,\n    reason_code,\n    calculated_at_ts,\n    calculated_at_utc,\n    payload_json\nFROM internal_daily_risk_calculations",
+    "CREATE VIEW public_daily_risk_transitions_v1 AS\nSELECT\n    transition_id,\n    account_id,\n    strategy_id,\n    deployment_id,\n    trading_day,\n    sequence_no,\n    from_status,\n    to_status,\n    from_cleanup_status,\n    to_cleanup_status,\n    calculation_id,\n    occurred_at_ts,\n    occurred_at_utc,\n    payload_json\nFROM internal_daily_risk_transitions"
+  ]
+}
