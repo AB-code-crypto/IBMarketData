@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import unittest
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime
 
 from ibmd.execution.application.protective_lifecycle import (
     ProtectiveLifecycleUpdate,
@@ -22,7 +22,6 @@ from ibmd.execution.domain.reverse_handoff import (
     require_reverse_ready_for_submit,
 )
 from ibmd.execution.domain.protective_uncertainty import readiness_for_protection
-from ibmd.foundation.identity import new_id
 from ibmd.ib_gateway.fake_paper_cancellations import (
     ScriptedPaperOrderCancellationGateway,
 )
@@ -38,7 +37,6 @@ from ibmd.public_contracts.decision import (
 from ibmd.public_contracts.execution import (
     ExecutionCommandState,
     ExecutionCommandStateV1,
-    StrategyPositionSide,
 )
 from ibmd.public_contracts.protection import (
     ProtectionSetStatus,
@@ -52,7 +50,6 @@ from tester.target_execution_protective_submit_tester import (
     INSTRUMENT,
     STRATEGY,
     T0,
-    T1,
     T2,
     T3,
     blocked_readiness,
