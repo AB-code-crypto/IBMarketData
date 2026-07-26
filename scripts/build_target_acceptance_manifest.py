@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -10,7 +13,10 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from ibmd.foundation.atomic_json import atomic_write_json
+from ibmd.foundation.atomic_json import (
+    atomic_write_json,
+    read_json_object,
+)
 from ibmd.foundation.config import ConfigurationError, load_deployment_settings
 from ibmd.foundation.time import utc_now_text
 from ibmd.operations.acceptance_manifest import (
@@ -18,6 +24,7 @@ from ibmd.operations.acceptance_manifest import (
     TargetAcceptanceError,
     build_target_acceptance_manifest,
     load_target_acceptance_manifest,
+    validate_acceptance_summary,
     verify_acceptance_manifest,
 )
 
@@ -37,9 +44,9 @@ _GATE_ARGUMENTS = {
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Build or validate one immutable paper acceptance manifest. Every "
-            "summary must be inside IBMD_DATA_ROOT and must prove its exact broker "
-            "safety gate."
+            "Build or validate one immutable paper acceptance manifest. Build mode "
+            "validates external runner summaries, copies them into IBMD_DATA_ROOT "
+            "and records content hashes for later cutover verification."
         )
     )
     parser.add_argument("--build", action="store_true")
@@ -77,7 +84,63 @@ def _summary_mapping(arguments: argparse.Namespace) -> dict[AcceptanceGate, Path
         raise TargetAcceptanceError(
             "--build requires every acceptance summary: " + ", ".join(missing)
         )
+    paths = list(values.values())
+    if len(paths) != len(set(paths)):
+        raise TargetAcceptanceError(
+            "each acceptance gate must use a distinct source summary file"
+        )
     return values
+
+
+def _validate_external_summaries(
+    sources: dict[AcceptanceGate, Path],
+) -> None:
+    for gate, source in sources.items():
+        if not source.is_file():
+            raise TargetAcceptanceError(
+                f"acceptance source summary does not exist: {source}"
+            )
+        try:
+            value = read_json_object(source)
+        except Exception as exc:
+            raise TargetAcceptanceError(
+                f"cannot read acceptance source summary {source}: {exc}"
+            ) from exc
+        validate_acceptance_summary(gate, value)
+
+
+def _stage_summaries(
+    *,
+    sources: dict[AcceptanceGate, Path],
+    data_root: Path,
+) -> tuple[Path, dict[AcceptanceGate, Path]]:
+    acceptance_root = data_root / "runtime" / "acceptance"
+    evidence = acceptance_root / "evidence"
+    if evidence.exists():
+        raise TargetAcceptanceError(
+            f"acceptance evidence directory already exists and is immutable: {evidence}"
+        )
+    acceptance_root.mkdir(parents=True, exist_ok=True)
+    temporary = Path(
+        tempfile.mkdtemp(prefix=".evidence-stage-", dir=str(acceptance_root))
+    )
+    staged: dict[AcceptanceGate, Path] = {}
+    try:
+        for gate, source in sources.items():
+            target = temporary / f"{gate.value.lower()}.summary.json"
+            shutil.copyfile(source, target)
+            with target.open("rb") as handle:
+                os.fsync(handle.fileno())
+            staged[gate] = target
+        os.replace(temporary, evidence)
+        return evidence, {
+            gate: evidence / path.name for gate, path in staged.items()
+        }
+    except Exception:
+        shutil.rmtree(temporary, ignore_errors=True)
+        if evidence.is_dir():
+            shutil.rmtree(evidence, ignore_errors=True)
+        raise
 
 
 def run(arguments: argparse.Namespace) -> int:
@@ -88,12 +151,22 @@ def run(arguments: argparse.Namespace) -> int:
             raise TargetAcceptanceError(
                 f"acceptance manifest already exists and is immutable: {target}"
             )
-        manifest = build_target_acceptance_manifest(
-            settings=settings,
-            summaries=_summary_mapping(arguments),
-            created_at_utc=utc_now_text(),
+        sources = _summary_mapping(arguments)
+        _validate_external_summaries(sources)
+        evidence_directory, staged = _stage_summaries(
+            sources=sources,
+            data_root=settings.data_root,
         )
-        atomic_write_json(target, manifest.to_dict())
+        try:
+            manifest = build_target_acceptance_manifest(
+                settings=settings,
+                summaries=staged,
+                created_at_utc=utc_now_text(),
+            )
+            atomic_write_json(target, manifest.to_dict())
+        except Exception:
+            shutil.rmtree(evidence_directory, ignore_errors=True)
+            raise
         mode = "built"
     else:
         if any(getattr(arguments, item) is not None for item in _GATE_ARGUMENTS.values()):
@@ -114,6 +187,7 @@ def run(arguments: argparse.Namespace) -> int:
         "gate_count": len(manifest.evidence),
         "gates": [item.gate.value for item in manifest.evidence],
         "all_summary_hashes_verified": True,
+        "summaries_staged_inside_target_root": True,
         "automatic_retry_enabled": False,
         "legacy_database_compatibility_required": False,
     }
