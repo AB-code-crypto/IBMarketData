@@ -220,6 +220,7 @@ def _plan_payload(
     policy: SupervisorPolicyV1,
     authorization_proof: RuntimeAuthorizationProofV1 | None,
 ) -> dict:
+    adapters_enabled = False
     return {
         "deployment_id": settings.deployment_id,
         "environment": settings.environment,
@@ -246,7 +247,8 @@ def _plan_payload(
         "continuous_broker_mutations_authorized": (
             authorization_proof is not None
         ),
-        "continuous_broker_mutation_adapters_enabled": False,
+        "continuous_broker_mutation_adapters_enabled": adapters_enabled,
+        "continuous_broker_mutations_enabled": adapters_enabled,
         "automatic_restart_enabled": False,
         "trading_database_access": False,
     }
