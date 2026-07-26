@@ -51,7 +51,7 @@ jobs:
         run: |
           python -m unittest \
             tester.target_deployment_bootstrap_tester \
-            tester.target_market_data_migration_tester \
+            tester.target_market_data_tester \
             tester.target_execution_broker_attempt_tester \
             tester.target_execution_daily_risk_tester \
             tester.target_execution_liquidation_tester \
