@@ -92,7 +92,7 @@ jobs:
               'paper_policy_liquidation_dependencies_compatible'
           ] is True
           assert value['supported_scenarios'] == [
-              'DAILY_FLAT', 'ROLLOVER'
+              'DAILY_FLAT', 'DAILY_HALT', 'ROLLOVER'
           ]
           assert value['interactive_confirmation_required'] is False
           assert value['automatic_retry_enabled'] is False
