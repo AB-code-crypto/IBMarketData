@@ -122,15 +122,33 @@ jobs:
               raise SystemExit('\n'.join(problems))
           PY
 
-      - name: Compile and lint supervisor files
+      - name: Compile supervisor files
         run: |
           python -m compileall -q \
             apps/run_target_supervisor.py \
             src/ibmd/operations/supervisor.py \
             tester/target_supervisor_tester.py
+
+      - name: Lint supervisor files
+        id: lint
+        continue-on-error: true
+        run: |
           ruff check \
             --select E4,E7,E9,F \
             --ignore E402 \
             apps/run_target_supervisor.py \
             src/ibmd/operations/supervisor.py \
-            tester/target_supervisor_tester.py
+            tester/target_supervisor_tester.py \
+            > supervisor-lint.log 2>&1
+
+      - name: Upload supervisor lint diagnostics
+        if: steps.lint.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-supervisor-lint
+          path: supervisor-lint.log
+          if-no-files-found: error
+
+      - name: Fail when supervisor lint failed
+        if: steps.lint.outcome == 'failure'
+        run: exit 1
