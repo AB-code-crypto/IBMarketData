@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -95,7 +96,7 @@ class PaperReverseAcceptanceRunner(PaperAcceptanceDrillRunner):
         handoff_max_invocations: int = 12,
         handoff_poll_seconds: float = 1.0,
         clock: Callable[[], datetime] = utc_now,
-        sleeper: Callable[[float], None],
+        sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         super().__init__(
             policy=policy,
@@ -485,7 +486,7 @@ class PaperReverseAcceptanceRunner(PaperAcceptanceDrillRunner):
             )
         if actions != expected:
             raise PaperAcceptanceError(
-                "reverse handoff cancellation order differs from STOP-first safety "
+                "reverse handoff cancellation order differs from the TP-then-STOP "
                 f"contract: expected={expected}, actual={actions}",
                 stage="reverse-handoff",
                 position_may_be_open=True,
