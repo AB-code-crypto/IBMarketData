@@ -52,7 +52,7 @@ jobs:
           set -o pipefail
           python -m unittest \
             tester.target_cutover_preflight_tester \
-            tester.target_bootstrap_tester \
+            tester.target_deployment_bootstrap_tester \
             tester.target_supervisor_tester \
             tester.target_paper_daily_halt_acceptance_tester \
             tester.target_paper_reverse_acceptance_tester \
