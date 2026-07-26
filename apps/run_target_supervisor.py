@@ -15,7 +15,13 @@ from ibmd.foundation.atomic_json import canonical_json_text
 from ibmd.foundation.config import load_deployment_settings
 from ibmd.foundation.identity import new_id
 from ibmd.foundation.process_lock import ServiceProcessLock
+from ibmd.foundation.time import utc_now_text
 from ibmd.operations.health import ServiceHealthFile, read_service_health
+from ibmd.operations.runtime_authorization import (
+    RuntimeAuthorizationError,
+    RuntimeAuthorizationProofV1,
+    verify_runtime_start_authorization,
+)
 from ibmd.operations.supervisor import (
     SubprocessServiceLauncher,
     SupervisorPolicyV1,
@@ -32,7 +38,9 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Launch and monitor one complete target deployment. The supervisor "
             "reads health JSON only, never reads trading databases and never "
-            "restarts a failed execution process automatically."
+            "restarts a failed execution process automatically. A PAPER_SOAK "
+            "authorization is verified before the authorized execution wrapper "
+            "may be launched."
         )
     )
     parser.add_argument("--validate-only", action="store_true")
@@ -42,6 +50,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--startup-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--heartbeat-max-age-seconds", type=float, default=30.0)
     parser.add_argument("--shutdown-timeout-seconds", type=float, default=15.0)
+    parser.add_argument("--runtime-authorization", type=Path, default=None)
+    parser.add_argument("--acceptance-manifest", type=Path, default=None)
+    parser.add_argument(
+        "--bootstrap-manifest",
+        type=Path,
+        default=ROOT / "bootstrap" / "target.v1.json",
+    )
     return parser
 
 
@@ -61,7 +76,11 @@ def _required_target_paths(data_root: Path) -> tuple[Path, ...]:
 
 
 def _validate_target_root(data_root: Path) -> None:
-    missing = [str(path) for path in _required_target_paths(data_root) if not path.is_file()]
+    missing = [
+        str(path)
+        for path in _required_target_paths(data_root)
+        if not path.is_file()
+    ]
     if missing:
         raise TargetSupervisorError(
             "target deployment is not bootstrapped; missing=" + repr(missing)
@@ -72,15 +91,39 @@ def _service_specs(
     *,
     data_root: Path,
     environment: str,
+    authorization_path: Path | None,
+    authorization_proof: RuntimeAuthorizationProofV1 | None,
 ) -> tuple[SupervisorServiceSpecV1, ...]:
     logs = data_root / "runtime" / "logs"
     health = data_root / "runtime" / "health"
-    execution_argv = [
-        sys.executable,
-        str(ROOT / "apps" / "run_execution_runtime_v2.py"),
-        "--continuous",
-    ]
-    session_override = environment in {"development", "test", "paper"}
+    if (authorization_path is None) != (authorization_proof is None):
+        raise TargetSupervisorError(
+            "authorization path/proof must be provided together"
+        )
+    if authorization_path is None:
+        execution_argv = [
+            sys.executable,
+            str(ROOT / "apps" / "run_execution_runtime_v2.py"),
+            "--continuous",
+        ]
+        session_override = environment in {"development", "test", "paper"}
+    else:
+        execution_argv = [
+            sys.executable,
+            str(ROOT / "apps" / "run_execution_authorized_runtime_v2.py"),
+            "--runtime-authorization",
+            str(authorization_path),
+            "--acceptance-manifest",
+            str(data_root / "runtime" / "acceptance" / "manifest.json"),
+            "--bootstrap-manifest",
+            str(ROOT / "bootstrap" / "target.v1.json"),
+            "--catalog-root",
+            str(data_root / "catalog"),
+            "--continuous",
+        ]
+        session_override = bool(
+            authorization_proof.authorization.allow_unqualified_session
+        )
     if session_override:
         execution_argv.append("--allow-unqualified-session")
     commands = (
@@ -137,6 +180,7 @@ def _configuration_hash(
     deployment_hash: str,
     specs: tuple[SupervisorServiceSpecV1, ...],
     policy: SupervisorPolicyV1,
+    authorization_proof: RuntimeAuthorizationProofV1 | None,
 ) -> str:
     payload = {
         "deployment_hash": deployment_hash,
@@ -155,6 +199,12 @@ def _configuration_hash(
             "poll_interval_seconds": policy.poll_interval_seconds,
             "shutdown_timeout_seconds": policy.shutdown_timeout_seconds,
         },
+        "runtime_authorization_hash": (
+            None
+            if authorization_proof is None
+            else authorization_proof.authorization.content_hash
+        ),
+        "continuous_broker_mutation_adapters_enabled": False,
         "automatic_restart_enabled": False,
         "database_access": False,
     }
@@ -168,6 +218,7 @@ def _plan_payload(
     settings,
     specs: tuple[SupervisorServiceSpecV1, ...],
     policy: SupervisorPolicyV1,
+    authorization_proof: RuntimeAuthorizationProofV1 | None,
 ) -> dict:
     return {
         "deployment_id": settings.deployment_id,
@@ -188,15 +239,51 @@ def _plan_payload(
             "poll_interval_seconds": policy.poll_interval_seconds,
             "shutdown_timeout_seconds": policy.shutdown_timeout_seconds,
         },
+        "runtime_authorization_verified": authorization_proof is not None,
+        "runtime_authorization": (
+            None if authorization_proof is None else authorization_proof.to_dict()
+        ),
+        "continuous_broker_mutations_authorized": (
+            authorization_proof is not None
+        ),
+        "continuous_broker_mutation_adapters_enabled": False,
         "automatic_restart_enabled": False,
         "trading_database_access": False,
-        "continuous_broker_mutations_enabled": False,
     }
+
+
+def _authorization_proof(arguments: argparse.Namespace, settings):
+    if arguments.runtime_authorization is None:
+        if arguments.acceptance_manifest is not None:
+            raise TargetSupervisorError(
+                "--acceptance-manifest requires --runtime-authorization"
+            )
+        return None, None
+    authorization_path = arguments.runtime_authorization.resolve()
+    acceptance_manifest = (
+        arguments.acceptance_manifest.resolve()
+        if arguments.acceptance_manifest is not None
+        else settings.data_root / "runtime" / "acceptance" / "manifest.json"
+    )
+    proof = verify_runtime_start_authorization(
+        settings=settings,
+        source_root=ROOT,
+        authorization_path=authorization_path,
+        acceptance_manifest_path=acceptance_manifest,
+        bootstrap_manifest_path=arguments.bootstrap_manifest,
+        catalog_root=settings.data_root / "catalog",
+        observed_at_utc=utc_now_text(),
+    )
+    return authorization_path, proof
 
 
 def run(arguments: argparse.Namespace) -> int:
     settings = load_deployment_settings()
     _validate_target_root(settings.data_root)
+    authorization_path, authorization_proof = _authorization_proof(
+        arguments,
+        settings,
+    )
     policy = SupervisorPolicyV1(
         startup_timeout_seconds=arguments.startup_timeout_seconds,
         heartbeat_max_age_seconds=arguments.heartbeat_max_age_seconds,
@@ -206,8 +293,15 @@ def run(arguments: argparse.Namespace) -> int:
     specs = _service_specs(
         data_root=settings.data_root,
         environment=settings.environment,
+        authorization_path=authorization_path,
+        authorization_proof=authorization_proof,
     )
-    plan = _plan_payload(settings=settings, specs=specs, policy=policy)
+    plan = _plan_payload(
+        settings=settings,
+        specs=specs,
+        policy=policy,
+        authorization_proof=authorization_proof,
+    )
     if arguments.validate_only or arguments.print_plan:
         print(
             json.dumps(
@@ -223,6 +317,7 @@ def run(arguments: argparse.Namespace) -> int:
         deployment_hash=settings.configuration_hash,
         specs=specs,
         policy=policy,
+        authorization_proof=authorization_proof,
     )
     instance_id = new_id("instance")
     supervisor = TargetStackSupervisor(
@@ -271,7 +366,11 @@ def main(argv: list[str] | None = None) -> int:
         return run(arguments)
     except KeyboardInterrupt:
         return 130
-    except (TargetSupervisorError, ValueError) as exc:
+    except (
+        RuntimeAuthorizationError,
+        TargetSupervisorError,
+        ValueError,
+    ) as exc:
         print(
             f"target supervisor failed: {type(exc).__name__}: {exc}",
             file=sys.stderr,
