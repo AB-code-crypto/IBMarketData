@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import ctypes
-import json
 import os
-import socket
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum
@@ -594,14 +592,14 @@ class TargetCutoverPreflight:
                     },
                 )
             )
-            if catalog_hash is not None and bundle.content_hash != catalog_hash:
+            if catalog_hash is not None and bundle.bundle_hash != catalog_hash:
                 checks.append(
                     _check(
                         "catalog_runtime_hash",
                         False,
                         "loaded target catalog hash differs from bootstrap evidence",
                         evidence={
-                            "loaded": bundle.content_hash,
+                            "loaded": bundle.bundle_hash,
                             "bootstrap": catalog_hash,
                         },
                     )
@@ -612,7 +610,7 @@ class TargetCutoverPreflight:
                         "catalog_runtime_hash",
                         True,
                         "loaded target catalog matches bootstrap evidence",
-                        evidence={"catalog_bundle_hash": bundle.content_hash},
+                        evidence={"catalog_bundle_hash": bundle.bundle_hash},
                     )
                 )
         except (CatalogError, OSError, ValueError) as exc:
