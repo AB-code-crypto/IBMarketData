@@ -67,6 +67,12 @@ from ibmd.ib_gateway.ib_async_paper_orders import (
 )
 from ibmd.ib_gateway.paper_cancellations import BrokerOrderCancelError
 from ibmd.ib_gateway.paper_orders import BrokerOrderSubmitError, PaperOrderRoute
+from ibmd.operations.restart_probe import (
+    CrashAfterSuccessfulCancelGateway,
+    CrashAfterSuccessfulSubmitGateway,
+    RestartProbeError,
+    require_restart_probe_checkpoint,
+)
 from ibmd.public_contracts.liquidation import LiquidationReason
 
 SERVICE_NAME = "execution"
@@ -121,6 +127,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--commission-wait-seconds",
         type=float,
         default=2.0,
+    )
+    parser.add_argument(
+        "--drill-crash-after-broker-action",
+        action="store_true",
+        help=(
+            "paper-drill only: terminate after one successful cancelOrder or "
+            "liquidation MARKET submit and before reconciliation"
+        ),
+    )
+    parser.add_argument(
+        "--drill-crash-checkpoint-file",
+        type=Path,
+        default=None,
+        help="atomic checkpoint written immediately before the intentional exit",
     )
     return parser
 
@@ -361,6 +381,27 @@ async def run_paper(arguments: argparse.Namespace) -> int:
             account_id=settings.ib_account_id,
         )
     )
+    if arguments.drill_crash_after_broker_action:
+        checkpoint = require_restart_probe_checkpoint(
+            environment=settings.environment,
+            deployment_id=settings.deployment_id,
+            data_root=settings.data_root,
+            checkpoint_file=arguments.drill_crash_checkpoint_file,
+        )
+        order_gateway = CrashAfterSuccessfulSubmitGateway(
+            inner=order_gateway,
+            checkpoint_file=checkpoint,
+            market_mutation_kind="LIQUIDATION_MARKET_CLOSE",
+        )
+        cancellation_gateway = CrashAfterSuccessfulCancelGateway(
+            inner=cancellation_gateway,
+            checkpoint_file=checkpoint,
+        )
+    elif arguments.drill_crash_checkpoint_file is not None:
+        raise RestartProbeError(
+            "--drill-crash-checkpoint-file requires "
+            "--drill-crash-after-broker-action"
+        )
     reconciliation = IBAsyncBrokerReconciliationReader(
         IBBrokerReconciliationConnectionSettings(
             host=settings.ib_host,
@@ -478,6 +519,7 @@ def main(argv: list[str] | None = None) -> int:
         LiquidationServiceError,
         LiquidationStoreError,
         PaperLiquidationError,
+        RestartProbeError,
         ProtectionSchemaError,
         ValueError,
     ) as exc:
