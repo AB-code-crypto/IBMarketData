@@ -1,0 +1,136 @@
+name: Paper reverse acceptance CI
+
+on:
+  pull_request:
+    branches:
+      - agent/architecture-rewrite
+      - master
+  push:
+    branches:
+      - agent/paper-reverse-acceptance
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-paper-reverse-acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+
+    env:
+      IB_HOST: 127.0.0.1
+      IB_PORT: "7497"
+      IB_CLIENT_ID: "200"
+      IB_ACCOUNT_ID: DU000000
+      IBMD_ENVIRONMENT: paper
+      IBMD_DEPLOYMENT_ID: paper-drill-reverse-ci
+      IBMD_DATA_ROOT: /tmp/ibmd-paper-reverse-ci/account1
+      IBMD_APPLICATION_VERSION: ci
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install ruff
+
+      - name: Verify architecture boundaries
+        run: python scripts/verify_target_architecture.py .
+
+      - name: Run reverse acceptance and safety tests
+        id: tests
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python -m unittest \
+            tester.target_paper_reverse_acceptance_tester \
+            tester.target_execution_reverse_handoff_tester \
+            tester.target_execution_reverse_finalization_tester \
+            tester.target_execution_paper_submit_tester \
+            tester.target_execution_protective_submit_tester \
+            -v 2>&1 | tee /tmp/paper-reverse-tests.txt
+
+      - name: Upload reverse test diagnostics
+        if: steps.tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-reverse-acceptance-tests
+          path: /tmp/paper-reverse-tests.txt
+
+      - name: Fail when reverse tests failed
+        if: steps.tests.outcome == 'failure'
+        run: exit 1
+
+      - name: Validate on a fresh target deployment
+        run: |
+          rm -rf /tmp/ibmd-paper-reverse-ci
+          python scripts/bootstrap_target_deployment.py \
+            --target-root "$IBMD_DATA_ROOT" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --apply
+          python apps/prepare_execution_reverse_paper_drill_v2.py \
+            --validate-store-only
+          python scripts/run_paper_reverse_acceptance.py \
+            --validate-only \
+            > /tmp/paper-reverse-validation.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          value = json.loads(Path('/tmp/paper-reverse-validation.json').read_text())
+          assert value['paper_reverse_acceptance_dependencies_compatible'] is True
+          assert value['interactive_confirmation_required'] is False
+          assert value['automatic_retry_enabled'] is False
+          PY
+
+      - name: Prove runner is non-interactive and broker mutations are delegated
+        run: |
+          ! grep -R "Read-Host\|input(" \
+            apps/prepare_execution_reverse_paper_drill_v2.py \
+            scripts/run_paper_reverse_acceptance.py \
+            src/ibmd/operations/paper_reverse_acceptance.py
+          ! grep -R "placeOrder\|cancelOrder\|ib_async" \
+            apps/prepare_execution_reverse_paper_drill_v2.py \
+            scripts/run_paper_reverse_acceptance.py \
+            src/ibmd/operations/paper_reverse_acceptance.py
+
+      - name: Compile reverse acceptance files
+        run: |
+          python -m compileall -q \
+            apps/prepare_execution_reverse_paper_drill_v2.py \
+            scripts/run_paper_reverse_acceptance.py \
+            src/ibmd/execution/application/paper_reverse_drill.py \
+            src/ibmd/operations/paper_reverse_acceptance.py \
+            tester/target_paper_reverse_acceptance_tester.py
+
+      - name: Lint reverse acceptance files
+        id: lint
+        continue-on-error: true
+        run: |
+          ruff check \
+            --select E4,E7,E9,F \
+            --ignore E402 \
+            apps/prepare_execution_reverse_paper_drill_v2.py \
+            scripts/run_paper_reverse_acceptance.py \
+            src/ibmd/execution/application/paper_reverse_drill.py \
+            src/ibmd/operations/paper_reverse_acceptance.py \
+            tester/target_paper_reverse_acceptance_tester.py \
+            2>&1 | tee /tmp/paper-reverse-lint.txt
+
+      - name: Upload reverse lint diagnostics
+        if: steps.lint.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-reverse-acceptance-lint
+          path: /tmp/paper-reverse-lint.txt
+
+      - name: Fail when reverse lint failed
+        if: steps.lint.outcome == 'failure'
+        run: exit 1
