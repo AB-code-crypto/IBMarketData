@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static verifier for the rolling-only IBMarketData refactor."""
+"""Static verifier for the rolling-only legacy IBMarketData refactor."""
 
 from __future__ import annotations
 
@@ -66,6 +66,19 @@ SKIP_DIR_NAMES = {
     "venv",
 }
 
+# This verifier protects the still-running legacy rolling runtime. The target
+# rewrite has its own architecture, catalog, schema, compile and CI checks and
+# intentionally uses terms that are forbidden only in the legacy runtime.
+TARGET_ONLY_TOP_LEVELS = {
+    ".github",
+    "apps",
+    "bootstrap",
+    "catalog",
+    "docs",
+    "migrations",
+    "src",
+}
+
 # Deployment documentation must explicitly name removed components so operators
 # can verify that they are absent. It is not production source code.
 FORBIDDEN_SCAN_SKIP_FILES = {
@@ -87,11 +100,30 @@ TEXT_ALLOWLIST: dict[str, set[str]] = {
 }
 
 
+def is_legacy_scan_path(relative: Path) -> bool:
+    parts = relative.parts
+    if not parts:
+        return False
+    if parts[0] in TARGET_ONLY_TOP_LEVELS:
+        return False
+    # `scripts` now contains target migration/acceptance tooling. The legacy
+    # refactor is verified through explicit structure checks below instead.
+    if parts[0] == "scripts":
+        return False
+    # Keep scanning legacy/characterization tests, but not target tests.
+    if parts[0] == "tester" and relative.name.startswith("target_"):
+        return False
+    return True
+
+
 def iter_source_files(root: Path):
     for path in root.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in TEXT_SUFFIXES:
             continue
-        if any(part in SKIP_DIR_NAMES for part in path.relative_to(root).parts):
+        relative = path.relative_to(root)
+        if any(part in SKIP_DIR_NAMES for part in relative.parts):
+            continue
+        if not is_legacy_scan_path(relative):
             continue
         yield path
 
@@ -118,7 +150,7 @@ def verify_forbidden_text(root: Path, errors: list[str]) -> None:
                 errors.append(f"forbidden token {token!r} in {relative}")
 
         # Broader service terms are checked separately to avoid allowing stale
-        # launcher/docs wording while still permitting the legacy DB migration.
+        # launcher wording while still permitting the legacy DB migration.
         lowered = text.lower()
         if relative != "ib_signal/signal_event_store.py":
             for token in ("job_data", "job-data", "job db", "job_db"):
@@ -255,7 +287,9 @@ def verify_structure(root: Path, errors: list[str]) -> None:
     for relative in ("core/db_sql.py", "core/price_db.py", "core/realtime_db.py"):
         path = root / relative
         if path.is_file() and "mid_close" in path.read_text(encoding="utf-8"):
-            errors.append(f"physical mid_close leaked into price writer/schema: {relative}")
+            errors.append(
+                f"physical mid_close leaked into price writer/schema: {relative}"
+            )
 
 
 def main(argv: list[str] | None = None) -> int:
