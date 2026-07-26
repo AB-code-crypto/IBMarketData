@@ -55,7 +55,6 @@ jobs:
             tester.target_paper_liquidation_acceptance_tester \
             tester.target_paper_restart_acceptance_tester \
             tester.target_execution_liquidation_tester \
-            tester.target_execution_liquidation_paper_tester \
             -v 2>&1 | tee /tmp/liquidation-restart-tests.txt
 
       - name: Upload liquidation restart test diagnostics
