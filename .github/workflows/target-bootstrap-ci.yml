@@ -104,15 +104,33 @@ jobs:
           fi
           test ! -e "$PROD_ROOT"
 
-      - name: Compile and lint bootstrap files
+      - name: Compile bootstrap files
         run: |
           python -m compileall -q \
             scripts/bootstrap_target_deployment.py \
             src/ibmd/operations/bootstrap \
             tester/target_deployment_bootstrap_tester.py
+
+      - name: Lint bootstrap files
+        id: lint
+        continue-on-error: true
+        run: |
           ruff check \
             --select E4,E7,E9,F \
             --ignore E402 \
             scripts/bootstrap_target_deployment.py \
             src/ibmd/operations/bootstrap \
-            tester/target_deployment_bootstrap_tester.py
+            tester/target_deployment_bootstrap_tester.py \
+            > bootstrap-lint.log 2>&1
+
+      - name: Upload bootstrap lint diagnostics
+        if: steps.lint.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-bootstrap-lint
+          path: bootstrap-lint.log
+          if-no-files-found: error
+
+      - name: Fail when bootstrap lint failed
+        if: steps.lint.outcome == 'failure'
+        run: exit 1
