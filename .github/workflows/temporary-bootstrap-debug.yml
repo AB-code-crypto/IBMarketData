@@ -1,9 +1,9 @@
 name: Temporary bootstrap diagnostics
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/target-bootstrap
+      - agent/architecture-rewrite
 
 permissions:
   contents: write
