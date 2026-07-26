@@ -80,7 +80,11 @@ jobs:
       - name: Generate CI acceptance summary fixtures
         run: |
           python - <<'PY'
+          import sys
           from pathlib import Path
+
+          sys.path.insert(0, str((Path.cwd() / 'src').resolve()))
+
           from ibmd.foundation.atomic_json import atomic_write_json
           from ibmd.operations.acceptance_manifest import AcceptanceGate
           from tester.target_cutover_preflight_tester import summary
