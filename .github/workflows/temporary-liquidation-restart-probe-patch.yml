@@ -1,0 +1,32 @@
+name: Temporary liquidation restart probe patch
+
+on:
+  push:
+    branches:
+      - agent/paper-liquidation-restart-acceptance
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/paper-liquidation-restart-acceptance
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          python scripts/_patch_liquidation_restart_probe_temp.py
+          rm scripts/_patch_liquidation_restart_probe_temp.py
+          rm .github/workflows/temporary-liquidation-restart-probe-patch.yml
+      - run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --quiet || git commit -m "Add restart probe hook to liquidation entrypoint"
+          git push origin HEAD:agent/paper-liquidation-restart-acceptance
