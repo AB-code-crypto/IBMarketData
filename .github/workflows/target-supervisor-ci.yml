@@ -81,11 +81,46 @@ jobs:
           assert '--allow-unqualified-session' in value['services'][-1]['argv']
           PY
 
-      - name: Prove supervisor has no database or broker API access
+      - name: Prove supervisor imports no database, broker or service internals
         run: |
-          ! grep -R "sqlite3\|placeOrder\|cancelOrder\|ib_async" \
-            apps/run_target_supervisor.py \
-            src/ibmd/operations/supervisor.py
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          files = [
+              Path('apps/run_target_supervisor.py'),
+              Path('src/ibmd/operations/supervisor.py'),
+          ]
+          forbidden_roots = {
+              'sqlite3',
+              'ib_async',
+              'ibmd.market_data',
+              'ibmd.position_feed',
+              'ibmd.signal',
+              'ibmd.decision',
+              'ibmd.execution',
+              'ibmd.ib_gateway',
+          }
+          forbidden_calls = {'placeOrder', 'cancelOrder'}
+          problems = []
+          for path in files:
+              tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Import):
+                      names = [item.name for item in node.names]
+                  elif isinstance(node, ast.ImportFrom):
+                      names = [node.module or '']
+                  else:
+                      names = []
+                  for name in names:
+                      if any(name == root or name.startswith(root + '.') for root in forbidden_roots):
+                          problems.append(f'{path}: forbidden import {name}')
+                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                      if node.func.attr in forbidden_calls:
+                          problems.append(f'{path}: forbidden call {node.func.attr}')
+          if problems:
+              raise SystemExit('\n'.join(problems))
+          PY
 
       - name: Compile and lint supervisor files
         run: |
