@@ -1,0 +1,42 @@
+name: Temporary paper acceptance file generator
+
+on:
+  pull_request:
+    branches:
+      - agent/architecture-rewrite
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/paper-acceptance-runner
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Generate acceptance files
+        run: |
+          python scripts/_patch_paper_acceptance_core_temp.py
+          python scripts/_patch_paper_acceptance_cli_temp.py
+          python scripts/_patch_paper_acceptance_tests_temp.py
+          python scripts/_patch_paper_acceptance_docs_temp.py
+          python scripts/_patch_paper_acceptance_ci_temp.py
+          rm scripts/_patch_paper_acceptance_core_temp.py
+          rm scripts/_patch_paper_acceptance_cli_temp.py
+          rm scripts/_patch_paper_acceptance_tests_temp.py
+          rm scripts/_patch_paper_acceptance_docs_temp.py
+          rm scripts/_patch_paper_acceptance_ci_temp.py
+          rm .github/workflows/temporary-paper-acceptance-patch.yml
+      - name: Commit generated files
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --quiet || git commit -m "Add non-interactive paper acceptance runner"
+          git push origin HEAD:agent/paper-acceptance-runner
