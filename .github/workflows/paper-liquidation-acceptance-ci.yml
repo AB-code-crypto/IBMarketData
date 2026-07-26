@@ -1,0 +1,122 @@
+name: Paper liquidation acceptance CI
+
+on:
+  pull_request:
+    branches:
+      - agent/architecture-rewrite
+      - master
+  push:
+    branches:
+      - agent/paper-liquidation-acceptance
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-paper-liquidation-acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    env:
+      IB_HOST: 127.0.0.1
+      IB_PORT: "7497"
+      IB_CLIENT_ID: "200"
+      IB_ACCOUNT_ID: DU000000
+      IBMD_ENVIRONMENT: paper
+      IBMD_DEPLOYMENT_ID: paper-drill-liquidation-ci
+      IBMD_DATA_ROOT: /tmp/ibmd-paper-liquidation-ci/account1
+      IBMD_APPLICATION_VERSION: ci
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install ruff
+
+      - name: Verify architecture boundaries
+        run: python scripts/verify_target_architecture.py .
+
+      - name: Run liquidation acceptance and safety tests
+        run: |
+          python -m unittest \
+            tester.target_paper_liquidation_acceptance_tester \
+            tester.target_execution_liquidation_tester \
+            tester.target_execution_liquidation_trigger_tester \
+            tester.target_execution_paper_order_regression_tester \
+            -v
+
+      - name: Validate on a fresh target deployment
+        run: |
+          rm -rf /tmp/ibmd-paper-liquidation-ci
+          python scripts/bootstrap_target_deployment.py \
+            --target-root "$IBMD_DATA_ROOT" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --apply
+          python scripts/run_paper_liquidation_acceptance.py \
+            --validate-only
+
+      - name: Prove runner is non-interactive and owns no broker API
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          files = [
+              Path('scripts/run_paper_liquidation_acceptance.py'),
+              Path('src/ibmd/operations/paper_liquidation_acceptance.py'),
+          ]
+          forbidden_imports = {'ib_async', 'ibmd.ib_gateway'}
+          forbidden_calls = {'placeOrder', 'cancelOrder', 'input'}
+          problems = []
+          for path in files:
+              text = path.read_text(encoding='utf-8')
+              if 'Read-Host' in text:
+                  problems.append(f'{path}: interactive Read-Host reference')
+              tree = ast.parse(text, filename=str(path))
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Import):
+                      names = [item.name for item in node.names]
+                  elif isinstance(node, ast.ImportFrom):
+                      names = [node.module or '']
+                  else:
+                      names = []
+                  for name in names:
+                      if any(
+                          name == root or name.startswith(root + '.')
+                          for root in forbidden_imports
+                      ):
+                          problems.append(f'{path}: forbidden import {name}')
+                  if isinstance(node, ast.Call):
+                      if isinstance(node.func, ast.Name):
+                          name = node.func.id
+                      elif isinstance(node.func, ast.Attribute):
+                          name = node.func.attr
+                      else:
+                          name = ''
+                      if name in forbidden_calls:
+                          problems.append(f'{path}: forbidden call {name}')
+          if problems:
+              raise SystemExit('\n'.join(problems))
+          PY
+
+      - name: Compile and lint liquidation acceptance files
+        run: |
+          python -m compileall -q \
+            scripts/run_paper_liquidation_acceptance.py \
+            src/ibmd/operations/paper_liquidation_acceptance.py \
+            tester/target_paper_liquidation_acceptance_tester.py
+          ruff check \
+            --select E4,E7,E9,F \
+            --ignore E402 \
+            scripts/run_paper_liquidation_acceptance.py \
+            src/ibmd/operations/paper_liquidation_acceptance.py \
+            tester/target_paper_liquidation_acceptance_tester.py
