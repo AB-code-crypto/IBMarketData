@@ -454,6 +454,7 @@ class PaperLiquidationRestartAcceptanceRunner(
         if value.get("schema_name") not in {
             "PaperAcceptanceResult",
             "PaperRestartAcceptanceResult",
+            "PaperReverseAcceptanceResult",
         } or int(value.get("schema_version") or 0) != 1:
             raise PaperLiquidationAcceptanceError(
                 "entry summary is not a supported paper acceptance result",

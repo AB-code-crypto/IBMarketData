@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -101,7 +102,7 @@ class PaperPolicyLiquidationAcceptanceRunner(
         state_source: PaperLiquidationAcceptanceStateSource,
         artifacts: PaperAcceptanceArtifactSink,
         clock: Callable[[], datetime] = utc_now,
-        sleeper: Callable[[float], None],
+        sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         super().__init__(
             policy=policy,

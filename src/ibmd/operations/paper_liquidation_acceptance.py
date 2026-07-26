@@ -533,11 +533,16 @@ class PaperLiquidationAcceptanceRunner:
                 stage="entry-summary",
             ) from exc
         if (
-            value.get("schema_name") != "PaperAcceptanceResult"
+            value.get("schema_name")
+            not in {
+                "PaperAcceptanceResult",
+                "PaperRestartAcceptanceResult",
+                "PaperReverseAcceptanceResult",
+            }
             or value.get("schema_version") != 1
         ):
             raise PaperLiquidationAcceptanceError(
-                "entry summary is not PaperAcceptanceResult v1",
+                "entry summary is not a supported protected-position result v1",
                 stage="entry-summary",
             )
         position_proof = self._mapping(
