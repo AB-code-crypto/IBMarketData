@@ -70,6 +70,11 @@ from ibmd.ib_gateway import (
     IBPaperOrderConnectionSettings,
     PaperOrderRoute,
 )
+from ibmd.operations.restart_probe import (
+    CrashAfterSuccessfulSubmitGateway,
+    RestartProbeError,
+    require_restart_probe_checkpoint,
+)
 
 SERVICE_NAME = "execution"
 
@@ -114,6 +119,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--commission-wait-seconds", type=float, default=2.0)
     parser.add_argument("--reconciliation-read-attempts", type=int, default=5)
     parser.add_argument("--reconciliation-poll-seconds", type=float, default=1.0)
+    parser.add_argument(
+        "--drill-crash-after-submit",
+        action="store_true",
+        help=(
+            "paper-drill only: terminate after a successful MARKET broker call "
+            "and before reconciliation"
+        ),
+    )
+    parser.add_argument(
+        "--drill-crash-checkpoint-file",
+        type=Path,
+        default=None,
+        help="atomic checkpoint written immediately before the intentional exit",
+    )
     return parser
 
 
@@ -264,6 +283,22 @@ async def run(arguments: argparse.Namespace) -> int:
             ),
         )
     )
+    if arguments.drill_crash_after_submit:
+        checkpoint = require_restart_probe_checkpoint(
+            environment=settings.environment,
+            deployment_id=settings.deployment_id,
+            data_root=settings.data_root,
+            checkpoint_file=arguments.drill_crash_checkpoint_file,
+        )
+        submit_gateway = CrashAfterSuccessfulSubmitGateway(
+            inner=submit_gateway,
+            checkpoint_file=checkpoint,
+        )
+    elif arguments.drill_crash_checkpoint_file is not None:
+        raise RestartProbeError(
+            "--drill-crash-checkpoint-file requires "
+            "--drill-crash-after-submit"
+        )
     reconciliation_source = IBAsyncBrokerReconciliationReader(
         IBBrokerReconciliationConnectionSettings(
             host=settings.ib_host,
@@ -415,6 +450,7 @@ def main(argv: list[str] | None = None) -> int:
         NewRiskWindowError,
         PaperReverseHandoffError,
         PaperSubmitError,
+        RestartProbeError,
         ValueError,
     ) as exc:
         print(
