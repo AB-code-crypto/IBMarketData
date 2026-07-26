@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -313,7 +314,7 @@ class PaperRestartAcceptanceRunner(PaperAcceptanceDrillRunner):
         state_source: PaperAcceptanceStateSource,
         artifacts: PaperAcceptanceArtifactStore,
         clock: Callable[[], datetime] = utc_now,
-        sleeper: Callable[[float], None],
+        sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         super().__init__(
             policy=policy,
