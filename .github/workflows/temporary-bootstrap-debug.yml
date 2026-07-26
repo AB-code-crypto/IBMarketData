@@ -6,17 +6,15 @@ on:
       - agent/architecture-rewrite
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   capture:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/target-bootstrap
-          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -38,10 +36,8 @@ jobs:
           status=$?
           echo "exit_code=$status" >> bootstrap-debug.log
           exit 0
-      - name: Commit diagnostics
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add bootstrap-debug.log
-          git diff --cached --quiet || git commit -m "Capture bootstrap test failure"
-          git push origin HEAD:agent/target-bootstrap
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bootstrap-debug
+          path: bootstrap-debug.log
+          if-no-files-found: error
