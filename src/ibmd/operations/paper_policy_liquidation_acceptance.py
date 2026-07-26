@@ -243,7 +243,15 @@ class PaperPolicyLiquidationAcceptanceRunner(
                 "policy trigger preparation selected another reason",
                 stage="liquidation-request",
             )
-        if payload.get("observed_at_utc") != self.logical_trigger_at_utc:
+        payload_observed = str(payload.get("observed_at_utc") or "").strip()
+        try:
+            same_observation = (
+                parse_utc(payload_observed)
+                == parse_utc(self.logical_trigger_at_utc)
+            )
+        except ValueError:
+            same_observation = False
+        if not same_observation:
             raise PaperLiquidationAcceptanceError(
                 "policy trigger observation time changed",
                 stage="liquidation-request",
