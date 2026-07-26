@@ -79,10 +79,11 @@ TARGET_ONLY_TOP_LEVELS = {
     "src",
 }
 
-# Deployment documentation must explicitly name removed components so operators
-# can verify that they are absent. It is not production source code.
+# These files contain operator wording or explicit test fixtures naming forbidden
+# tokens. They are not legacy runtime source and remain covered by syntax/tests.
 FORBIDDEN_SCAN_SKIP_FILES = {
     "docs/rolling_only_runbook.md",
+    "tester/rolling_refactor_verifier_scope_tester.py",
 }
 
 # The signal-event migration must recognize old column names while copying rows.
