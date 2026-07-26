@@ -46,14 +46,28 @@ jobs:
         run: python scripts/verify_target_architecture.py .
 
       - name: Run liquidation restart and broker-safety tests
+        id: tests
+        continue-on-error: true
         run: |
+          set -o pipefail
           python -m unittest \
             tester.target_paper_liquidation_restart_acceptance_tester \
             tester.target_paper_liquidation_acceptance_tester \
             tester.target_paper_restart_acceptance_tester \
             tester.target_execution_liquidation_tester \
             tester.target_execution_liquidation_paper_tester \
-            -v
+            -v 2>&1 | tee /tmp/liquidation-restart-tests.txt
+
+      - name: Upload liquidation restart test diagnostics
+        if: steps.tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-liquidation-restart-tests
+          path: /tmp/liquidation-restart-tests.txt
+
+      - name: Fail when liquidation restart tests failed
+        if: steps.tests.outcome == 'failure'
+        run: exit 1
 
       - name: Validate on a fresh target deployment
         run: |
