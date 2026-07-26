@@ -26,17 +26,22 @@ jobs:
           python scripts/_patch_paper_acceptance_cli_temp.py
           python scripts/_patch_paper_acceptance_tests_temp.py
           python scripts/_patch_paper_acceptance_docs_temp.py
-          python scripts/_patch_paper_acceptance_ci_temp.py
           rm scripts/_patch_paper_acceptance_core_temp.py
           rm scripts/_patch_paper_acceptance_cli_temp.py
           rm scripts/_patch_paper_acceptance_tests_temp.py
           rm scripts/_patch_paper_acceptance_docs_temp.py
-          rm scripts/_patch_paper_acceptance_ci_temp.py
-          rm .github/workflows/temporary-paper-acceptance-patch.yml
       - name: Commit generated files
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
+          git add \
+            src/ibmd/operations/paper_acceptance.py \
+            scripts/run_paper_acceptance_drill.py \
+            tester/target_paper_acceptance_drill_tester.py \
+            docs/paper-acceptance-drill-runbook.md \
+            scripts/_patch_paper_acceptance_core_temp.py \
+            scripts/_patch_paper_acceptance_cli_temp.py \
+            scripts/_patch_paper_acceptance_tests_temp.py \
+            scripts/_patch_paper_acceptance_docs_temp.py
           git diff --cached --quiet || git commit -m "Add non-interactive paper acceptance runner"
           git push origin HEAD:agent/paper-acceptance-runner
