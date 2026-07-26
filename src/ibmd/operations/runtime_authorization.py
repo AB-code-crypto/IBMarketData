@@ -162,11 +162,15 @@ def verify_runtime_start_authorization(
             catalog_bundle_hash=bootstrap.catalog_bundle_hash,
             observed_at_utc=observed,
         )
+    except TargetAcceptanceError as exc:
+        raise RuntimeAuthorizationError(
+            "runtime authorization acceptance evidence changed or invalid: "
+            f"{exc}"
+        ) from exc
     except (
         CatalogError,
         CutoverPreflightError,
         OSError,
-        TargetAcceptanceError,
         TargetBootstrapError,
         ValueError,
     ) as exc:
