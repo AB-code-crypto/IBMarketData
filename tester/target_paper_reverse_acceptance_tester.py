@@ -37,6 +37,10 @@ from ibmd.public_contracts.execution import (
     DailyRiskStateV1,
     DailyRiskStatus,
 )
+from ibmd.public_contracts.protection import (
+    ProtectionSetStatus,
+    ProtectiveOrderState,
+)
 from tester.target_execution_liquidation_tester import live_protection
 from tester.target_execution_protective_submit_tester import (
     ACCOUNT,
@@ -247,11 +251,19 @@ class PaperReverseDrillPreparerTest(unittest.TestCase):
         source.protection = replace(
             source.protection,
             orders=tuple(
-                replace(order, state=order.state.PLANNED)
+                replace(
+                    order,
+                    state=ProtectiveOrderState.UNKNOWN_OUTCOME,
+                    updated_at_utc="2026-07-27T10:00:03Z",
+                    failure_reason="test_stop_unknown",
+                )
                 if order.kind.value == "STOP_LOSS"
                 else order
                 for order in source.protection.orders
             ),
+            status=ProtectionSetStatus.UNPROTECTED,
+            updated_at_utc="2026-07-27T10:00:03Z",
+            blocking_reason="test_stop_unknown",
         )
         with self.assertRaisesRegex(
             PaperReverseDrillPreparationError,
