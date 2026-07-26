@@ -1,0 +1,32 @@
+name: Temporary DAILY_HALT policy support patch
+
+on:
+  push:
+    branches:
+      - agent/paper-daily-halt-acceptance
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/paper-daily-halt-acceptance
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          python scripts/_patch_daily_halt_policy_support_temp.py
+          rm scripts/_patch_daily_halt_policy_support_temp.py
+          rm .github/workflows/temporary-daily-halt-policy-patch.yml
+      - run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --quiet || git commit -m "Add DAILY_HALT policy acceptance support"
+          git push origin HEAD:agent/paper-daily-halt-acceptance
