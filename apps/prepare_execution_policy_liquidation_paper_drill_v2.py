@@ -38,6 +38,7 @@ from ibmd.public_contracts.liquidation import LiquidationReason
 SERVICE_NAME = "execution"
 _SUPPORTED_REASONS = {
     LiquidationReason.DAILY_FLAT,
+    LiquidationReason.DAILY_HALT,
     LiquidationReason.ROLLOVER,
 }
 
@@ -49,7 +50,8 @@ class PolicyLiquidationDrillError(RuntimeError):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Evaluate one explicit DAILY_FLAT or ROLLOVER condition at a "
+            "Evaluate one explicit DAILY_FLAT, DAILY_HALT or ROLLOVER "
+            "condition at a "
             "logical UTC time and persist only that durable liquidation trigger. "
             "This paper-drill entrypoint is broker-free."
         )

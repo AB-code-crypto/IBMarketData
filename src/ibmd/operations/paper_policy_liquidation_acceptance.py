@@ -22,6 +22,7 @@ from ibmd.public_contracts.liquidation import LiquidationReason
 
 _SUPPORTED = {
     LiquidationReason.DAILY_FLAT,
+    LiquidationReason.DAILY_HALT,
     LiquidationReason.ROLLOVER,
 }
 _SOURCE_SCHEMAS = {
