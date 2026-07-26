@@ -27,7 +27,7 @@ from ibmd.operations.cutover_preflight import (
 )
 
 T0 = "2026-07-27T10:00:00Z"
-T1 = "2026-07-27T10:05:00Z"
+T1 = "2026-07-27T10:05:00.000000Z"
 ACCOUNT = "DU000000"
 DEPLOYMENT = "paper-soak-account1"
 APPLICATION = "cutover-test"
