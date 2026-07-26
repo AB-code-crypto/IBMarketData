@@ -6,7 +6,6 @@ from pathlib import Path
 
 from ibmd.foundation.time import format_utc, utc_now
 from ibmd.operations.supervisor import (
-    ManagedServiceV1,
     SupervisorPolicyV1,
     SupervisorServiceSpecV1,
     TargetStackSupervisor,
@@ -59,6 +58,8 @@ class FakeLauncher:
 
     def launch(self, spec):
         self.events.append(f"launch:{spec.service_name}")
+        spec.health_file.parent.mkdir(parents=True, exist_ok=True)
+        spec.health_file.touch()
         process = FakeProcess(
             1_000 + len(self.processes),
             self.events,
