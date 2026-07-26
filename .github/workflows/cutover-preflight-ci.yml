@@ -127,13 +127,30 @@ jobs:
           PY
 
       - name: Issue paper-soak authorization through preflight
+        id: paper_preflight
+        continue-on-error: true
         run: |
+          set -o pipefail
           python scripts/run_target_cutover_preflight.py \
             --mode PAPER_SOAK \
             --issue-authorization \
             --allow-unqualified-session \
             --legacy-runtime-dir /tmp/no-legacy-runtime \
-            > /tmp/cutover-preflight.json
+            2>&1 | tee /tmp/cutover-preflight.json
+
+      - name: Upload paper preflight diagnostics
+        if: steps.paper_preflight.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cutover-preflight-result
+          path: /tmp/cutover-preflight.json
+
+      - name: Fail when paper preflight failed
+        if: steps.paper_preflight.outcome == 'failure'
+        run: exit 1
+
+      - name: Validate issued paper-soak authorization
+        run: |
           python - <<'PY'
           import json
           from pathlib import Path
