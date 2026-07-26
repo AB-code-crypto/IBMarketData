@@ -1,0 +1,141 @@
+name: Paper daily halt acceptance CI
+
+on:
+  pull_request:
+    branches:
+      - agent/architecture-rewrite
+      - master
+  push:
+    branches:
+      - agent/paper-daily-halt-acceptance
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-paper-daily-halt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    env:
+      IB_HOST: 127.0.0.1
+      IB_PORT: "7497"
+      IB_CLIENT_ID: "200"
+      IB_ACCOUNT_ID: DU000000
+      IBMD_ENVIRONMENT: paper
+      IBMD_DEPLOYMENT_ID: paper-drill-daily-halt-ci
+      IBMD_DATA_ROOT: /tmp/ibmd-daily-halt-ci/account1
+      IBMD_APPLICATION_VERSION: ci
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install ruff
+
+      - name: Verify architecture boundaries
+        run: python scripts/verify_target_architecture.py .
+
+      - name: Run daily halt, risk and liquidation tests
+        id: tests
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python -m unittest \
+            tester.target_paper_daily_halt_acceptance_tester \
+            tester.target_execution_daily_risk_tester \
+            tester.target_execution_liquidation_trigger_tester \
+            tester.target_paper_policy_liquidation_acceptance_tester \
+            tester.target_paper_liquidation_acceptance_tester \
+            tester.target_execution_liquidation_tester \
+            tester.target_execution_paper_liquidation_tester \
+            -v 2>&1 | tee /tmp/daily-halt-tests.txt
+
+      - name: Upload daily halt test diagnostics
+        if: steps.tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-daily-halt-tests
+          path: /tmp/daily-halt-tests.txt
+
+      - name: Fail when daily halt tests failed
+        if: steps.tests.outcome == 'failure'
+        run: exit 1
+
+      - name: Validate on a fresh target deployment
+        run: |
+          rm -rf /tmp/ibmd-daily-halt-ci
+          python scripts/bootstrap_target_deployment.py \
+            --target-root "$IBMD_DATA_ROOT" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --apply
+          python apps/prepare_execution_daily_halt_paper_drill_v2.py \
+            --validate-store-only
+          python scripts/run_paper_daily_halt_acceptance.py \
+            --validate-only \
+            > /tmp/daily-halt-validation.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          value = json.loads(
+              Path('/tmp/daily-halt-validation.json').read_text()
+          )
+          assert value['paper_daily_halt_dependencies_compatible'] is True
+          assert value['synthetic_market_mark_only'] is True
+          assert value['real_owned_fill_evidence_only'] is True
+          assert value['interactive_confirmation_required'] is False
+          assert value['automatic_retry_enabled'] is False
+          assert float(value['target_pnl']) == 500.0
+          PY
+
+      - name: Prove synthetic preparer is broker-free and runner non-interactive
+        run: |
+          ! grep -R "placeOrder\|cancelOrder\|ib_async" \
+            apps/prepare_execution_daily_halt_paper_drill_v2.py \
+            src/ibmd/execution/application/paper_daily_halt_drill.py
+          ! grep -R "Read-Host\|input(" \
+            scripts/run_paper_daily_halt_acceptance.py \
+            src/ibmd/operations/paper_daily_halt_acceptance.py
+
+      - name: Compile daily halt files
+        run: |
+          python -m compileall -q \
+            apps/prepare_execution_daily_halt_paper_drill_v2.py \
+            scripts/run_paper_daily_halt_acceptance.py \
+            src/ibmd/execution/application/paper_daily_halt_drill.py \
+            src/ibmd/operations/paper_daily_halt_acceptance.py \
+            tester/target_paper_daily_halt_acceptance_tester.py
+
+      - name: Lint daily halt files
+        id: lint
+        continue-on-error: true
+        run: |
+          ruff check \
+            --select E4,E7,E9,F \
+            --ignore E402 \
+            apps/prepare_execution_daily_halt_paper_drill_v2.py \
+            scripts/run_paper_daily_halt_acceptance.py \
+            src/ibmd/execution/application/paper_daily_halt_drill.py \
+            src/ibmd/operations/paper_daily_halt_acceptance.py \
+            tester/target_paper_daily_halt_acceptance_tester.py \
+            2>&1 | tee /tmp/daily-halt-lint.txt
+
+      - name: Upload daily halt lint diagnostics
+        if: steps.lint.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-daily-halt-lint
+          path: /tmp/daily-halt-lint.txt
+
+      - name: Fail when daily halt lint failed
+        if: steps.lint.outcome == 'failure'
+        run: exit 1
