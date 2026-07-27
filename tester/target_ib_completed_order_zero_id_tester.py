@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import unittest
-from dataclasses import replace
 from types import SimpleNamespace
 
 from ibmd.execution.domain.broker_attempt import apply_broker_observation
@@ -11,6 +10,7 @@ from ibmd.execution.domain.ib_reconciliation import (
 from ibmd.execution.domain.liquidation import (
     apply_close_observation,
     mark_close_submitting,
+    mark_protective_cancel_requested,
     plan_close_attempt,
 )
 from ibmd.execution.domain.liquidation_reconciliation import (
@@ -21,13 +21,13 @@ from ibmd.execution.domain.protective_submission import (
     mark_protective_order_submitting,
     reconcile_protective_order_snapshot,
 )
-from ibmd.execution.domain.liquidation import mark_protective_cancel_requested
 from ibmd.foundation.identity import new_id
 from ibmd.ib_gateway.broker_reconciliation_mapping import (
     order_fact_from_ib_trade,
 )
 from ibmd.public_contracts.broker_execution import (
     BrokerObservationOutcome,
+    BrokerOrderObservationV1,
     BrokerOrderSide,
 )
 from ibmd.public_contracts.broker_reconciliation import (
@@ -63,10 +63,6 @@ def completed_fact(
     order_type: str,
     broker_order_id: int | None = None,
     broker_perm_id: int | None = 9_001,
-    status: str = "Cancelled",
-    completed_status: str = "Cancelled",
-    filled_qty: int = 0,
-    remaining_qty: int = 1,
 ) -> BrokerOrderFactV1:
     return BrokerOrderFactV1(
         account_id=ACCOUNT,
@@ -79,12 +75,12 @@ def completed_fact(
         side=side,
         order_type=order_type,
         requested_qty=1,
-        filled_qty=filled_qty,
-        remaining_qty=remaining_qty,
-        status=status,
+        filled_qty=0,
+        remaining_qty=1,
+        status="Cancelled",
         source=BrokerOrderSource.COMPLETED,
         observed_at_utc=T3,
-        completed_status=completed_status,
+        completed_status="Cancelled",
         warning_text=None,
     )
 
@@ -149,14 +145,12 @@ class CompletedOrderZeroIdMappingTest(unittest.TestCase):
             order_ref="IBMD:protection_set_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:SL",
             side=BrokerOrderSide.SELL,
             order_type="STP",
-            broker_order_id=None,
             broker_perm_id=None,
         )
         second = completed_fact(
             order_ref="IBMD:protection_set_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:TP",
             side=BrokerOrderSide.SELL,
             order_type="LMT",
-            broker_order_id=None,
             broker_perm_id=None,
         )
         value = snapshot(first, second)
@@ -222,15 +216,6 @@ class CompletedOrderZeroIdDomainTest(unittest.TestCase):
             broker_order_id=7_001,
             observed_at_utc=T1,
         )
-        live = apply_protective_observation(
-            protection=submitting,
-            kind=ProtectiveOrderKind.STOP_LOSS,
-            observation=SimpleNamespace(),
-            position_open=True,
-        )
-        # Build the LIVE state through the public observation contract.
-        from ibmd.public_contracts.broker_execution import BrokerOrderObservationV1
-
         live = apply_protective_observation(
             protection=submitting,
             kind=ProtectiveOrderKind.STOP_LOSS,
