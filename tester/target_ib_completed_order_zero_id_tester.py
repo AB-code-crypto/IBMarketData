@@ -202,7 +202,7 @@ class CompletedOrderZeroIdDomainTest(unittest.TestCase):
             result.observation.outcome,
             BrokerObservationOutcome.CANCELLED,
         )
-        self.assertIsNone(result.observation.broker_order_id)
+        self.assertEqual(result.observation.broker_order_id, ORDER_ID)
         updated = apply_broker_observation(
             current,
             observation=result.observation,
