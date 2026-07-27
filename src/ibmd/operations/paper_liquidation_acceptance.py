@@ -533,7 +533,7 @@ class PaperLiquidationAcceptanceRunner:
             )
         return text
 
-    def _load_entry_summary(self) -> tuple[str, str, str]:
+    def _load_entry_summary(self) -> tuple[str, str]:
         path = self.policy.paths.entry_summary
         try:
             value = read_json_object(path)
@@ -595,8 +595,28 @@ class PaperLiquidationAcceptanceRunner:
                 field_name="position_episode_id",
                 stage="entry-summary",
             ),
-            str(protection.get("take_profit_state")),
         )
+
+    def _entry_take_profit_state(self) -> str:
+        try:
+            value = read_json_object(self.policy.paths.entry_summary)
+        except Exception as exc:
+            raise PaperLiquidationAcceptanceError(
+                f"cannot re-read entry acceptance summary: {exc}",
+                stage="entry-summary",
+            ) from exc
+        protection = self._mapping(
+            value.get("protection"),
+            field_name="protection",
+            stage="entry-summary",
+        )
+        state = str(protection.get("take_profit_state") or "").strip()
+        if state not in {"LIVE", "NOT_REQUIRED"}:
+            raise PaperLiquidationAcceptanceError(
+                "entry summary has invalid TAKE PROFIT state",
+                stage="entry-summary",
+            )
+        return state
 
     def _request_arguments(
         self,
@@ -697,11 +717,8 @@ class PaperLiquidationAcceptanceRunner:
     def run(self) -> PaperLiquidationAcceptanceResultV1:
         started = format_utc(self.clock())
         self.state_source.validate_schema()
-        (
-            source_drill_id,
-            position_episode_id,
-            entry_take_profit_state,
-        ) = self._load_entry_summary()
+        source_drill_id, position_episode_id = self._load_entry_summary()
+        entry_take_profit_state = self._entry_take_profit_state()
         self.artifacts.write_json(
             "configuration",
             {
