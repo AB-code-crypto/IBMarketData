@@ -42,13 +42,43 @@ jobs:
           from pathlib import Path
           path = Path('scripts/_apply_completed_order_zero_id_fix.py')
           text = path.read_text(encoding='utf-8')
-          old = '    if actual != count:\n'
-          new = '    if actual < count:\n'
-          if text.count(old) != 1:
-              raise SystemExit('cannot relax one-off patch occurrence guard')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          replacements = {
+              '    if actual != count:\n': '    if actual < count:\n',
+              '    if actual < minimum:\n': '    if actual < 1:\n',
+          }
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f'cannot adjust patch guard: {old!r}')
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
           PY
             python scripts/_apply_completed_order_zero_id_fix.py
+            python - <<'PY'
+          from pathlib import Path
+          path = Path('src/ibmd/execution/domain/protection.py')
+          text = path.read_text(encoding='utf-8')
+          old = (
+              '        broker_order_id=observation.broker_order_id,\n'
+              '        broker_perm_id=observation.broker_perm_id,\n'
+          )
+          new = (
+              '        broker_order_id=(\n'
+              '            observation.broker_order_id\n'
+              '            if observation.broker_order_id is not None\n'
+              '            else order.broker_order_id\n'
+              '        ),\n'
+              '        broker_perm_id=(\n'
+              '            observation.broker_perm_id\n'
+              '            if observation.broker_perm_id is not None\n'
+              '            else order.broker_perm_id\n'
+              '        ),\n'
+          )
+          if text.count(old) != 1:
+              raise SystemExit(
+                  'normal protective observation identity block not found exactly once'
+              )
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add \
