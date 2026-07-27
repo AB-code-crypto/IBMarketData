@@ -28,26 +28,43 @@ jobs:
           python-version: "3.12"
 
       - name: Apply patch once
+        id: patch
+        continue-on-error: true
         run: |
-          if grep -q "broker_order_id: int | None" \
-            src/ibmd/public_contracts/broker_reconciliation.py; then
-            echo "Production patch is already present"
-            exit 0
-          fi
-          python scripts/_apply_completed_order_zero_id_fix.py
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            src/ibmd/public_contracts/broker_reconciliation.py \
-            src/ibmd/ib_gateway/broker_reconciliation_mapping.py \
-            src/ibmd/execution/domain/ib_reconciliation.py \
-            src/ibmd/execution/domain/protective_submission.py \
-            src/ibmd/execution/domain/liquidation_reconciliation.py \
-            src/ibmd/execution/domain/broker_attempt.py \
-            src/ibmd/execution/domain/protection.py \
-            src/ibmd/execution/domain/liquidation.py
-          git commit -m "Handle IB completed orders without API order id"
-          git push origin HEAD:agent/ib-completed-order-zero-id
+          set -o pipefail
+          {
+            if grep -q "broker_order_id: int | None" \
+              src/ibmd/public_contracts/broker_reconciliation.py; then
+              echo "Production patch is already present"
+              exit 0
+            fi
+            python scripts/_apply_completed_order_zero_id_fix.py
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add \
+              src/ibmd/public_contracts/broker_reconciliation.py \
+              src/ibmd/ib_gateway/broker_reconciliation_mapping.py \
+              src/ibmd/execution/domain/ib_reconciliation.py \
+              src/ibmd/execution/domain/protective_submission.py \
+              src/ibmd/execution/domain/liquidation_reconciliation.py \
+              src/ibmd/execution/domain/broker_attempt.py \
+              src/ibmd/execution/domain/protection.py \
+              src/ibmd/execution/domain/liquidation.py
+            git commit -m "Handle IB completed orders without API order id"
+            git push origin HEAD:agent/ib-completed-order-zero-id
+          } 2>&1 | tee completed-order-patch.log
+
+      - name: Upload patch diagnostics
+        if: steps.patch.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: completed-order-zero-id-patch
+          path: completed-order-patch.log
+          if-no-files-found: error
+
+      - name: Fail when patch application failed
+        if: steps.patch.outcome == 'failure'
+        run: exit 1
 
   validate-liquidation:
     needs: apply-production-patch
