@@ -7,7 +7,7 @@ one protected position:
 
 ```text
 cancel TAKE PROFIT
-cancel STOP
+cancel STOP when it remains LIVE after reconciliation
 submit liquidation MARKET close
 ```
 
@@ -62,8 +62,9 @@ For the normal two-order protective policy:
 liquidation request, broker-free
 → cancel TAKE PROFIT and terminate child
 → reconcile TAKE PROFIT cancellation without another cancelOrder
-→ cancel STOP and terminate child
-→ reconcile STOP cancellation without another cancelOrder
+→ if STOP remains LIVE, cancel it and terminate child
+→ otherwise accept broker-confirmed OCA sibling cancellation
+→ reconcile any explicit STOP cancellation without another cancelOrder
 → submit one MARKET close and terminate child
 → reconcile the same liquidation attempt without another placeOrder
 → independent position feed proves FLAT
@@ -146,13 +147,15 @@ All commands, child outputs and checkpoints are stored below:
 A successful `summary.json` proves:
 
 ```text
-restart_actions =
-  CANCEL_TAKE_PROFIT
-  CANCEL_STOP
-  SUBMIT_MARKET_CLOSE
+restart_actions = either
+  CANCEL_TAKE_PROFIT, CANCEL_STOP, SUBMIT_MARKET_CLOSE
+or
+  CANCEL_TAKE_PROFIT, SUBMIT_MARKET_CLOSE
+when TWS auto-cancels the OCA sibling STOP
 
-intentional_process_terminations = 3
-broker_mutation_count             = 3
+intentional_process_terminations = 2 or 3
+broker_mutation_count             = 2 or 3
+protective_cancel_mode             = EXPLICIT_BOTH or OCA_AUTO_CANCELLED_STOP
 all_resume_mutations_false        = true
 attempt_no                        = 1
 restart_adoption_proven           = true

@@ -460,12 +460,95 @@ class PaperLiquidationRestartAcceptanceTest(unittest.TestCase):
             )
             self.assertEqual(payload["intentional_process_terminations"], 3)
             self.assertEqual(payload["broker_mutation_count"], 3)
+            self.assertEqual(payload["protective_cancel_mode"], "EXPLICIT_BOTH")
             self.assertTrue(payload["all_resume_mutations_false"])
             self.assertTrue(payload["restart_adoption_proven"])
             self.assertEqual(payload["attempt_no"], 1)
             self.assertTrue(payload["state"]["fully_closed"])
             self.assertTrue(payload["flat_proof"]["accepted"])
             self.assertTrue((artifacts.directory / "summary.json").is_file())
+
+    def test_oca_auto_cancelled_stop_is_adopted_without_repeat_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            summary = root / "entry-summary.json"
+            write_entry_summary(
+                summary,
+                schema_name="PaperRestartAcceptanceResult",
+            )
+            source = FakeStateSource(
+                [
+                    state(),
+                    state(next_action="RECONCILE_EXITS"),
+                    state(
+                        operation_state="PREPARING",
+                        next_action="SUBMIT_MARKET_CLOSE",
+                        exposed=0,
+                    ),
+                    state(
+                        operation_state="SUBMITTING",
+                        next_action="RECONCILE_MARKET_CLOSE",
+                        attempt_state="SUBMITTING",
+                        exposed=0,
+                    ),
+                    state(
+                        operation_state="RECONCILING",
+                        next_action="WAIT_FOR_FLAT",
+                        attempt_state="FILLED",
+                        exposed=0,
+                    ),
+                    closed_state(),
+                    closed_state(),
+                ]
+            )
+            executor = FakeNormalExecutor(
+                [
+                    request_payload(),
+                    resume_payload(
+                        action="SUBMIT_MARKET_CLOSE",
+                        operation_state="PREPARING",
+                    ),
+                    resume_payload(
+                        action="WAIT_FOR_FLAT",
+                        operation_state="RECONCILING",
+                        attempt_state="FILLED",
+                    ),
+                    resume_payload(
+                        action="NONE",
+                        operation_state="SUCCEEDED",
+                        attempt_state="FILLED",
+                    ),
+                    resume_payload(
+                        action="NONE",
+                        operation_state="SUCCEEDED",
+                        attempt_state="FILLED",
+                    ),
+                ]
+            )
+            crash = FakeCrashExecutor()
+            result = PaperLiquidationRestartAcceptanceRunner(
+                policy=policy(root, summary),
+                command_executor=executor,
+                crash_executor=crash,
+                state_source=source,
+                artifacts=PaperAcceptanceArtifactStore(root / "artifacts"),
+                sleeper=lambda _seconds: None,
+            ).run()
+            payload = result.to_dict()
+            self.assertEqual(
+                crash.actions,
+                ["CANCEL_TAKE_PROFIT", "SUBMIT_MARKET_CLOSE"],
+            )
+            self.assertEqual(payload["intentional_process_terminations"], 2)
+            self.assertEqual(payload["broker_mutation_count"], 2)
+            self.assertEqual(
+                payload["protective_cancel_mode"],
+                "OCA_AUTO_CANCELLED_STOP",
+            )
+            self.assertTrue(payload["all_resume_mutations_false"])
+            self.assertTrue(payload["restart_adoption_proven"])
+            self.assertTrue(payload["state"]["fully_closed"])
+            self.assertTrue(payload["flat_proof"]["accepted"])
 
     def test_resume_mutation_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

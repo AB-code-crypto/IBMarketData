@@ -384,6 +384,7 @@ class PaperLiquidationRestartAcceptanceResultV1:
     finished_at_utc: str
     resume_invocation_count: int
     checkpoints: tuple[LiquidationRestartCheckpointV1, ...]
+    protective_cancel_mode: str
     state: LiquidationStateObservationV1
     flat_proof: FlatPositionProofV1
     artifact_directory: str
@@ -405,6 +406,7 @@ class PaperLiquidationRestartAcceptanceResultV1:
             "intentional_process_terminations": len(self.checkpoints),
             "broker_mutation_count": len(self.checkpoints),
             "restart_actions": actions,
+            "protective_cancel_mode": self.protective_cancel_mode,
             "all_resume_mutations_false": True,
             "attempt_no": 1,
             "restart_adoption_proven": True,
@@ -712,27 +714,49 @@ class PaperLiquidationRestartAcceptanceRunner(
                 stage="liquidation-restart",
                 broker_exposure_possible=True,
             )
-        expected_actions = {
-            "CANCEL_STOP",
-            "SUBMIT_MARKET_CLOSE",
-        }
         entry_summary = read_json_object(self.policy.paths.entry_summary)
         protection = self._mapping(
             entry_summary.get("protection"),
             field_name="protection",
             stage="entry-summary",
         )
-        if protection.get("take_profit_state") == "LIVE":
-            expected_actions.add("CANCEL_TAKE_PROFIT")
-        actual_actions = {item.action for item in checkpoints}
-        if actual_actions != expected_actions:
-            raise PaperLiquidationAcceptanceError(
-                "liquidation restart checkpoints differ from the expected "
-                f"actions: expected={sorted(expected_actions)}, "
-                f"actual={sorted(actual_actions)}",
-                stage="liquidation-restart",
-                broker_exposure_possible=True,
-            )
+        take_profit_live = protection.get("take_profit_state") == "LIVE"
+        actual_actions = [item.action for item in checkpoints]
+        if take_profit_live:
+            explicit_actions = [
+                "CANCEL_TAKE_PROFIT",
+                "CANCEL_STOP",
+                "SUBMIT_MARKET_CLOSE",
+            ]
+            oca_actions = [
+                "CANCEL_TAKE_PROFIT",
+                "SUBMIT_MARKET_CLOSE",
+            ]
+            if actual_actions == explicit_actions:
+                protective_cancel_mode = "EXPLICIT_BOTH"
+            elif actual_actions == oca_actions:
+                protective_cancel_mode = "OCA_AUTO_CANCELLED_STOP"
+            else:
+                raise PaperLiquidationAcceptanceError(
+                    "liquidation restart checkpoints do not prove an explicit "
+                    "or OCA protective cancellation path: "
+                    f"actual={actual_actions}",
+                    stage="liquidation-restart",
+                    broker_exposure_possible=True,
+                )
+        else:
+            expected_actions = [
+                "CANCEL_STOP",
+                "SUBMIT_MARKET_CLOSE",
+            ]
+            if actual_actions != expected_actions:
+                raise PaperLiquidationAcceptanceError(
+                    "STOP-only liquidation restart checkpoints differ from the "
+                    f"expected actions: actual={actual_actions}",
+                    stage="liquidation-restart",
+                    broker_exposure_possible=True,
+                )
+            protective_cancel_mode = "STOP_ONLY"
         if attempt_id is None or order_ref is None:
             raise PaperLiquidationAcceptanceError(
                 "closed liquidation has no durable MARKET-close attempt",
@@ -797,6 +821,7 @@ class PaperLiquidationRestartAcceptanceRunner(
             finished_at_utc=format_utc(self.clock()),
             resume_invocation_count=resume_count + 1,
             checkpoints=tuple(checkpoints),
+            protective_cancel_mode=protective_cancel_mode,
             state=repeated,
             flat_proof=flat_proof,
             artifact_directory=str(self.artifacts.directory),

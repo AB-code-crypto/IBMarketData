@@ -313,19 +313,53 @@ def _validate_liquidation_restart(
     if _positive_int(value.get("attempt_no"), field_name="attempt_no") != 1:
         raise TargetAcceptanceError("liquidation restart attempt_no must equal 1")
     actions = value.get("restart_actions")
-    if not isinstance(actions, list) or actions != [
-        "CANCEL_TAKE_PROFIT",
-        "CANCEL_STOP",
-        "SUBMIT_MARKET_CLOSE",
-    ]:
+    if not isinstance(actions, list):
         raise TargetAcceptanceError(
-            "liquidation restart actions must prove TP cancel, STOP cancel and close"
+            "liquidation restart actions must be a list"
+        )
+    mode = _required_text(
+        value.get("protective_cancel_mode"),
+        field_name="protective_cancel_mode",
+    )
+    expected_by_mode = {
+        "EXPLICIT_BOTH": [
+            "CANCEL_TAKE_PROFIT",
+            "CANCEL_STOP",
+            "SUBMIT_MARKET_CLOSE",
+        ],
+        "OCA_AUTO_CANCELLED_STOP": [
+            "CANCEL_TAKE_PROFIT",
+            "SUBMIT_MARKET_CLOSE",
+        ],
+        "STOP_ONLY": [
+            "CANCEL_STOP",
+            "SUBMIT_MARKET_CLOSE",
+        ],
+    }
+    expected_actions = expected_by_mode.get(mode)
+    if expected_actions is None or actions != expected_actions:
+        raise TargetAcceptanceError(
+            "liquidation restart actions differ from protective_cancel_mode"
+        )
+    terminations = _positive_int(
+        value.get("intentional_process_terminations"),
+        field_name="intentional_process_terminations",
+    )
+    mutations = _positive_int(
+        value.get("broker_mutation_count"),
+        field_name="broker_mutation_count",
+    )
+    if terminations != len(actions) or mutations != len(actions):
+        raise TargetAcceptanceError(
+            "liquidation restart mutation counts must equal restart actions"
         )
     facts.update(
         {
             "restart_adoption_proven": True,
             "attempt_no": 1,
             "restart_actions": list(actions),
+            "protective_cancel_mode": mode,
+            "intentional_process_terminations": terminations,
         }
     )
     return (

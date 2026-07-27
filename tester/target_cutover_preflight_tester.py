@@ -114,6 +114,9 @@ def summary(gate: AcceptanceGate) -> dict:
                 "CANCEL_STOP",
                 "SUBMIT_MARKET_CLOSE",
             ],
+            "protective_cancel_mode": "EXPLICIT_BOTH",
+            "intentional_process_terminations": 3,
+            "broker_mutation_count": 3,
         }
     if gate == AcceptanceGate.REVERSE:
         return {

@@ -111,6 +111,22 @@ def _validation_payload(
             "CANCEL_STOP",
             "SUBMIT_MARKET_CLOSE",
         ],
+        "oca_sibling_auto_cancel_supported": True,
+        "restart_action_variants": [
+            [
+                "CANCEL_TAKE_PROFIT",
+                "CANCEL_STOP",
+                "SUBMIT_MARKET_CLOSE",
+            ],
+            [
+                "CANCEL_TAKE_PROFIT",
+                "SUBMIT_MARKET_CLOSE",
+            ],
+            [
+                "CANCEL_STOP",
+                "SUBMIT_MARKET_CLOSE",
+            ],
+        ],
         "interactive_confirmation_required": False,
         "automatic_retry_enabled": False,
         "paper_account_left_flat_after_success": True,
