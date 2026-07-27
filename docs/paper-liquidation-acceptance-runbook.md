@@ -12,9 +12,9 @@ then proves:
 
 ```text
 one durable MANUAL_EMERGENCY liquidation trigger
-→ cancel TAKE PROFIT once
+→ cancel TAKE PROFIT once when it is LIVE
 → prove terminal TAKE PROFIT state
-→ cancel STOP once
+→ accept an OCA-auto-cancelled STOP or cancel STOP once
 → prove terminal STOP state
 → submit one MARKET close
 → reconcile the same attempt
@@ -81,18 +81,23 @@ No `Read-Host`, `input()` or manual direction confirmation is used.
 ## Broker-action budget
 
 One child invocation performs at most one broker mutation. A fresh protected
-position must report exactly:
+position must report one MARKET close and one of these protective paths:
 
 ```text
-CANCEL_TAKE_PROFIT      = 1
-CANCEL_STOP             = 1
-SUBMIT_MARKET_CLOSE     = 1
-broker_mutation_count   = 3
-liquidation attempt_no  = 1
+EXPLICIT_BOTH:
+  CANCEL_TAKE_PROFIT    = 1
+  CANCEL_STOP           = 1
+  broker_mutation_count = 3 including MARKET close
+
+OCA_AUTO_CANCELLED_STOP:
+  CANCEL_TAKE_PROFIT    = 1
+  CANCEL_STOP           = 0
+  broker_mutation_count = 2 including MARKET close
 ```
 
-A resumed operation may report fewer mutations because already persisted actions
-are reconciled rather than repeated.
+Both paths require terminal evidence for both protective orders, one FILLED
+durable liquidation attempt and independent FLAT proof. A resumed completed
+operation may recover its summary with zero new broker mutations.
 
 ## Artifacts
 

@@ -218,14 +218,38 @@ def _validate_liquidation(
 ) -> tuple[str, str, dict[str, Any]]:
     _schema(value, "PaperLiquidationAcceptanceResult")
     facts = _closed_position_facts(value)
-    if _positive_int(
+    explicit_market_close_count = _non_negative_int(
         value.get("market_close_submission_count"),
         field_name="market_close_submission_count",
-    ) != 1:
+    )
+    durable_market_close_count = _positive_int(
+        value.get(
+            "durable_market_close_attempt_count",
+            explicit_market_close_count,
+        ),
+        field_name="durable_market_close_attempt_count",
+    )
+    recovered = value.get("recovered_from_durable_state") is True
+    if durable_market_close_count != 1:
+        raise TargetAcceptanceError(
+            "durable_market_close_attempt_count must equal 1"
+        )
+    if recovered:
+        if explicit_market_close_count != 0:
+            raise TargetAcceptanceError(
+                "recovered liquidation must not report a new MARKET close"
+            )
+    elif explicit_market_close_count != 1:
         raise TargetAcceptanceError(
             "market_close_submission_count must equal 1"
         )
-    facts["market_close_submission_count"] = 1
+    facts.update(
+        {
+            "market_close_submission_count": explicit_market_close_count,
+            "durable_market_close_attempt_count": 1,
+            "recovered_from_durable_state": recovered,
+        }
+    )
     return (
         _finished_at(value),
         _required_text(

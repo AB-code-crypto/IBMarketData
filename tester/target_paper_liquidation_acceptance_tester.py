@@ -278,6 +278,114 @@ class PaperLiquidationAcceptanceTest(unittest.TestCase):
             self.assertTrue((artifacts.directory / "summary.json").is_file())
             self.assertEqual(executor.calls[-1][0], "liquidation-idempotency")
 
+    def test_oca_auto_cancelled_stop_is_valid_fresh_liquidation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            summary = root / "entry-summary.json"
+            write_entry_summary(summary)
+            artifacts = PaperAcceptanceArtifactStore(root / "artifacts")
+            executor = FakeExecutor(
+                [
+                    request_payload(),
+                    paper_payload(action="CANCEL_TAKE_PROFIT", mutation=True),
+                    paper_payload(
+                        action="SUBMIT_MARKET_CLOSE",
+                        mutation=True,
+                        operation_state="RECONCILING",
+                        attempt_state="FILLED",
+                    ),
+                    paper_payload(
+                        action="WAIT_FOR_FLAT",
+                        mutation=False,
+                        operation_state="SUCCEEDED",
+                        attempt_state="FILLED",
+                        episode_closed=True,
+                    ),
+                    paper_payload(
+                        action="NONE",
+                        mutation=False,
+                        operation_state="SUCCEEDED",
+                        attempt_state="FILLED",
+                        episode_closed=True,
+                    ),
+                ]
+            )
+            source = FakeStateSource(
+                [
+                    state(),
+                    state(
+                        operation_state="PREPARING",
+                        next_action="SUBMIT_MARKET_CLOSE",
+                        exposed=0,
+                    ),
+                    state(
+                        operation_state="RECONCILING",
+                        next_action="WAIT_FOR_FLAT",
+                        attempt_state="FILLED",
+                        exposed=0,
+                    ),
+                    closed_state(),
+                    closed_state(),
+                ]
+            )
+            result = PaperLiquidationAcceptanceRunner(
+                policy=policy(root, summary),
+                command_executor=executor,
+                state_source=source,
+                artifacts=artifacts,
+                sleeper=lambda _seconds: None,
+            ).run()
+            self.assertEqual(result.take_profit_cancel_count, 1)
+            self.assertEqual(result.stop_cancel_count, 0)
+            self.assertEqual(result.market_close_submission_count, 1)
+            self.assertEqual(result.durable_market_close_attempt_count, 1)
+            self.assertEqual(
+                result.protective_cancel_mode,
+                "OCA_AUTO_CANCELLED_STOP",
+            )
+            self.assertFalse(result.recovered_from_durable_state)
+            self.assertEqual(result.to_dict()["broker_mutation_count"], 2)
+
+    def test_closed_operation_can_recover_summary_without_broker_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            summary = root / "entry-summary.json"
+            write_entry_summary(summary)
+            artifacts = PaperAcceptanceArtifactStore(root / "artifacts")
+            executor = FakeExecutor(
+                [
+                    request_payload(created=False),
+                    paper_payload(
+                        action="NONE",
+                        mutation=False,
+                        operation_state="SUCCEEDED",
+                        attempt_state="FILLED",
+                        episode_closed=True,
+                    ),
+                ]
+            )
+            source = FakeStateSource([closed_state(), closed_state()])
+            result = PaperLiquidationAcceptanceRunner(
+                policy=policy(root, summary),
+                command_executor=executor,
+                state_source=source,
+                artifacts=artifacts,
+                sleeper=lambda _seconds: None,
+            ).run()
+            self.assertEqual(result.invocation_count, 0)
+            self.assertEqual(result.take_profit_cancel_count, 0)
+            self.assertEqual(result.stop_cancel_count, 0)
+            self.assertEqual(result.market_close_submission_count, 0)
+            self.assertEqual(result.durable_market_close_attempt_count, 1)
+            self.assertTrue(result.recovered_from_durable_state)
+            self.assertEqual(
+                result.protective_cancel_mode,
+                "RECOVERED_DURABLE_CLOSED_STATE",
+            )
+            self.assertEqual(result.to_dict()["broker_mutation_count"], 0)
+            self.assertEqual(executor.calls[-1][0], "liquidation-idempotency")
+            self.assertTrue((artifacts.directory / "summary.json").is_file())
+
     def test_unknown_market_close_outcome_stops_without_new_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

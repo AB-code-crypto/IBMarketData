@@ -415,6 +415,9 @@ class PaperLiquidationAcceptanceResultV1:
     take_profit_cancel_count: int
     stop_cancel_count: int
     market_close_submission_count: int
+    durable_market_close_attempt_count: int
+    protective_cancel_mode: str
+    recovered_from_durable_state: bool
     state: LiquidationStateObservationV1
     flat_proof: FlatPositionProofV1
     artifact_directory: str
@@ -436,6 +439,13 @@ class PaperLiquidationAcceptanceResultV1:
             "stop_cancel_count": self.stop_cancel_count,
             "market_close_submission_count": (
                 self.market_close_submission_count
+            ),
+            "durable_market_close_attempt_count": (
+                self.durable_market_close_attempt_count
+            ),
+            "protective_cancel_mode": self.protective_cancel_mode,
+            "recovered_from_durable_state": (
+                self.recovered_from_durable_state
             ),
             "broker_mutation_count": (
                 self.take_profit_cancel_count
@@ -523,7 +533,7 @@ class PaperLiquidationAcceptanceRunner:
             )
         return text
 
-    def _load_entry_summary(self) -> tuple[str, str]:
+    def _load_entry_summary(self) -> tuple[str, str, str]:
         path = self.policy.paths.entry_summary
         try:
             value = read_json_object(path)
@@ -585,6 +595,7 @@ class PaperLiquidationAcceptanceRunner:
                 field_name="position_episode_id",
                 stage="entry-summary",
             ),
+            str(protection.get("take_profit_state")),
         )
 
     def _request_arguments(
@@ -686,7 +697,11 @@ class PaperLiquidationAcceptanceRunner:
     def run(self) -> PaperLiquidationAcceptanceResultV1:
         started = format_utc(self.clock())
         self.state_source.validate_schema()
-        source_drill_id, position_episode_id = self._load_entry_summary()
+        (
+            source_drill_id,
+            position_episode_id,
+            entry_take_profit_state,
+        ) = self._load_entry_summary()
         self.artifacts.write_json(
             "configuration",
             {
@@ -739,9 +754,10 @@ class PaperLiquidationAcceptanceRunner:
             "SUBMIT_MARKET_CLOSE": 0,
         }
         invocation_count = 0
-        attempt_id: str | None = None
-        order_ref: str | None = None
         state = self._state(position_episode_id)
+        attempt_id = state.liquidation_attempt_id
+        order_ref = state.order_ref
+        recovered_from_durable_state = bool(resumed and state.fully_closed)
         self.artifacts.write_json("liquidation-state-00", state.to_dict())
         for index in range(1, self.policy.max_invocations + 1):
             if state.fully_closed:
@@ -839,13 +855,53 @@ class PaperLiquidationAcceptanceRunner:
                 stage="liquidation",
                 broker_exposure_possible=True,
             )
-        if not resumed and any(value != 1 for value in counts.values()):
+        take_profit_cancel_count = counts["CANCEL_TAKE_PROFIT"]
+        stop_cancel_count = counts["CANCEL_STOP"]
+        market_close_submission_count = counts["SUBMIT_MARKET_CLOSE"]
+        if not resumed:
+            if market_close_submission_count != 1:
+                raise PaperLiquidationAcceptanceError(
+                    "fresh liquidation did not report exactly one MARKET close",
+                    stage="liquidation",
+                    broker_exposure_possible=True,
+                )
+            if entry_take_profit_state == "LIVE":
+                if (
+                    take_profit_cancel_count != 1
+                    or stop_cancel_count not in {0, 1}
+                ):
+                    raise PaperLiquidationAcceptanceError(
+                        "fresh protected liquidation did not report one TP "
+                        "cancel and zero or one STOP cancel",
+                        stage="liquidation",
+                        broker_exposure_possible=True,
+                    )
+                protective_cancel_mode = (
+                    "OCA_AUTO_CANCELLED_STOP"
+                    if stop_cancel_count == 0
+                    else "EXPLICIT_BOTH"
+                )
+            else:
+                if take_profit_cancel_count != 0 or stop_cancel_count != 1:
+                    raise PaperLiquidationAcceptanceError(
+                        "STOP-only liquidation did not report one STOP cancel",
+                        stage="liquidation",
+                        broker_exposure_possible=True,
+                    )
+                protective_cancel_mode = "STOP_ONLY"
+        else:
+            protective_cancel_mode = (
+                "RECOVERED_DURABLE_CLOSED_STATE"
+                if recovered_from_durable_state
+                else "RESUMED_OPERATION"
+            )
+        if state.attempt_no != 1 or state.attempt_state != "FILLED":
             raise PaperLiquidationAcceptanceError(
-                "fresh protected liquidation did not report exactly one TP cancel, "
-                "one STOP cancel and one MARKET close",
+                "closed liquidation does not prove one FILLED durable attempt",
                 stage="liquidation",
                 broker_exposure_possible=True,
             )
+        durable_market_close_attempt_count = 1
         flat_proof = self.state_source.read_flat_proof(
             account_id=self.policy.account_id,
             instrument_id=self.policy.instrument_id,
@@ -890,9 +946,14 @@ class PaperLiquidationAcceptanceRunner:
             started_at_utc=started,
             finished_at_utc=format_utc(self.clock()),
             invocation_count=invocation_count,
-            take_profit_cancel_count=counts["CANCEL_TAKE_PROFIT"],
-            stop_cancel_count=counts["CANCEL_STOP"],
-            market_close_submission_count=counts["SUBMIT_MARKET_CLOSE"],
+            take_profit_cancel_count=take_profit_cancel_count,
+            stop_cancel_count=stop_cancel_count,
+            market_close_submission_count=market_close_submission_count,
+            durable_market_close_attempt_count=(
+                durable_market_close_attempt_count
+            ),
+            protective_cancel_mode=protective_cancel_mode,
+            recovered_from_durable_state=recovered_from_durable_state,
             state=repeated,
             flat_proof=flat_proof,
             artifact_directory=str(self.artifacts.directory),
