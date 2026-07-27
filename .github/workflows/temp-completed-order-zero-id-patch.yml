@@ -1,0 +1,46 @@
+name: Temporary completed-order zero-id patch
+
+on:
+  push:
+    branches:
+      - agent/ib-completed-order-zero-id
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/ib-completed-order-zero-id
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Apply deterministic patch
+        run: python scripts/_apply_completed_order_zero_id_fix.py
+
+      - name: Commit patched production files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            src/ibmd/public_contracts/broker_reconciliation.py \
+            src/ibmd/ib_gateway/broker_reconciliation_mapping.py \
+            src/ibmd/execution/domain/ib_reconciliation.py \
+            src/ibmd/execution/domain/protective_submission.py \
+            src/ibmd/execution/domain/liquidation_reconciliation.py \
+            src/ibmd/execution/domain/broker_attempt.py \
+            src/ibmd/execution/domain/protection.py \
+            src/ibmd/execution/domain/liquidation.py
+          if git diff --cached --quiet; then
+            echo "Patch already applied"
+            exit 0
+          fi
+          git commit -m "Handle IB completed orders without API order id"
+          git push origin HEAD:agent/ib-completed-order-zero-id
