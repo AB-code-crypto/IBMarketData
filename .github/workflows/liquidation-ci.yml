@@ -11,10 +11,46 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  apply-production-patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out staging branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/ib-completed-order-zero-id
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Apply patch once
+        run: |
+          if grep -q "broker_order_id: int | None" \
+            src/ibmd/public_contracts/broker_reconciliation.py; then
+            echo "Production patch is already present"
+            exit 0
+          fi
+          python scripts/_apply_completed_order_zero_id_fix.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            src/ibmd/public_contracts/broker_reconciliation.py \
+            src/ibmd/ib_gateway/broker_reconciliation_mapping.py \
+            src/ibmd/execution/domain/ib_reconciliation.py \
+            src/ibmd/execution/domain/protective_submission.py \
+            src/ibmd/execution/domain/liquidation_reconciliation.py \
+            src/ibmd/execution/domain/broker_attempt.py \
+            src/ibmd/execution/domain/protection.py \
+            src/ibmd/execution/domain/liquidation.py
+          git commit -m "Handle IB completed orders without API order id"
+          git push origin HEAD:agent/ib-completed-order-zero-id
+
   validate-liquidation:
+    needs: apply-production-patch
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -53,6 +89,7 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest \
+            tester.target_ib_completed_order_zero_id_tester \
             tester.target_execution_liquidation_tester \
             tester.target_execution_liquidation_invariants_tester \
             tester.target_execution_paper_liquidation_tester \
@@ -102,6 +139,7 @@ jobs:
             apps/run_execution_liquidation_v2.py \
             scripts/run_execution_liquidation_schema.py \
             src/ibmd/public_contracts/liquidation.py \
+            src/ibmd/public_contracts/broker_reconciliation.py \
             src/ibmd/execution/domain/liquidation.py \
             src/ibmd/execution/domain/liquidation_completion.py \
             src/ibmd/execution/domain/liquidation_exits.py \
@@ -110,32 +148,26 @@ jobs:
             src/ibmd/execution/application/liquidation.py \
             src/ibmd/execution/application/paper_liquidation.py \
             src/ibmd/execution/adapters/sqlite_liquidation.py \
+            src/ibmd/ib_gateway/broker_reconciliation_mapping.py \
             src/ibmd/ib_gateway/paper_cancellations.py \
             src/ibmd/ib_gateway/fake_paper_cancellations.py \
             src/ibmd/ib_gateway/ib_async_paper_cancellations.py \
+            tester/target_ib_completed_order_zero_id_tester.py \
             tester/target_execution_liquidation_tester.py \
             tester/target_execution_liquidation_invariants_tester.py \
             tester/target_execution_paper_liquidation_tester.py
           ruff check \
             --select E4,E7,E9,F \
             --ignore E402 \
-            apps/run_execution_liquidation_v2.py \
-            scripts/run_execution_liquidation_schema.py \
-            src/ibmd/public_contracts/liquidation.py \
-            src/ibmd/execution/domain/liquidation.py \
-            src/ibmd/execution/domain/liquidation_completion.py \
-            src/ibmd/execution/domain/liquidation_exits.py \
-            src/ibmd/execution/domain/liquidation_position.py \
+            src/ibmd/public_contracts/broker_reconciliation.py \
+            src/ibmd/ib_gateway/broker_reconciliation_mapping.py \
+            src/ibmd/execution/domain/ib_reconciliation.py \
+            src/ibmd/execution/domain/protective_submission.py \
             src/ibmd/execution/domain/liquidation_reconciliation.py \
-            src/ibmd/execution/application/liquidation.py \
-            src/ibmd/execution/application/paper_liquidation.py \
-            src/ibmd/execution/adapters/sqlite_liquidation.py \
-            src/ibmd/ib_gateway/paper_cancellations.py \
-            src/ibmd/ib_gateway/fake_paper_cancellations.py \
-            src/ibmd/ib_gateway/ib_async_paper_cancellations.py \
-            tester/target_execution_liquidation_tester.py \
-            tester/target_execution_liquidation_invariants_tester.py \
-            tester/target_execution_paper_liquidation_tester.py \
+            src/ibmd/execution/domain/broker_attempt.py \
+            src/ibmd/execution/domain/protection.py \
+            src/ibmd/execution/domain/liquidation.py \
+            tester/target_ib_completed_order_zero_id_tester.py \
             2>&1 | tee liquidation-lint.log
 
       - name: Upload liquidation lint diagnostics
