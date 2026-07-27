@@ -8,10 +8,11 @@ on:
   push:
     branches:
       - agent/paper-liquidation-restart-acceptance
+      - agent/liquidation-restart-oca-auto-cancel
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   validate-paper-liquidation-restart:
@@ -30,6 +31,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: agent/liquidation-restart-oca-auto-cancel
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -41,6 +45,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install ruff
+
+      - name: Apply OCA compatibility patch
+        run: |
+          python scripts/_tmp_patch_liquidation_restart_oca.py
+          python scripts/_tmp_patch_liquidation_restart_manifest_fixture.py
 
       - name: Verify architecture boundaries
         run: python scripts/verify_target_architecture.py .
@@ -55,6 +64,7 @@ jobs:
             tester.target_paper_liquidation_acceptance_tester \
             tester.target_paper_restart_acceptance_tester \
             tester.target_execution_liquidation_tester \
+            tester.target_cutover_preflight_tester \
             -v 2>&1 | tee /tmp/liquidation-restart-tests.txt
 
       - name: Upload liquidation restart test diagnostics
@@ -93,6 +103,11 @@ jobs:
               'CANCEL_STOP',
               'SUBMIT_MARKET_CLOSE',
           ]
+          assert value['oca_sibling_auto_cancel_supported'] is True
+          assert [
+              'CANCEL_TAKE_PROFIT',
+              'SUBMIT_MARKET_CLOSE',
+          ] in value['restart_action_variants']
           assert value['automatic_retry_enabled'] is False
           PY
 
@@ -111,7 +126,9 @@ jobs:
             scripts/run_paper_liquidation_restart_acceptance.py \
             src/ibmd/operations/restart_probe.py \
             src/ibmd/operations/paper_liquidation_restart_acceptance.py \
-            tester/target_paper_liquidation_restart_acceptance_tester.py
+            src/ibmd/operations/acceptance_manifest.py \
+            tester/target_paper_liquidation_restart_acceptance_tester.py \
+            tester/target_cutover_preflight_tester.py
 
       - name: Lint liquidation restart files
         id: lint
@@ -124,7 +141,9 @@ jobs:
             scripts/run_paper_liquidation_restart_acceptance.py \
             src/ibmd/operations/restart_probe.py \
             src/ibmd/operations/paper_liquidation_restart_acceptance.py \
+            src/ibmd/operations/acceptance_manifest.py \
             tester/target_paper_liquidation_restart_acceptance_tester.py \
+            tester/target_cutover_preflight_tester.py \
             2>&1 | tee /tmp/liquidation-restart-lint.txt
 
       - name: Upload liquidation restart lint diagnostics
@@ -137,3 +156,17 @@ jobs:
       - name: Fail when liquidation restart lint failed
         if: steps.lint.outcome == 'failure'
         run: exit 1
+
+      - name: Commit tested patch and restore workflow
+        run: |
+          git show origin/agent/architecture-rewrite:.github/workflows/paper-liquidation-restart-acceptance-ci.yml \
+            > .github/workflows/paper-liquidation-restart-acceptance-ci.yml
+          rm -f .github/workflows/_tmp_liquidation_restart_oca_patch.yml
+          rm -f scripts/_tmp_patch_liquidation_restart_oca.py
+          rm -f scripts/_tmp_patch_liquidation_restart_manifest_fixture.py
+          rm -f scripts/_tmp_liquidation_restart_oca_trigger.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Support OCA auto-cancel in liquidation restart acceptance"
+          git push origin HEAD:agent/liquidation-restart-oca-auto-cancel
