@@ -521,8 +521,16 @@ def reconcile_broker_attempt_snapshot(
             order_ref=order_ref,
             outcome=outcome,
             observed_at_utc=broker_snapshot.captured_at_utc,
-            broker_order_id=order.broker_order_id,
-            broker_perm_id=order.broker_perm_id,
+            broker_order_id=(
+                order.broker_order_id
+                if order.broker_order_id is not None
+                else current.attempt.broker_order_id
+            ),
+            broker_perm_id=(
+                order.broker_perm_id
+                if order.broker_perm_id is not None
+                else current.attempt.broker_perm_id
+            ),
             broker_status=_broker_status(order),
             requested_qty=order.requested_qty,
             filled_qty=order.filled_qty,

@@ -63,9 +63,10 @@ def completed_fact(
     order_type: str,
     broker_order_id: int | None = None,
     broker_perm_id: int | None = 9_001,
+    account_id: str = ACCOUNT,
 ) -> BrokerOrderFactV1:
     return BrokerOrderFactV1(
-        account_id=ACCOUNT,
+        account_id=account_id,
         order_ref=order_ref,
         broker_order_id=broker_order_id,
         broker_perm_id=broker_perm_id,
@@ -88,7 +89,7 @@ def completed_fact(
 def snapshot(*facts: BrokerOrderFactV1) -> BrokerReconciliationSnapshotV1:
     return BrokerReconciliationSnapshotV1(
         source_session_id=new_id("ib_session"),
-        account_id=ACCOUNT,
+        account_id=(facts[0].account_id if facts else ACCOUNT),
         captured_at_utc=T3,
         open_orders=(),
         completed_orders=tuple(facts),
@@ -191,6 +192,7 @@ class CompletedOrderZeroIdDomainTest(unittest.TestCase):
             side=current.attempt.side,
             order_type=current.attempt.order_type,
             broker_perm_id=9_101,
+            account_id=current.operation.account_id,
         )
         result = reconcile_broker_attempt_snapshot(
             broker_snapshot=snapshot(fact),

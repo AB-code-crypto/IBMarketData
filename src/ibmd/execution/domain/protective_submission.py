@@ -761,8 +761,16 @@ def reconcile_protective_order_snapshot(
             order_ref=order_ref,
             outcome=outcome,
             observed_at_utc=broker_snapshot.captured_at_utc,
-            broker_order_id=order_fact.broker_order_id,
-            broker_perm_id=order_fact.broker_perm_id,
+            broker_order_id=(
+                order_fact.broker_order_id
+                if order_fact.broker_order_id is not None
+                else order.broker_order_id
+            ),
+            broker_perm_id=(
+                order_fact.broker_perm_id
+                if order_fact.broker_perm_id is not None
+                else order.broker_perm_id
+            ),
             broker_status=_broker_status(order_fact),
             requested_qty=order_fact.requested_qty,
             filled_qty=order_fact.filled_qty,
