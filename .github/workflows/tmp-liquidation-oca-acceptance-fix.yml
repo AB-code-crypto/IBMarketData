@@ -1,0 +1,36 @@
+name: Temporary liquidation OCA acceptance fix
+
+on:
+  push:
+    branches:
+      - agent/liquidation-oca-auto-cancel
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/liquidation-oca-auto-cancel
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply patch
+        run: python scripts/_apply_liquidation_oca_acceptance_fix.py
+      - name: Commit patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/ibmd/operations/paper_liquidation_acceptance.py \
+            src/ibmd/operations/acceptance_manifest.py \
+            tester/target_paper_liquidation_acceptance_tester.py \
+            docs/paper-liquidation-acceptance-runbook.md
+          git commit -m 'Accept OCA sibling cancellation in liquidation drill'
+          git push origin HEAD:agent/liquidation-oca-auto-cancel
