@@ -1,0 +1,72 @@
+name: Temporary liquidation restart OCA patch
+
+on:
+  push:
+    branches:
+      - agent/liquidation-restart-oca-auto-cancel
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/liquidation-restart-oca-auto-cancel
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install ruff
+
+      - name: Apply OCA compatibility patch
+        run: |
+          python scripts/_tmp_patch_liquidation_restart_oca.py
+          python scripts/_tmp_patch_liquidation_restart_manifest_fixture.py
+
+      - name: Verify architecture boundaries
+        run: python scripts/verify_target_architecture.py .
+
+      - name: Run restart and manifest tests
+        run: |
+          python -m unittest \
+            tester.target_paper_liquidation_restart_acceptance_tester \
+            tester.target_cutover_preflight_tester \
+            -v
+
+      - name: Compile and lint changed files
+        run: |
+          python -m compileall -q \
+            scripts/run_paper_liquidation_restart_acceptance.py \
+            src/ibmd/operations/paper_liquidation_restart_acceptance.py \
+            src/ibmd/operations/acceptance_manifest.py \
+            tester/target_paper_liquidation_restart_acceptance_tester.py \
+            tester/target_cutover_preflight_tester.py
+          ruff check --select E4,E7,E9,F --ignore E402 \
+            scripts/run_paper_liquidation_restart_acceptance.py \
+            src/ibmd/operations/paper_liquidation_restart_acceptance.py \
+            src/ibmd/operations/acceptance_manifest.py \
+            tester/target_paper_liquidation_restart_acceptance_tester.py \
+            tester/target_cutover_preflight_tester.py
+
+      - name: Commit tested patch and remove temporary files
+        run: |
+          rm scripts/_tmp_patch_liquidation_restart_oca.py
+          rm scripts/_tmp_patch_liquidation_restart_manifest_fixture.py
+          rm .github/workflows/_tmp_liquidation_restart_oca_patch.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Support OCA auto-cancel in liquidation restart acceptance"
+          git push origin HEAD:agent/liquidation-restart-oca-auto-cancel
