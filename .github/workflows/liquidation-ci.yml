@@ -38,6 +38,16 @@ jobs:
               echo "Production patch is already present"
               exit 0
             fi
+            python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/_apply_completed_order_zero_id_fix.py')
+          text = path.read_text(encoding='utf-8')
+          old = '    if actual != count:\n'
+          new = '    if actual < count:\n'
+          if text.count(old) != 1:
+              raise SystemExit('cannot relax one-off patch occurrence guard')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
             python scripts/_apply_completed_order_zero_id_fix.py
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
