@@ -354,7 +354,6 @@ class PaperLiquidationAcceptanceTest(unittest.TestCase):
             artifacts = PaperAcceptanceArtifactStore(root / "artifacts")
             executor = FakeExecutor(
                 [
-                    request_payload(created=False),
                     paper_payload(
                         action="NONE",
                         mutation=False,
@@ -383,7 +382,10 @@ class PaperLiquidationAcceptanceTest(unittest.TestCase):
                 "RECOVERED_DURABLE_CLOSED_STATE",
             )
             self.assertEqual(result.to_dict()["broker_mutation_count"], 0)
-            self.assertEqual(executor.calls[-1][0], "liquidation-idempotency")
+            self.assertEqual(
+                [item[0] for item in executor.calls],
+                ["liquidation-idempotency"],
+            )
             self.assertTrue((artifacts.directory / "summary.json").is_file())
 
     def test_unknown_market_close_outcome_stops_without_new_attempt(self) -> None:
