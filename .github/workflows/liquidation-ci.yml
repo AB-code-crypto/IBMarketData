@@ -11,39 +11,10 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply-observation-fallback:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: agent/ib-completed-order-zero-id
-          fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Apply patch once
-        run: |
-          if grep -q "else current.attempt.broker_order_id" \
-            src/ibmd/execution/domain/ib_reconciliation.py; then
-            echo "Observation fallback already applied"
-            exit 0
-          fi
-          python scripts/_apply_completed_observation_id_fallback.py
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            src/ibmd/execution/domain/ib_reconciliation.py \
-            src/ibmd/execution/domain/protective_submission.py \
-            src/ibmd/execution/domain/liquidation_reconciliation.py \
-            tester/target_ib_completed_order_zero_id_tester.py
-          git commit -m "Restore durable order ids for completed observations"
-          git push origin HEAD:agent/ib-completed-order-zero-id
-
   validate-liquidation:
-    needs: apply-observation-fallback
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
