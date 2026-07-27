@@ -760,7 +760,10 @@ def apply_close_observation(
         raise LiquidationDomainError(
             "broker observation quantity differs from liquidation attempt"
         )
-    if observation.broker_order_id != attempt.broker_order_id:
+    if (
+        observation.broker_order_id is not None
+        and observation.broker_order_id != attempt.broker_order_id
+    ):
         raise LiquidationDomainError(
             "broker observation order id differs from liquidation attempt"
         )
@@ -779,7 +782,11 @@ def apply_close_observation(
             state=LiquidationAttemptState.LIVE,
             filled_qty=int(observation.filled_qty),
             remaining_qty=int(observation.remaining_qty),
-            broker_perm_id=observation.broker_perm_id,
+            broker_perm_id=(
+                observation.broker_perm_id
+                if observation.broker_perm_id is not None
+                else attempt.broker_perm_id
+            ),
             broker_status=observation.broker_status,
             broker_terminal_proven=False,
             updated_at_utc=observed,

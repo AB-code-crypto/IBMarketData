@@ -93,7 +93,7 @@ def _bool(value: object, field: str) -> bool:
 class BrokerOrderFactV1:
     account_id: str
     order_ref: str | None
-    broker_order_id: int
+    broker_order_id: int | None
     broker_perm_id: int | None
     client_id: int
     con_id: int
@@ -122,7 +122,11 @@ class BrokerOrderFactV1:
     def __post_init__(self) -> None:
         object.__setattr__(self, "account_id", _text(self.account_id, "account_id"))
         object.__setattr__(self, "order_ref", _text(self.order_ref, "order_ref", optional=True))
-        object.__setattr__(self, "broker_order_id", _int(self.broker_order_id, "broker_order_id", 1))
+        object.__setattr__(
+            self,
+            "broker_order_id",
+            _opt_positive_int(self.broker_order_id, "broker_order_id"),
+        )
         object.__setattr__(self, "broker_perm_id", _opt_positive_int(self.broker_perm_id, "broker_perm_id"))
         object.__setattr__(self, "client_id", _int(self.client_id, "client_id"))
         object.__setattr__(self, "con_id", _int(self.con_id, "con_id", 1))
@@ -143,13 +147,36 @@ class BrokerOrderFactV1:
         object.__setattr__(self, "status", _text(self.status, "status"))
         if not isinstance(self.source, BrokerOrderSource):
             raise BrokerReconciliationContractError(f"invalid order source: {self.source!r}")
+        if (
+            self.source == BrokerOrderSource.OPEN
+            and self.broker_order_id is None
+        ):
+            raise BrokerReconciliationContractError(
+                "open broker order fact requires broker_order_id"
+            )
+        if (
+            self.order_ref is None
+            and self.broker_order_id is None
+            and self.broker_perm_id is None
+        ):
+            raise BrokerReconciliationContractError(
+                "broker order fact requires order_ref, order id or perm id"
+            )
         object.__setattr__(self, "observed_at_utc", _utc(self.observed_at_utc, "observed_at_utc"))
         object.__setattr__(self, "completed_status", _text(self.completed_status, "completed_status", optional=True))
         object.__setattr__(self, "warning_text", _text(self.warning_text, "warning_text", optional=True))
 
     @property
-    def broker_identity(self) -> tuple[int, int | None]:
-        return self.broker_order_id, self.broker_perm_id
+    def broker_identity(self) -> tuple[str, object, int | None]:
+        if self.broker_perm_id is not None:
+            return "PERM", self.broker_perm_id, None
+        if self.broker_order_id is not None:
+            return "ORDER", self.broker_order_id, self.client_id
+        if self.order_ref is not None:
+            return "REF", self.order_ref, None
+        raise BrokerReconciliationContractError(
+            "broker order fact has no usable identity"
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -367,7 +394,20 @@ class BrokerReconciliationSnapshotV1:
             identities = [item.broker_identity for item in values]
             if len(identities) != len(set(identities)):
                 raise BrokerReconciliationContractError(f"duplicate identities in {field}")
-            object.__setattr__(self, field, tuple(sorted(values, key=lambda item: (item.order_ref or "", item.broker_order_id))))
+            object.__setattr__(
+                self,
+                field,
+                tuple(
+                    sorted(
+                        values,
+                        key=lambda item: (
+                            item.order_ref or "",
+                            item.broker_order_id or 0,
+                            item.broker_perm_id or 0,
+                        ),
+                    )
+                ),
+            )
         fills = tuple(self.fills)
         if any(not isinstance(item, BrokerFillFactV1) or item.account_id != account for item in fills):
             raise BrokerReconciliationContractError("invalid fill scope")

@@ -241,7 +241,11 @@ def order_fact_from_ib_trade(
         order_ref=(
             str(getattr(order, "orderRef", "") or "").strip() or None
         ),
-        broker_order_id=_positive_int(order_id, field_name="orderId"),
+        broker_order_id=(
+            None
+            if order_id <= 0
+            else _positive_int(order_id, field_name="orderId")
+        ),
         broker_perm_id=(
             None
             if perm_id_value <= 0
@@ -395,7 +399,7 @@ def fill_fact_from_ib(
 def _dedupe_orders(
     values: Iterable[BrokerOrderFactV1],
 ) -> tuple[BrokerOrderFactV1, ...]:
-    by_identity: dict[tuple[int, int | None], BrokerOrderFactV1] = {}
+    by_identity: dict[tuple[object, ...], BrokerOrderFactV1] = {}
     for value in values:
         key = value.broker_identity
         previous = by_identity.get(key)

@@ -641,8 +641,16 @@ def _observation_order_state(
             state=ProtectiveOrderState.REJECTED,
             filled_qty=0,
             remaining_qty=order.quantity,
-            broker_order_id=observation.broker_order_id,
-            broker_perm_id=observation.broker_perm_id,
+            broker_order_id=(
+                observation.broker_order_id
+                if observation.broker_order_id is not None
+                else order.broker_order_id
+            ),
+            broker_perm_id=(
+                observation.broker_perm_id
+                if observation.broker_perm_id is not None
+                else order.broker_perm_id
+            ),
             broker_status=observation.broker_status or "HELD_399",
             broker_terminal_proven=True,
             updated_at_utc=observed,
@@ -680,8 +688,16 @@ def _observation_order_state(
         state=state,
         filled_qty=int(observation.filled_qty or 0),
         remaining_qty=int(observation.remaining_qty or 0),
-        broker_order_id=observation.broker_order_id,
-        broker_perm_id=observation.broker_perm_id,
+        broker_order_id=(
+            observation.broker_order_id
+            if observation.broker_order_id is not None
+            else order.broker_order_id
+        ),
+        broker_perm_id=(
+            observation.broker_perm_id
+            if observation.broker_perm_id is not None
+            else order.broker_perm_id
+        ),
         broker_status=observation.broker_status,
         broker_terminal_proven=terminal,
         updated_at_utc=observed,

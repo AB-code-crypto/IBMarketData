@@ -310,7 +310,12 @@ def _same_order_identity(
 ) -> bool:
     if left.broker_perm_id is not None and right.broker_perm_id is not None:
         return left.broker_perm_id == right.broker_perm_id
-    return left.broker_order_id == right.broker_order_id
+    if left.broker_order_id is not None and right.broker_order_id is not None:
+        return left.broker_order_id == right.broker_order_id
+    return (
+        left.order_ref is not None
+        and left.order_ref == right.order_ref
+    )
 
 
 def _same_fill_identity(
@@ -458,6 +463,7 @@ def _route_errors(
         errors.append("requested_qty")
     if (
         expected.broker_order_id is not None
+        and order_fact.broker_order_id is not None
         and order_fact.broker_order_id != expected.broker_order_id
     ):
         errors.append("broker_order_id")

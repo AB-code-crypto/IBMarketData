@@ -413,8 +413,16 @@ def apply_broker_observation(
         state=attempt_state,
         filled_qty=int(observation.filled_qty),
         remaining_qty=int(observation.remaining_qty),
-        broker_order_id=observation.broker_order_id,
-        broker_perm_id=observation.broker_perm_id,
+        broker_order_id=(
+            observation.broker_order_id
+            if observation.broker_order_id is not None
+            else snapshot.attempt.broker_order_id
+        ),
+        broker_perm_id=(
+            observation.broker_perm_id
+            if observation.broker_perm_id is not None
+            else snapshot.attempt.broker_perm_id
+        ),
         broker_status=observation.broker_status,
         broker_terminal_proven=terminal_attempt,
         updated_at_utc=observed,
