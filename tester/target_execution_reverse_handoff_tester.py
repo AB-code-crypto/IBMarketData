@@ -186,27 +186,56 @@ class MemoryReverseRepository:
 
 
 class FakeLifecycleService:
-    def __init__(self, repository: MemoryReverseRepository):
+    def __init__(
+        self,
+        repository: MemoryReverseRepository,
+        *,
+        delay_cancel_confirmation: bool = False,
+    ):
         self.repository = repository
         self.calls = 0
         self.cancelled_kind = None
+        self.delay_cancel_confirmation = bool(delay_cancel_confirmation)
+        self.delayed_kinds = set()
 
     async def run_once(self, *, position_episode_id, observed_at_utc):
         self.calls += 1
         if position_episode_id != self.repository.episode.position_episode_id:
             raise AssertionError("unexpected episode")
         if self.cancelled_kind is not None:
-            self.repository.protection = cancelled(
-                self.repository.protection,
-                self.cancelled_kind,
-                observed_at=observed_at_utc,
+            kind = self.cancelled_kind
+            order = (
+                self.repository.protection.stop_order
+                if kind == ProtectiveOrderKind.STOP_LOSS
+                else self.repository.protection.take_profit_order
             )
+            if (
+                self.delay_cancel_confirmation
+                and kind not in self.delayed_kinds
+            ):
+                self.repository.protection = apply_protective_observation(
+                    protection=self.repository.protection,
+                    kind=kind,
+                    observation=observation(
+                        order,
+                        BrokerObservationOutcome.LIVE,
+                        observed_at=observed_at_utc,
+                    ),
+                    position_open=True,
+                )
+                self.delayed_kinds.add(kind)
+            else:
+                self.repository.protection = cancelled(
+                    self.repository.protection,
+                    kind,
+                    observed_at=observed_at_utc,
+                )
+                self.cancelled_kind = None
             self.repository.readiness = readiness_for_protection(
                 self.repository.readiness,
                 protection=self.repository.protection,
                 observed_at_utc=observed_at_utc,
             )
-            self.cancelled_kind = None
         return ProtectiveLifecycleUpdate(
             episode=self.repository.episode,
             protection=self.repository.protection,
@@ -290,6 +319,37 @@ class ReverseHandoffDomainTest(unittest.TestCase):
         self.assertEqual(value.status, ProtectionSetStatus.UNPROTECTED)
         self.assertIn(COMMAND_ID, value.take_profit_order.failure_reason)
 
+    def test_live_broker_fact_preserves_persisted_cancel_intent(self) -> None:
+        _episode, protection = live_protection()
+        requested = mark_reverse_cancel_requested(
+            protection,
+            kind=ProtectiveOrderKind.TAKE_PROFIT,
+            command_id=COMMAND_ID,
+            observed_at_utc=T3,
+        )
+        reconciled = apply_protective_observation(
+            protection=requested,
+            kind=ProtectiveOrderKind.TAKE_PROFIT,
+            observation=observation(
+                requested.take_profit_order,
+                BrokerObservationOutcome.LIVE,
+                observed_at=T3,
+            ),
+            position_open=True,
+        )
+        self.assertEqual(
+            reconciled.take_profit_order.state,
+            ProtectiveOrderState.CANCEL_REQUESTED,
+        )
+        self.assertEqual(
+            assess_reverse_handoff(reconciled).action,
+            ReverseHandoffAction.RECONCILE_EXITS,
+        )
+        self.assertIn(
+            COMMAND_ID,
+            reconciled.take_profit_order.failure_reason,
+        )
+
 
 class ReverseHandoffCoordinatorTest(unittest.TestCase):
     def test_two_cancellations_then_ready_without_duplicate_cancel(self) -> None:
@@ -346,6 +406,82 @@ class ReverseHandoffCoordinatorTest(unittest.TestCase):
         self.assertFalse(third.broker_mutation_performed)
         self.assertEqual(len(gateway.requests), 2)
         self.assertTrue(third.ready_for_reverse_submit)
+
+    def test_delayed_cancel_confirmation_never_repeats_cancel_order(self) -> None:
+        repository = MemoryReverseRepository()
+        lifecycle = FakeLifecycleService(
+            repository,
+            delay_cancel_confirmation=True,
+        )
+
+        def before_cancel(request):
+            order = next(
+                item
+                for item in repository.protection.orders
+                if item.order_ref == request.order_ref
+            )
+            lifecycle.cancelled_kind = order.kind
+
+        gateway = ScriptedPaperOrderCancellationGateway(
+            before_cancel=before_cancel,
+            clock=clock(T3),
+        )
+        coordinator = PaperReverseHandoffCoordinator(
+            policy=PaperReverseHandoffPolicyV1(
+                account_id=ACCOUNT,
+                environment="paper",
+                confirmed_paper_account_id=ACCOUNT,
+                strategy_id=STRATEGY,
+                strategy_version=1,
+                deployment_id=DEPLOYMENT,
+                instrument_id=INSTRUMENT,
+                policy_hash=POLICY_HASH,
+                position_max_age_seconds=10.0,
+            ),
+            command_state_source=repository,
+            command_request_source=repository,
+            execution_state_source=repository,
+            protection_state_source=repository,
+            position_snapshot_source=repository,
+            protection_repository=repository,
+            liquidation_state_source=repository,
+            lifecycle_service=lifecycle,
+            cancellation_gateway=gateway,
+            clock=clock(T3),
+        )
+        first = asyncio.run(coordinator.run_once(command_id=COMMAND_ID))
+        self.assertTrue(first.broker_mutation_performed)
+        self.assertEqual(len(gateway.requests), 1)
+        self.assertEqual(
+            first.assessment.action,
+            ReverseHandoffAction.RECONCILE_EXITS,
+        )
+        self.assertEqual(
+            repository.protection.take_profit_order.state,
+            ProtectiveOrderState.CANCEL_REQUESTED,
+        )
+
+        second = asyncio.run(coordinator.run_once(command_id=COMMAND_ID))
+        self.assertTrue(second.broker_mutation_performed)
+        self.assertEqual(len(gateway.requests), 2)
+        self.assertEqual(
+            second.assessment.action,
+            ReverseHandoffAction.RECONCILE_EXITS,
+        )
+        self.assertEqual(
+            repository.protection.stop_order.state,
+            ProtectiveOrderState.CANCEL_REQUESTED,
+        )
+
+        third = asyncio.run(coordinator.run_once(command_id=COMMAND_ID))
+        self.assertFalse(third.broker_mutation_performed)
+        self.assertEqual(len(gateway.requests), 2)
+        self.assertTrue(third.ready_for_reverse_submit)
+
+        fourth = asyncio.run(coordinator.run_once(command_id=COMMAND_ID))
+        self.assertFalse(fourth.broker_mutation_performed)
+        self.assertEqual(len(gateway.requests), 2)
+        self.assertTrue(fourth.ready_for_reverse_submit)
 
     def test_existing_liquidation_blocks_reverse_handoff(self) -> None:
         repository = MemoryReverseRepository()

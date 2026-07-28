@@ -670,6 +670,38 @@ def _observation_order_state(
             updated_at_utc=observed,
             failure_reason=detail or observation.outcome.value.lower(),
         )
+    # A LIVE observation immediately after cancelOrder is not proof that the
+    # durable cancel intent disappeared. IB may continue reporting the order as
+    # LIVE while cancellation propagates. Preserve CANCEL_REQUESTED so later
+    # invocations reconcile instead of issuing duplicate cancelOrder calls.
+    if (
+        order.state == ProtectiveOrderState.CANCEL_REQUESTED
+        and observation.outcome == BrokerObservationOutcome.LIVE
+    ):
+        return replace(
+            order,
+            state=ProtectiveOrderState.CANCEL_REQUESTED,
+            filled_qty=int(observation.filled_qty or 0),
+            remaining_qty=int(observation.remaining_qty or 0),
+            broker_order_id=(
+                observation.broker_order_id
+                if observation.broker_order_id is not None
+                else order.broker_order_id
+            ),
+            broker_perm_id=(
+                observation.broker_perm_id
+                if observation.broker_perm_id is not None
+                else order.broker_perm_id
+            ),
+            broker_status=observation.broker_status,
+            broker_terminal_proven=False,
+            updated_at_utc=observed,
+            terminal_at_utc=None,
+            last_broker_proof_at_utc=observed,
+            failure_reason=(
+                order.failure_reason or "cancel_requested_broker_still_live"
+            ),
+        )
     state = {
         BrokerObservationOutcome.LIVE: ProtectiveOrderState.LIVE,
         BrokerObservationOutcome.FILLED: ProtectiveOrderState.FILLED,
