@@ -147,11 +147,27 @@ def request_payload() -> dict:
         "liquidation_operation": {
             "liquidation_operation_id": OPERATION_ID,
             "state": "REQUESTED",
+            "next_action": "RECONCILE_EXITS",
         },
         "liquidation_attempt": None,
         "triggers": [{"reason": "MANUAL_EMERGENCY"}],
         "operation_created": True,
         "trigger_created": True,
+        "broker_mutations_performed": False,
+    }
+
+
+def advance_payload(*, action: str = "CANCEL_TAKE_PROFIT") -> dict:
+    return {
+        "liquidation_operation": {
+            "liquidation_operation_id": OPERATION_ID,
+            "state": "CANCELING_EXITS",
+            "next_action": action,
+            "blocking_reason": None,
+        },
+        "liquidation_attempt": None,
+        "operation_created": False,
+        "trigger_created": False,
         "broker_mutations_performed": False,
     }
 
@@ -416,6 +432,7 @@ class PaperLiquidationRestartAcceptanceTest(unittest.TestCase):
             executor = FakeNormalExecutor(
                 [
                     request_payload(),
+                    advance_payload(),
                     resume_payload(action="CANCEL_STOP"),
                     resume_payload(
                         action="SUBMIT_MARKET_CLOSE",
@@ -461,7 +478,17 @@ class PaperLiquidationRestartAcceptanceTest(unittest.TestCase):
             self.assertEqual(payload["intentional_process_terminations"], 3)
             self.assertEqual(payload["broker_mutation_count"], 3)
             self.assertEqual(payload["protective_cancel_mode"], "EXPLICIT_BOTH")
+            self.assertTrue(payload["initial_advance_broker_free"])
             self.assertTrue(payload["all_resume_mutations_false"])
+            self.assertEqual(executor.calls[1][0], "liquidation-initial-advance")
+            self.assertEqual(
+                executor.calls[1][2][:2],
+                ("--advance-position-episode-id", EPISODE_ID),
+            )
+            self.assertNotIn(
+                "--once-paper-position-episode-id",
+                executor.calls[1][2],
+            )
             self.assertTrue(payload["restart_adoption_proven"])
             self.assertEqual(payload["attempt_no"], 1)
             self.assertTrue(payload["state"]["fully_closed"])
@@ -504,6 +531,7 @@ class PaperLiquidationRestartAcceptanceTest(unittest.TestCase):
             executor = FakeNormalExecutor(
                 [
                     request_payload(),
+                    advance_payload(),
                     resume_payload(
                         action="SUBMIT_MARKET_CLOSE",
                         operation_state="PREPARING",
@@ -545,6 +573,7 @@ class PaperLiquidationRestartAcceptanceTest(unittest.TestCase):
                 payload["protective_cancel_mode"],
                 "OCA_AUTO_CANCELLED_STOP",
             )
+            self.assertTrue(payload["initial_advance_broker_free"])
             self.assertTrue(payload["all_resume_mutations_false"])
             self.assertTrue(payload["restart_adoption_proven"])
             self.assertTrue(payload["state"]["fully_closed"])
@@ -564,6 +593,7 @@ class PaperLiquidationRestartAcceptanceTest(unittest.TestCase):
             executor = FakeNormalExecutor(
                 [
                     request_payload(),
+                    advance_payload(),
                     resume_payload(
                         action="CANCEL_STOP",
                         mutation=True,

@@ -60,6 +60,7 @@ For the normal two-order protective policy:
 
 ```text
 liquidation request, broker-free
+→ broker-free advance selects the first protective cancellation
 → cancel TAKE PROFIT and terminate child
 → reconcile TAKE PROFIT cancellation without another cancelOrder
 → if STOP remains LIVE, cancel it and terminate child
@@ -73,6 +74,9 @@ liquidation request, broker-free
 → StrategyPosition FLAT
 → idempotency invocation with no broker mutation
 ```
+
+The initial advance uses `--advance-position-episode-id`; that mode has no broker
+gateway and must report `broker_mutations_performed=false` before any crash probe.
 
 If TAKE PROFIT is `NOT_REQUIRED`, that cancellation checkpoint is omitted.
 
@@ -156,6 +160,7 @@ when TWS auto-cancels the OCA sibling STOP
 intentional_process_terminations = 2 or 3
 broker_mutation_count             = 2 or 3
 protective_cancel_mode             = EXPLICIT_BOTH or OCA_AUTO_CANCELLED_STOP
+initial_advance_broker_free       = true
 all_resume_mutations_false        = true
 attempt_no                        = 1
 restart_adoption_proven           = true

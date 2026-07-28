@@ -15,7 +15,6 @@ from ibmd.operations.paper_liquidation_acceptance import (
     FlatPositionProofV1,
     LiquidationStateObservationV1,
     PaperLiquidationAcceptanceError,
-    PaperLiquidationAcceptancePathsV1,
     PaperLiquidationAcceptancePolicyV1,
     PaperLiquidationAcceptanceRunner,
     PaperLiquidationAcceptanceStateSource,
@@ -407,6 +406,7 @@ class PaperLiquidationRestartAcceptanceResultV1:
             "broker_mutation_count": len(self.checkpoints),
             "restart_actions": actions,
             "protective_cancel_mode": self.protective_cancel_mode,
+            "initial_advance_broker_free": True,
             "all_resume_mutations_false": True,
             "attempt_no": 1,
             "restart_adoption_proven": True,
@@ -525,6 +525,70 @@ class PaperLiquidationRestartAcceptanceRunner(
             )
         return payload
 
+    def _initial_advance_arguments(
+        self,
+        position_episode_id: str,
+    ) -> tuple[str, ...]:
+        paths = self.policy.paths
+        return (
+            "--advance-position-episode-id",
+            position_episode_id,
+            "--execution-database",
+            str(paths.execution_database),
+            "--position-feed-database",
+            str(paths.position_feed_database),
+            "--catalog-root",
+            str(paths.catalog_root),
+            "--instrument",
+            self.policy.instrument_id,
+            "--position-max-age-seconds",
+            str(self.policy.position_max_age_seconds),
+        )
+
+    def _initial_broker_free_advance(
+        self,
+        *,
+        position_episode_id: str,
+        operation_id: str,
+    ) -> Mapping[str, Any]:
+        payload = self._run_json(
+            step_name="liquidation-initial-advance",
+            arguments=self._initial_advance_arguments(position_episode_id),
+        )
+        if payload.get("broker_mutations_performed") is not False:
+            raise PaperLiquidationAcceptanceError(
+                "initial liquidation advance unexpectedly performed a broker "
+                "mutation",
+                stage="liquidation-initial-advance",
+            )
+        if payload.get("operation_created") is not False:
+            raise PaperLiquidationAcceptanceError(
+                "initial liquidation advance unexpectedly created an operation",
+                stage="liquidation-initial-advance",
+            )
+        operation = self._mapping(
+            payload.get("liquidation_operation"),
+            field_name="liquidation_operation",
+            stage="liquidation-initial-advance",
+        )
+        if operation.get("liquidation_operation_id") != operation_id:
+            raise PaperLiquidationAcceptanceError(
+                "initial liquidation advance changed the operation identity",
+                stage="liquidation-initial-advance",
+            )
+        action = self._text(
+            operation.get("next_action"),
+            field_name="next_action",
+            stage="liquidation-initial-advance",
+        )
+        if action not in {"CANCEL_TAKE_PROFIT", "CANCEL_STOP"}:
+            raise PaperLiquidationAcceptanceError(
+                "initial liquidation advance did not select a protective cancel: "
+                f"{action}",
+                stage="liquidation-initial-advance",
+            )
+        return payload
+
     def run(self) -> PaperLiquidationRestartAcceptanceResultV1:
         started = format_utc(self.clock())
         self.state_source.validate_schema()
@@ -580,6 +644,15 @@ class PaperLiquidationRestartAcceptanceRunner(
                 "liquidation restart acceptance requires a fresh operation",
                 stage="liquidation-request",
             )
+        if operation.get("next_action") != "RECONCILE_EXITS":
+            raise PaperLiquidationAcceptanceError(
+                "fresh liquidation operation did not start at RECONCILE_EXITS",
+                stage="liquidation-request",
+            )
+        self._initial_broker_free_advance(
+            position_episode_id=position_episode_id,
+            operation_id=operation_id,
+        )
 
         checkpoints: list[LiquidationRestartCheckpointV1] = []
         resume_count = 0
