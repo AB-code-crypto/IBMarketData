@@ -2,13 +2,13 @@
 
 ## Purpose
 
-This drill proves restart adoption across the three broker mutations used to close
-one protected position:
+This drill proves restart adoption across the broker mutations used to close one
+protected position. The explicit path has three mutations; IB may also remove the
+STOP as the OCA sibling while reconciling the TAKE PROFIT cancellation:
 
 ```text
-cancel TAKE PROFIT
-cancel STOP
-submit liquidation MARKET close
+explicit: cancel TAKE PROFIT -> cancel STOP -> submit liquidation MARKET close
+OCA:      cancel TAKE PROFIT -> submit liquidation MARKET close
 ```
 
 For each mutation, the child execution process:
@@ -60,10 +60,12 @@ For the normal two-order protective policy:
 
 ```text
 liquidation request, broker-free
+→ broker-free advance selects the first protective cancellation
 → cancel TAKE PROFIT and terminate child
 → reconcile TAKE PROFIT cancellation without another cancelOrder
-→ cancel STOP and terminate child
-→ reconcile STOP cancellation without another cancelOrder
+→ if STOP remains LIVE: cancel STOP and terminate child
+→ otherwise accept broker-proven OCA sibling cancellation
+→ reconcile explicit STOP cancellation without another cancelOrder, when used
 → submit one MARKET close and terminate child
 → reconcile the same liquidation attempt without another placeOrder
 → independent position feed proves FLAT
@@ -148,11 +150,15 @@ A successful `summary.json` proves:
 ```text
 restart_actions =
   CANCEL_TAKE_PROFIT
-  CANCEL_STOP
+  [CANCEL_STOP when STOP remains LIVE]
   SUBMIT_MARKET_CLOSE
 
-intentional_process_terminations = 3
-broker_mutation_count             = 3
+protective_cancel_mode =
+  EXPLICIT_BOTH or OCA_AUTO_CANCELLED_STOP or STOP_ONLY
+
+intentional_process_terminations = 2 or 3
+broker_mutation_count             = 2 or 3
+initial_advance_broker_free       = true
 all_resume_mutations_false        = true
 attempt_no                        = 1
 restart_adoption_proven           = true

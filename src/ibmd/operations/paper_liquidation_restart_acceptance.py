@@ -15,7 +15,6 @@ from ibmd.operations.paper_liquidation_acceptance import (
     FlatPositionProofV1,
     LiquidationStateObservationV1,
     PaperLiquidationAcceptanceError,
-    PaperLiquidationAcceptancePathsV1,
     PaperLiquidationAcceptancePolicyV1,
     PaperLiquidationAcceptanceRunner,
     PaperLiquidationAcceptanceStateSource,
@@ -383,6 +382,7 @@ class PaperLiquidationRestartAcceptanceResultV1:
     started_at_utc: str
     finished_at_utc: str
     resume_invocation_count: int
+    protective_cancel_mode: str
     checkpoints: tuple[LiquidationRestartCheckpointV1, ...]
     state: LiquidationStateObservationV1
     flat_proof: FlatPositionProofV1
@@ -401,6 +401,8 @@ class PaperLiquidationRestartAcceptanceResultV1:
             "started_at_utc": self.started_at_utc,
             "finished_at_utc": self.finished_at_utc,
             "resume_invocation_count": self.resume_invocation_count,
+            "protective_cancel_mode": self.protective_cancel_mode,
+            "initial_advance_broker_free": True,
             "checkpoints": [item.to_dict() for item in self.checkpoints],
             "intentional_process_terminations": len(self.checkpoints),
             "broker_mutation_count": len(self.checkpoints),
@@ -523,6 +525,70 @@ class PaperLiquidationRestartAcceptanceRunner(
             )
         return payload
 
+    def _initial_advance_arguments(
+        self,
+        position_episode_id: str,
+    ) -> tuple[str, ...]:
+        paths = self.policy.paths
+        return (
+            "--advance-position-episode-id",
+            position_episode_id,
+            "--execution-database",
+            str(paths.execution_database),
+            "--position-feed-database",
+            str(paths.position_feed_database),
+            "--catalog-root",
+            str(paths.catalog_root),
+            "--instrument",
+            self.policy.instrument_id,
+            "--position-max-age-seconds",
+            str(self.policy.position_max_age_seconds),
+        )
+
+    def _initial_broker_free_advance(
+        self,
+        *,
+        position_episode_id: str,
+        operation_id: str,
+    ) -> Mapping[str, Any]:
+        payload = self._run_json(
+            step_name="liquidation-initial-advance",
+            arguments=self._initial_advance_arguments(position_episode_id),
+        )
+        if payload.get("broker_mutations_performed") is not False:
+            raise PaperLiquidationAcceptanceError(
+                "initial liquidation advance unexpectedly performed a broker "
+                "mutation",
+                stage="liquidation-initial-advance",
+            )
+        if payload.get("operation_created") is not False:
+            raise PaperLiquidationAcceptanceError(
+                "initial liquidation advance unexpectedly created an operation",
+                stage="liquidation-initial-advance",
+            )
+        operation = self._mapping(
+            payload.get("liquidation_operation"),
+            field_name="liquidation_operation",
+            stage="liquidation-initial-advance",
+        )
+        if operation.get("liquidation_operation_id") != operation_id:
+            raise PaperLiquidationAcceptanceError(
+                "initial liquidation advance changed the operation identity",
+                stage="liquidation-initial-advance",
+            )
+        action = self._text(
+            operation.get("next_action"),
+            field_name="next_action",
+            stage="liquidation-initial-advance",
+        )
+        if action not in {"CANCEL_TAKE_PROFIT", "CANCEL_STOP"}:
+            raise PaperLiquidationAcceptanceError(
+                "initial liquidation advance did not select a protective cancel: "
+                f"{action}",
+                stage="liquidation-initial-advance",
+            )
+        return payload
+
     def run(self) -> PaperLiquidationRestartAcceptanceResultV1:
         started = format_utc(self.clock())
         self.state_source.validate_schema()
@@ -578,6 +644,15 @@ class PaperLiquidationRestartAcceptanceRunner(
                 "liquidation restart acceptance requires a fresh operation",
                 stage="liquidation-request",
             )
+        if operation.get("next_action") != "RECONCILE_EXITS":
+            raise PaperLiquidationAcceptanceError(
+                "fresh liquidation operation did not start at RECONCILE_EXITS",
+                stage="liquidation-request",
+            )
+        self._initial_broker_free_advance(
+            position_episode_id=position_episode_id,
+            operation_id=operation_id,
+        )
 
         checkpoints: list[LiquidationRestartCheckpointV1] = []
         resume_count = 0
@@ -712,19 +787,39 @@ class PaperLiquidationRestartAcceptanceRunner(
                 stage="liquidation-restart",
                 broker_exposure_possible=True,
             )
-        expected_actions = {
-            "CANCEL_STOP",
-            "SUBMIT_MARKET_CLOSE",
-        }
         entry_summary = read_json_object(self.policy.paths.entry_summary)
         protection = self._mapping(
             entry_summary.get("protection"),
             field_name="protection",
             stage="entry-summary",
         )
-        if protection.get("take_profit_state") == "LIVE":
-            expected_actions.add("CANCEL_TAKE_PROFIT")
         actual_actions = {item.action for item in checkpoints}
+        if protection.get("take_profit_state") == "LIVE":
+            if "CANCEL_TAKE_PROFIT" not in actual_actions:
+                raise PaperLiquidationAcceptanceError(
+                    "liquidation restart omitted the TAKE PROFIT checkpoint",
+                    stage="liquidation-restart",
+                    broker_exposure_possible=True,
+                )
+            if "CANCEL_STOP" in actual_actions:
+                expected_actions = {
+                    "CANCEL_TAKE_PROFIT",
+                    "CANCEL_STOP",
+                    "SUBMIT_MARKET_CLOSE",
+                }
+                protective_cancel_mode = "EXPLICIT_BOTH"
+            else:
+                expected_actions = {
+                    "CANCEL_TAKE_PROFIT",
+                    "SUBMIT_MARKET_CLOSE",
+                }
+                protective_cancel_mode = "OCA_AUTO_CANCELLED_STOP"
+        else:
+            expected_actions = {
+                "CANCEL_STOP",
+                "SUBMIT_MARKET_CLOSE",
+            }
+            protective_cancel_mode = "STOP_ONLY"
         if actual_actions != expected_actions:
             raise PaperLiquidationAcceptanceError(
                 "liquidation restart checkpoints differ from the expected "
@@ -796,6 +891,7 @@ class PaperLiquidationRestartAcceptanceRunner(
             started_at_utc=started,
             finished_at_utc=format_utc(self.clock()),
             resume_invocation_count=resume_count + 1,
+            protective_cancel_mode=protective_cancel_mode,
             checkpoints=tuple(checkpoints),
             state=repeated,
             flat_proof=flat_proof,

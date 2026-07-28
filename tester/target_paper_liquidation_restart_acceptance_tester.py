@@ -147,11 +147,27 @@ def request_payload() -> dict:
         "liquidation_operation": {
             "liquidation_operation_id": OPERATION_ID,
             "state": "REQUESTED",
+            "next_action": "RECONCILE_EXITS",
         },
         "liquidation_attempt": None,
         "triggers": [{"reason": "MANUAL_EMERGENCY"}],
         "operation_created": True,
         "trigger_created": True,
+        "broker_mutations_performed": False,
+    }
+
+
+def advance_payload(*, action: str = "CANCEL_TAKE_PROFIT") -> dict:
+    return {
+        "liquidation_operation": {
+            "liquidation_operation_id": OPERATION_ID,
+            "state": "CANCELING_EXITS",
+            "next_action": action,
+            "blocking_reason": None,
+        },
+        "liquidation_attempt": None,
+        "operation_created": False,
+        "trigger_created": False,
         "broker_mutations_performed": False,
     }
 
@@ -416,6 +432,7 @@ class PaperLiquidationRestartAcceptanceTest(unittest.TestCase):
             executor = FakeNormalExecutor(
                 [
                     request_payload(),
+                    advance_payload(),
                     resume_payload(action="CANCEL_STOP"),
                     resume_payload(
                         action="SUBMIT_MARKET_CLOSE",
@@ -461,11 +478,101 @@ class PaperLiquidationRestartAcceptanceTest(unittest.TestCase):
             self.assertEqual(payload["intentional_process_terminations"], 3)
             self.assertEqual(payload["broker_mutation_count"], 3)
             self.assertTrue(payload["all_resume_mutations_false"])
+            self.assertTrue(payload["initial_advance_broker_free"])
+            self.assertEqual(payload["protective_cancel_mode"], "EXPLICIT_BOTH")
             self.assertTrue(payload["restart_adoption_proven"])
             self.assertEqual(payload["attempt_no"], 1)
             self.assertTrue(payload["state"]["fully_closed"])
             self.assertTrue(payload["flat_proof"]["accepted"])
             self.assertTrue((artifacts.directory / "summary.json").is_file())
+            self.assertEqual(executor.calls[1][0], "liquidation-initial-advance")
+            self.assertEqual(
+                executor.calls[1][2][:2],
+                ("--advance-position-episode-id", EPISODE_ID),
+            )
+            self.assertNotIn(
+                "--once-paper-position-episode-id",
+                executor.calls[1][2],
+            )
+
+    def test_oca_auto_cancelled_stop_skips_second_cancel_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            summary = root / "entry-summary.json"
+            write_entry_summary(
+                summary,
+                schema_name="PaperRestartAcceptanceResult",
+            )
+            source = FakeStateSource(
+                [
+                    state(),
+                    state(next_action="RECONCILE_EXITS"),
+                    state(
+                        operation_state="PREPARING",
+                        next_action="SUBMIT_MARKET_CLOSE",
+                        exposed=0,
+                    ),
+                    state(
+                        operation_state="SUBMITTING",
+                        next_action="RECONCILE_MARKET_CLOSE",
+                        attempt_state="SUBMITTING",
+                        exposed=0,
+                    ),
+                    state(
+                        operation_state="RECONCILING",
+                        next_action="WAIT_FOR_FLAT",
+                        attempt_state="FILLED",
+                        exposed=0,
+                    ),
+                    closed_state(),
+                    closed_state(),
+                ]
+            )
+            executor = FakeNormalExecutor(
+                [
+                    request_payload(),
+                    advance_payload(),
+                    resume_payload(
+                        action="SUBMIT_MARKET_CLOSE",
+                        operation_state="PREPARING",
+                    ),
+                    resume_payload(
+                        action="WAIT_FOR_FLAT",
+                        operation_state="RECONCILING",
+                        attempt_state="FILLED",
+                    ),
+                    resume_payload(
+                        action="NONE",
+                        operation_state="SUCCEEDED",
+                        attempt_state="FILLED",
+                    ),
+                    resume_payload(
+                        action="NONE",
+                        operation_state="SUCCEEDED",
+                        attempt_state="FILLED",
+                    ),
+                ]
+            )
+            crash = FakeCrashExecutor()
+            result = PaperLiquidationRestartAcceptanceRunner(
+                policy=policy(root, summary),
+                command_executor=executor,
+                crash_executor=crash,
+                state_source=source,
+                artifacts=PaperAcceptanceArtifactStore(root / "artifacts"),
+                sleeper=lambda _seconds: None,
+            ).run()
+            payload = result.to_dict()
+            self.assertEqual(
+                crash.actions,
+                ["CANCEL_TAKE_PROFIT", "SUBMIT_MARKET_CLOSE"],
+            )
+            self.assertEqual(payload["broker_mutation_count"], 2)
+            self.assertEqual(
+                payload["protective_cancel_mode"],
+                "OCA_AUTO_CANCELLED_STOP",
+            )
+            self.assertTrue(payload["state"]["fully_closed"])
 
     def test_resume_mutation_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -481,6 +588,7 @@ class PaperLiquidationRestartAcceptanceTest(unittest.TestCase):
             executor = FakeNormalExecutor(
                 [
                     request_payload(),
+                    advance_payload(),
                     resume_payload(
                         action="CANCEL_STOP",
                         mutation=True,

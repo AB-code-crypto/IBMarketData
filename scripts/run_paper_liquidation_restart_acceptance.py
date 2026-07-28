@@ -39,8 +39,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Run one deterministic paper liquidation restart drill. The TP "
-            "cancel, STOP cancel and MARKET-close child processes terminate "
-            "immediately after their confirmed broker action; ordinary "
+            "cancel, optional explicit STOP cancel and MARKET-close child "
+            "processes terminate immediately after their confirmed broker action; "
+            "ordinary "
             "invocations must then reconcile without another mutation."
         )
     )
@@ -113,6 +114,22 @@ def _validation_payload(
         ],
         "interactive_confirmation_required": False,
         "automatic_retry_enabled": False,
+        "oca_auto_cancelled_stop_supported": True,
+        "restart_action_sequences": [
+            [
+                "CANCEL_TAKE_PROFIT",
+                "CANCEL_STOP",
+                "SUBMIT_MARKET_CLOSE",
+            ],
+            [
+                "CANCEL_TAKE_PROFIT",
+                "SUBMIT_MARKET_CLOSE",
+            ],
+            [
+                "CANCEL_STOP",
+                "SUBMIT_MARKET_CLOSE",
+            ],
+        ],
         "paper_account_left_flat_after_success": True,
     }
 
