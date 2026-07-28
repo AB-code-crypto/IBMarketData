@@ -1,0 +1,124 @@
+name: Temporary liquidation restart initial advance fix
+
+on:
+  push:
+    branches:
+      - agent/fix-liquidation-restart-initial-advance
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+
+    env:
+      IB_HOST: 127.0.0.1
+      IB_PORT: "7497"
+      IB_CLIENT_ID: "200"
+      IB_ACCOUNT_ID: DU000000
+      IBMD_ENVIRONMENT: paper
+      IBMD_DEPLOYMENT_ID: paper-drill-liquidation-restart-ci
+      IBMD_DATA_ROOT: /tmp/ibmd-liquidation-restart-fix/account1
+      IBMD_APPLICATION_VERSION: ci
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/fix-liquidation-restart-initial-advance
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install ruff
+
+      - name: Apply deterministic patch
+        run: python scripts/_apply_liquidation_restart_initial_advance_fix.py
+
+      - name: Verify architecture boundaries
+        run: python scripts/verify_target_architecture.py .
+
+      - name: Run liquidation restart regression tests
+        run: |
+          python -m unittest \
+            tester.target_paper_liquidation_restart_acceptance_tester \
+            tester.target_paper_liquidation_acceptance_tester \
+            tester.target_paper_restart_acceptance_tester \
+            tester.target_execution_liquidation_tester \
+            -v
+
+      - name: Validate fresh target configuration
+        run: |
+          rm -rf "$IBMD_DATA_ROOT"
+          python scripts/bootstrap_target_deployment.py \
+            --target-root "$IBMD_DATA_ROOT" \
+            --application-version "$IBMD_APPLICATION_VERSION" \
+            --apply
+          python scripts/run_paper_liquidation_restart_acceptance.py \
+            --validate-only \
+            > /tmp/liquidation-restart-validation.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          value = json.loads(
+              Path('/tmp/liquidation-restart-validation.json').read_text()
+          )
+          assert value['paper_liquidation_restart_dependencies_compatible'] is True
+          assert value['intentional_child_exit_code'] == 86
+          assert value['oca_auto_cancelled_stop_supported'] is True
+          assert value['restart_action_sequences'] == [
+              [
+                  'CANCEL_TAKE_PROFIT',
+                  'CANCEL_STOP',
+                  'SUBMIT_MARKET_CLOSE',
+              ],
+              [
+                  'CANCEL_TAKE_PROFIT',
+                  'SUBMIT_MARKET_CLOSE',
+              ],
+              [
+                  'CANCEL_STOP',
+                  'SUBMIT_MARKET_CLOSE',
+              ],
+          ]
+          assert value['automatic_retry_enabled'] is False
+          PY
+
+      - name: Compile patched files
+        run: |
+          python -m compileall -q \
+            scripts/run_paper_liquidation_restart_acceptance.py \
+            src/ibmd/operations/paper_liquidation_restart_acceptance.py \
+            tester/target_paper_liquidation_restart_acceptance_tester.py
+
+      - name: Lint patched files
+        run: |
+          ruff check \
+            --select E4,E7,E9,F \
+            --ignore E402 \
+            scripts/run_paper_liquidation_restart_acceptance.py \
+            src/ibmd/operations/paper_liquidation_restart_acceptance.py \
+            tester/target_paper_liquidation_restart_acceptance_tester.py
+
+      - name: Remove temporary patch machinery
+        run: |
+          rm scripts/_apply_liquidation_restart_initial_advance_fix.py
+          rm .github/workflows/_tmp-liquidation-restart-initial-advance-fix.yml
+
+      - name: Commit validated fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: prime liquidation restart without broker mutation"
+          git push origin HEAD:agent/fix-liquidation-restart-initial-advance
