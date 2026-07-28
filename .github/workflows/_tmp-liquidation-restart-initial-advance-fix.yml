@@ -1,10 +1,9 @@
 name: Temporary liquidation restart initial advance fix
 
-# Second push intentionally triggers this already-registered workflow.
 on:
-  push:
+  pull_request:
     branches:
-      - agent/fix-liquidation-restart-initial-advance
+      - agent/architecture-rewrite
   workflow_dispatch:
 
 permissions:
