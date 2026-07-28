@@ -8,11 +8,10 @@ on:
   push:
     branches:
       - agent/paper-reverse-acceptance
-      - agent/fix-reverse-cancel-reconciliation-race
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   validate-paper-reverse-acceptance:
@@ -31,9 +30,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: agent/fix-reverse-cancel-reconciliation-race
-          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -46,17 +42,10 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install ruff
 
-      - name: Restore base formatting and apply minimal patch
-        run: |
-          git checkout origin/agent/architecture-rewrite -- \
-            src/ibmd/execution/domain/protection.py \
-            tester/target_execution_reverse_handoff_tester.py
-          python scripts/_tmp_minimize_reverse_cancel_race.py
-
       - name: Verify architecture boundaries
         run: python scripts/verify_target_architecture.py .
 
-      - name: Run reverse acceptance and shared safety tests
+      - name: Run reverse acceptance and safety tests
         id: tests
         continue-on-error: true
         run: |
@@ -67,11 +56,6 @@ jobs:
             tester.target_execution_reverse_finalization_tester \
             tester.target_execution_paper_submit_tester \
             tester.target_execution_protective_submit_tester \
-            tester.target_execution_protective_lifecycle_tester \
-            tester.target_execution_protection_tester \
-            tester.target_execution_liquidation_tester \
-            tester.target_paper_liquidation_acceptance_tester \
-            tester.target_paper_liquidation_restart_acceptance_tester \
             -v 2>&1 | tee /tmp/paper-reverse-tests.txt
 
       - name: Upload reverse test diagnostics
@@ -117,19 +101,16 @@ jobs:
             scripts/run_paper_reverse_acceptance.py \
             src/ibmd/operations/paper_reverse_acceptance.py
 
-      - name: Compile reverse and lifecycle files
+      - name: Compile reverse acceptance files
         run: |
           python -m compileall -q \
             apps/prepare_execution_reverse_paper_drill_v2.py \
             scripts/run_paper_reverse_acceptance.py \
-            src/ibmd/execution/domain/protection.py \
-            src/ibmd/execution/application/reverse_handoff.py \
             src/ibmd/execution/application/paper_reverse_drill.py \
             src/ibmd/operations/paper_reverse_acceptance.py \
-            tester/target_execution_reverse_handoff_tester.py \
             tester/target_paper_reverse_acceptance_tester.py
 
-      - name: Lint reverse and lifecycle files
+      - name: Lint reverse acceptance files
         id: lint
         continue-on-error: true
         run: |
@@ -138,11 +119,8 @@ jobs:
             --ignore E402 \
             apps/prepare_execution_reverse_paper_drill_v2.py \
             scripts/run_paper_reverse_acceptance.py \
-            src/ibmd/execution/domain/protection.py \
-            src/ibmd/execution/application/reverse_handoff.py \
             src/ibmd/execution/application/paper_reverse_drill.py \
             src/ibmd/operations/paper_reverse_acceptance.py \
-            tester/target_execution_reverse_handoff_tester.py \
             tester/target_paper_reverse_acceptance_tester.py \
             2>&1 | tee /tmp/paper-reverse-lint.txt
 
@@ -156,18 +134,3 @@ jobs:
       - name: Fail when reverse lint failed
         if: steps.lint.outcome == 'failure'
         run: exit 1
-
-      - name: Commit minimal tested fix and restore workflow
-        run: |
-          git show origin/agent/architecture-rewrite:.github/workflows/paper-reverse-acceptance-ci.yml \
-            > .github/workflows/paper-reverse-acceptance-ci.yml
-          rm -f scripts/_tmp_minimize_reverse_cancel_race.py
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            .github/workflows/paper-reverse-acceptance-ci.yml \
-            scripts/_tmp_minimize_reverse_cancel_race.py \
-            src/ibmd/execution/domain/protection.py \
-            tester/target_execution_reverse_handoff_tester.py
-          git commit -m "Minimize reverse cancel reconciliation fix"
-          git push origin HEAD:agent/fix-reverse-cancel-reconciliation-race

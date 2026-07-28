@@ -15,13 +15,13 @@ from ibmd.execution.application.reverse_handoff import (
     PersistedReverseSubmitGuard,
 )
 from ibmd.execution.domain.protection import apply_protective_observation
-from ibmd.execution.domain.protective_uncertainty import readiness_for_protection
 from ibmd.execution.domain.reverse_handoff import (
     ReverseHandoffAction,
     assess_reverse_handoff,
     mark_reverse_cancel_requested,
     require_reverse_ready_for_submit,
 )
+from ibmd.execution.domain.protective_uncertainty import readiness_for_protection
 from ibmd.ib_gateway.fake_paper_cancellations import (
     ScriptedPaperOrderCancellationGateway,
 )
@@ -116,12 +116,8 @@ def observation(order, outcome, *, observed_at=T2):
         broker_perm_id=9000 + order.planned_sequence,
         broker_status=outcome.value,
         requested_qty=order.quantity,
-        filled_qty=(
-            order.quantity if outcome == BrokerObservationOutcome.FILLED else 0
-        ),
-        remaining_qty=(
-            0 if outcome == BrokerObservationOutcome.FILLED else order.quantity
-        ),
+        filled_qty=(order.quantity if outcome == BrokerObservationOutcome.FILLED else 0),
+        remaining_qty=(0 if outcome == BrokerObservationOutcome.FILLED else order.quantity),
         detail=None,
     )
 
@@ -170,28 +166,16 @@ class MemoryReverseRepository:
         return self.readiness
 
     def read_episode(self, position_episode_id):
-        return (
-            self.episode
-            if position_episode_id == self.episode.position_episode_id
-            else None
-        )
+        return self.episode if position_episode_id == self.episode.position_episode_id else None
 
     def read_protection_by_episode(self, position_episode_id):
-        return (
-            self.protection
-            if position_episode_id == self.episode.position_episode_id
-            else None
-        )
+        return self.protection if position_episode_id == self.episode.position_episode_id else None
 
     def read_latest_complete(self):
         return position_snapshot()
 
     def read_snapshot_by_episode(self, position_episode_id):
-        return (
-            self.liquidation
-            if position_episode_id == self.episode.position_episode_id
-            else None
-        )
+        return self.liquidation if position_episode_id == self.episode.position_episode_id else None
 
     def publish_state_and_readiness(self, *, current, updated, readiness):
         if current.to_dict() != self.protection.to_dict():
@@ -225,7 +209,10 @@ class FakeLifecycleService:
                 if kind == ProtectiveOrderKind.STOP_LOSS
                 else self.repository.protection.take_profit_order
             )
-            if self.delay_cancel_confirmation and kind not in self.delayed_kinds:
+            if (
+                self.delay_cancel_confirmation
+                and kind not in self.delayed_kinds
+            ):
                 self.repository.protection = apply_protective_observation(
                     protection=self.repository.protection,
                     kind=kind,
