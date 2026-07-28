@@ -129,6 +129,7 @@ def _validation_payload(
         ],
         "interactive_confirmation_required": False,
         "automatic_retry_enabled": False,
+        "initial_advance_broker_free": True,
         "paper_account_left_flat_after_success": True,
     }
 
