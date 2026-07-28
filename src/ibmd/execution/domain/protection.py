@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import math
 from dataclasses import dataclass, replace
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 
 from ibmd.execution.domain.broker_attempt import BrokerOperationSnapshot
 from ibmd.foundation.atomic_json import canonical_json_text
@@ -49,9 +49,9 @@ class ProtectionPlanningError(ValueError):
 
 
 def _stable_id(kind: str, payload: dict[str, object]) -> str:
-    digest = hashlib.sha256(
-        canonical_json_text(payload).encode("utf-8")
-    ).hexdigest()[:32]
+    digest = hashlib.sha256(canonical_json_text(payload).encode("utf-8")).hexdigest()[
+        :32
+    ]
     return f"{kind}_{digest}"
 
 
@@ -122,7 +122,7 @@ def _tick_price(value: float, tick: float) -> float:
     tick_decimal = Decimal(str(tick))
     raw = Decimal(str(value))
     ticks = (raw / tick_decimal).quantize(
-        Decimal("1"),
+        Decimal(1),
         rounding=ROUND_HALF_UP,
     )
     return float(ticks * tick_decimal)
@@ -143,14 +143,10 @@ def _weighted_entry_price(
     executed_at = []
     for fill in fills:
         if fill.exec_id in seen:
-            raise ProtectionPlanningError(
-                f"duplicate fill execId: {fill.exec_id}"
-            )
+            raise ProtectionPlanningError(f"duplicate fill execId: {fill.exec_id}")
         seen.add(fill.exec_id)
         if fill.account_id != operation.operation.account_id:
-            raise ProtectionPlanningError(
-                "fill account differs from operation"
-            )
+            raise ProtectionPlanningError("fill account differs from operation")
         if (
             fill.order_ref != operation.attempt.order_ref
             or fill.con_id != operation.operation.con_id
@@ -227,16 +223,13 @@ def _validate_source_operation(
         operation.operation.command_id != command.command_id
         or operation.operation.account_id != policy.account_id
     ):
-        raise ProtectionPlanningError(
-            "operation identity differs from command/account"
-        )
+        raise ProtectionPlanningError("operation identity differs from command/account")
     if command.command_kind not in {
         StrategyCommandKind.OPEN,
         StrategyCommandKind.REVERSE,
     }:
         raise ProtectionPlanningError(
-            "unsupported episode source command: "
-            f"{command.command_kind.value}"
+            f"unsupported episode source command: {command.command_kind.value}"
         )
 
 
@@ -249,21 +242,16 @@ def _target_position_row(
     observed_at_utc: str,
 ):
     if snapshot.status != BrokerPositionSnapshotStatus.COMPLETE:
-        raise ProtectionPlanningError(
-            "broker position snapshot is not COMPLETE"
-        )
+        raise ProtectionPlanningError("broker position snapshot is not COMPLETE")
     if snapshot.account_id != policy.account_id:
-        raise ProtectionPlanningError(
-            "broker position snapshot account mismatch"
-        )
+        raise ProtectionPlanningError("broker position snapshot account mismatch")
     freshness = snapshot.freshness(
         observed_at_utc=observed_at_utc,
         max_age_seconds=policy.position_max_age_seconds,
     )
     if not freshness.is_fresh:
         raise ProtectionPlanningError(
-            "broker position snapshot is stale: "
-            f"age={freshness.age_seconds:.6f}s"
+            f"broker position snapshot is stale: age={freshness.age_seconds:.6f}s"
         )
     rows = [
         row
@@ -276,19 +264,14 @@ def _target_position_row(
             "broker snapshot does not contain exactly one operation contract row"
         )
     row = rows[0]
-    if (
-        row.symbol.upper() != policy.instrument_id.upper()
-        or row.sec_type != "FUT"
-    ):
+    if row.symbol.upper() != policy.instrument_id.upper() or row.sec_type != "FUT":
         raise ProtectionPlanningError(
             "broker position row identity differs from protected instrument"
         )
     raw_quantity = float(row.signed_quantity)
     rounded = round(raw_quantity)
     if abs(raw_quantity - rounded) > 1e-9:
-        raise ProtectionPlanningError(
-            "broker position quantity is fractional"
-        )
+        raise ProtectionPlanningError("broker position quantity is fractional")
     expected_signed = (
         command.desired_target_quantity
         if command.desired_target_side == DesiredTargetSide.LONG
@@ -305,9 +288,9 @@ def _target_position_row(
         if item is not row
         and (
             item.symbol.upper() == policy.instrument_id.upper()
-            or str(item.local_symbol or "").upper().startswith(
-                policy.instrument_id.upper()
-            )
+            or str(item.local_symbol or "")
+            .upper()
+            .startswith(policy.instrument_id.upper())
         )
     ]
     if competing:
@@ -329,17 +312,11 @@ def create_position_episode_protection_plan(
     observed_at_utc: str,
 ) -> PositionEpisodeProtectionPlan:
     if not isinstance(operation, BrokerOperationSnapshot):
-        raise ProtectionPlanningError(
-            "operation must be BrokerOperationSnapshot"
-        )
+        raise ProtectionPlanningError("operation must be BrokerOperationSnapshot")
     if not isinstance(command, ExecutionCommandStateV1):
-        raise ProtectionPlanningError(
-            "command must be ExecutionCommandStateV1"
-        )
+        raise ProtectionPlanningError("command must be ExecutionCommandStateV1")
     if not isinstance(current_readiness, ExecutionReadinessV1):
-        raise ProtectionPlanningError(
-            "current_readiness must be ExecutionReadinessV1"
-        )
+        raise ProtectionPlanningError("current_readiness must be ExecutionReadinessV1")
     _validate_source_operation(
         operation=operation,
         command=command,
@@ -372,17 +349,14 @@ def create_position_episode_protection_plan(
             )
         if (
             command.command_kind == StrategyCommandKind.OPEN
-            and previous_position.projection_status
-            != StrategyPositionStatus.FLAT
+            and previous_position.projection_status != StrategyPositionStatus.FLAT
         ):
             raise ProtectionPlanningError(
                 "OPEN episode activation requires previous FLAT projection"
             )
         if command.command_kind == StrategyCommandKind.REVERSE and (
-            previous_position.projection_status
-            != StrategyPositionStatus.OPEN
-            or previous_position.side.value
-            == command.desired_target_side.value
+            previous_position.projection_status != StrategyPositionStatus.OPEN
+            or previous_position.side.value == command.desired_target_side.value
         ):
             raise ProtectionPlanningError(
                 "REVERSE episode activation requires opposite previous position"
@@ -440,9 +414,7 @@ def create_position_episode_protection_plan(
         if command.desired_target_side == DesiredTargetSide.LONG
         else BrokerOrderSide.BUY
     )
-    position_side = StrategyPositionSide(
-        command.desired_target_side.value
-    )
+    position_side = StrategyPositionSide(command.desired_target_side.value)
     signed_quantity = (
         command.desired_target_quantity
         if position_side == StrategyPositionSide.LONG
@@ -462,9 +434,7 @@ def create_position_episode_protection_plan(
     stop_price = _tick_price(stop_raw, protective.price_tick)
     take_profit_price = _tick_price(tp_raw, protective.price_tick)
     if stop_price <= 0.0 or take_profit_price <= 0.0:
-        raise ProtectionPlanningError(
-            "calculated protective price is not positive"
-        )
+        raise ProtectionPlanningError("calculated protective price is not positive")
     oca_group = (
         f"IBMD_OCA_{protection_set_id.rsplit('_', 1)[-1]}"
         if protective.take_profit_enabled
@@ -626,9 +596,7 @@ def _observation_order_state(
     observation: BrokerOrderObservationV1,
 ) -> ProtectiveOrderV1:
     if observation.order_ref != order.order_ref:
-        raise ProtectionPlanningError(
-            "broker observation order_ref mismatch"
-        )
+        raise ProtectionPlanningError("broker observation order_ref mismatch")
     observed = observation.observed_at_utc
     detail = observation.detail
     if (
@@ -670,6 +638,39 @@ def _observation_order_state(
             updated_at_utc=observed,
             failure_reason=detail or observation.outcome.value.lower(),
         )
+    # A LIVE observation immediately after cancelOrder is not proof that the
+    # durable cancel intent disappeared. IB may continue reporting the order as
+    # LIVE while the cancellation is propagating. Preserve CANCEL_REQUESTED so
+    # subsequent invocations reconcile instead of issuing duplicate cancelOrder
+    # calls for the same protective order.
+    if (
+        order.state == ProtectiveOrderState.CANCEL_REQUESTED
+        and observation.outcome == BrokerObservationOutcome.LIVE
+    ):
+        return replace(
+            order,
+            state=ProtectiveOrderState.CANCEL_REQUESTED,
+            filled_qty=int(observation.filled_qty or 0),
+            remaining_qty=int(observation.remaining_qty or 0),
+            broker_order_id=(
+                observation.broker_order_id
+                if observation.broker_order_id is not None
+                else order.broker_order_id
+            ),
+            broker_perm_id=(
+                observation.broker_perm_id
+                if observation.broker_perm_id is not None
+                else order.broker_perm_id
+            ),
+            broker_status=observation.broker_status,
+            broker_terminal_proven=False,
+            updated_at_utc=observed,
+            terminal_at_utc=None,
+            last_broker_proof_at_utc=observed,
+            failure_reason=(
+                order.failure_reason or "cancel_requested_broker_still_live"
+            ),
+        )
     state = {
         BrokerObservationOutcome.LIVE: ProtectiveOrderState.LIVE,
         BrokerObservationOutcome.FILLED: ProtectiveOrderState.FILLED,
@@ -705,7 +706,8 @@ def _observation_order_state(
         last_broker_proof_at_utc=observed,
         failure_reason=(
             detail
-            if state in {
+            if state
+            in {
                 ProtectiveOrderState.REJECTED,
                 ProtectiveOrderState.FAILED,
             }
@@ -722,24 +724,14 @@ def apply_protective_observation(
     position_open: bool,
 ) -> ProtectionStateV1:
     if not isinstance(protection, ProtectionStateV1):
-        raise ProtectionPlanningError(
-            "protection must be ProtectionStateV1"
-        )
+        raise ProtectionPlanningError("protection must be ProtectionStateV1")
     if not isinstance(kind, ProtectiveOrderKind):
-        raise ProtectionPlanningError(
-            "kind must be ProtectiveOrderKind"
-        )
+        raise ProtectionPlanningError("kind must be ProtectiveOrderKind")
     if not isinstance(observation, BrokerOrderObservationV1):
-        raise ProtectionPlanningError(
-            "observation must be BrokerOrderObservationV1"
-        )
+        raise ProtectionPlanningError("observation must be BrokerOrderObservationV1")
     if not isinstance(position_open, bool):
-        raise ProtectionPlanningError(
-            "position_open must be boolean"
-        )
-    matching = [
-        item for item in protection.orders if item.kind == kind
-    ]
+        raise ProtectionPlanningError("position_open must be boolean")
+    matching = [item for item in protection.orders if item.kind == kind]
     if len(matching) != 1:
         raise ProtectionPlanningError(
             f"protection does not contain exactly one {kind.value} order"
@@ -749,28 +741,17 @@ def apply_protective_observation(
         observation=observation,
     )
     orders = tuple(
-        updated_order if item.kind == kind else item
-        for item in protection.orders
+        updated_order if item.kind == kind else item for item in protection.orders
     )
-    stop = next(
-        item
-        for item in orders
-        if item.kind == ProtectiveOrderKind.STOP_LOSS
-    )
+    stop = next(item for item in orders if item.kind == ProtectiveOrderKind.STOP_LOSS)
     tp = next(
-        (
-            item
-            for item in orders
-            if item.kind == ProtectiveOrderKind.TAKE_PROFIT
-        ),
+        (item for item in orders if item.kind == ProtectiveOrderKind.TAKE_PROFIT),
         None,
     )
     observed = observation.observed_at_utc
     reason = None
     terminal_at = None
-    if any(
-        item.state == ProtectiveOrderState.FILLED for item in orders
-    ):
+    if any(item.state == ProtectiveOrderState.FILLED for item in orders):
         status = ProtectionSetStatus.EXITED
         terminal_at = observed
     elif not position_open:
