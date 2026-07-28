@@ -1,5 +1,6 @@
 name: Temporary liquidation restart initial advance fix
 
+# Second push intentionally triggers this already-registered workflow.
 on:
   push:
     branches:
