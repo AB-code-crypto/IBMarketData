@@ -102,13 +102,28 @@ jobs:
             tester/target_paper_liquidation_restart_acceptance_tester.py
 
       - name: Lint patched files
+        id: lint
+        continue-on-error: true
         run: |
+          set -o pipefail
           ruff check \
             --select E4,E7,E9,F \
             --ignore E402 \
             scripts/run_paper_liquidation_restart_acceptance.py \
             src/ibmd/operations/paper_liquidation_restart_acceptance.py \
-            tester/target_paper_liquidation_restart_acceptance_tester.py
+            tester/target_paper_liquidation_restart_acceptance_tester.py \
+            2>&1 | tee /tmp/liquidation-restart-lint.txt
+
+      - name: Upload lint diagnostics
+        if: steps.lint.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: liquidation-restart-fix-lint
+          path: /tmp/liquidation-restart-lint.txt
+
+      - name: Fail when lint failed
+        if: steps.lint.outcome == 'failure'
+        run: exit 1
 
       - name: Remove temporary patch machinery
         run: |
