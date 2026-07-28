@@ -75,6 +75,9 @@ liquidation request, broker-free
 → idempotency invocation with no broker mutation
 ```
 
+The initial advance uses `--advance-position-episode-id`; that mode has no broker
+gateway and must report `broker_mutations_performed=false` before any crash probe.
+
 If TAKE PROFIT is `NOT_REQUIRED`, that cancellation checkpoint is omitted.
 
 ## Safety boundary
