@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import argparse
 import json
 import sys
@@ -27,12 +29,13 @@ from ibmd.execution.application.liquidation_triggers import (
 )
 from ibmd.execution.domain.liquidation import (
     LiquidationDomainError,
+    LiquidationRequestResult,
     request_liquidation,
 )
 from ibmd.foundation.config import ConfigurationError, load_deployment_settings
 from ibmd.foundation.identity import new_id
 from ibmd.foundation.process_lock import ServiceProcessLock
-from ibmd.foundation.time import format_utc, parse_utc
+from ibmd.foundation.time import format_utc, parse_utc, utc_now
 from ibmd.public_contracts.liquidation import LiquidationReason
 
 SERVICE_NAME = "execution"
@@ -45,6 +48,29 @@ _SUPPORTED_REASONS = {
 
 class PolicyLiquidationDrillError(RuntimeError):
     pass
+
+
+def _record_request_lifecycle_at(
+    request: LiquidationRequestResult,
+    *,
+    recorded_at_utc: str,
+) -> LiquidationRequestResult:
+    recorded = format_utc(parse_utc(recorded_at_utc))
+    operation = replace(
+        request.snapshot.operation,
+        created_at_utc=recorded,
+        updated_at_utc=recorded,
+    )
+    snapshot = replace(request.snapshot, operation=operation)
+    readiness = replace(
+        request.execution_readiness,
+        updated_at_utc=recorded,
+    )
+    return replace(
+        request,
+        snapshot=snapshot,
+        execution_readiness=readiness,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -222,6 +248,11 @@ def run(arguments: argparse.Namespace) -> int:
         observed_at_utc=observed,
         existing=None,
     )
+    recorded_at = format_utc(utc_now())
+    request = _record_request_lifecycle_at(
+        request,
+        recorded_at_utc=recorded_at,
+    )
     with ServiceProcessLock(
         settings.paths_for(SERVICE_NAME).lock_file,
         service_name=SERVICE_NAME,
@@ -235,6 +266,8 @@ def run(arguments: argparse.Namespace) -> int:
     payload = {
         "position_episode_id": episode_id,
         "observed_at_utc": observed,
+        "operation_recorded_at_utc": recorded_at,
+        "logical_trigger_time_decoupled": True,
         "selected_reason": candidate.reason.value,
         "selected_source_ref": candidate.source_ref,
         "selected_detail": candidate.detail,
