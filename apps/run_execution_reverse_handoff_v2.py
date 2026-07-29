@@ -82,7 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--instrument", default="MNQ")
     parser.add_argument("--position-max-age-seconds", type=float, default=10.0)
-    parser.add_argument("--cancel-client-id-offset", type=int, default=180)
+    parser.add_argument("--cancel-client-id-offset", type=int, default=140)
     parser.add_argument(
         "--reconciliation-client-id-offset",
         type=int,
