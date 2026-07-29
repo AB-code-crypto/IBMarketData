@@ -455,7 +455,14 @@ def prepared_reverse() -> dict:
     }
 
 
-def handoff(*, action: str, mutated: bool, order_ref: str | None = None) -> dict:
+def handoff(
+    *,
+    action: str,
+    mutated: bool,
+    order_ref: str | None = None,
+    stop_state: str = "CANCELLED",
+    take_profit_state: str = "CANCELLED",
+) -> dict:
     return {
         "command_id": COMMAND,
         "action": action,
@@ -472,6 +479,12 @@ def handoff(*, action: str, mutated: bool, order_ref: str | None = None) -> dict
             }
         ),
         "blocking_reason": None,
+        "protection": {
+            "orders": [
+                {"kind": "STOP_LOSS", "state": stop_state},
+                {"kind": "TAKE_PROFIT", "state": take_profit_state},
+            ]
+        },
     }
 
 
@@ -666,6 +679,7 @@ class PaperReverseAcceptanceRunnerTest(unittest.TestCase):
                 payload["handoff_cancel_actions"],
                 ["TAKE_PROFIT", "STOP_LOSS"],
             )
+            self.assertEqual(payload["protective_cancel_mode"], "EXPLICIT_BOTH")
             self.assertEqual(payload["reverse_submission_count"], 1)
             self.assertEqual(payload["broker_mutation_count"], 5)
             self.assertEqual(payload["source_position_episode_id"], SOURCE_EPISODE)
@@ -673,6 +687,56 @@ class PaperReverseAcceptanceRunnerTest(unittest.TestCase):
             self.assertEqual(payload["allocations"][0]["close_quantity"], 1)
             self.assertEqual(payload["allocations"][0]["open_quantity"], 1)
             self.assertTrue(payload["protection"]["fully_live"])
+            self.assertEqual(executor.commands, [])
+
+    def test_oca_auto_cancelled_stop_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            summary = root / "source-summary.json"
+            source_summary(summary)
+            executor = ScriptedExecutor(
+                (
+                    ScriptedCommand(
+                        "reverse-handoff-01",
+                        handoff(
+                            action="RECONCILE_EXITS",
+                            mutated=True,
+                            order_ref=TP_REF,
+                            stop_state="LIVE",
+                            take_profit_state="CANCEL_REQUESTED",
+                        ),
+                    ),
+                    ScriptedCommand(
+                        "reverse-handoff-02",
+                        handoff(
+                            action="READY_TO_SUBMIT",
+                            mutated=False,
+                        ),
+                    ),
+                    ScriptedCommand(
+                        "reverse-handoff-idempotency",
+                        handoff(action="READY_TO_SUBMIT", mutated=False),
+                    ),
+                )
+            )
+            runner = PaperReverseAcceptanceRunner(
+                policy=policy(root),
+                entry_summary=summary,
+                command_executor=executor,
+                state_source=RunnerState(),
+                artifacts=MemoryArtifacts(root / "artifacts"),
+                handoff_max_invocations=3,
+                handoff_poll_seconds=0.0,
+                clock=lambda: T0,
+                sleeper=lambda _seconds: None,
+            )
+            actions, invocations, mode = runner._complete_handoff(
+                command_id=COMMAND,
+                source_protection=prepared_reverse()["source_protection"],
+            )
+            self.assertEqual(actions, ("TAKE_PROFIT",))
+            self.assertEqual(invocations, 3)
+            self.assertEqual(mode, "OCA_AUTO_CANCELLED_STOP")
             self.assertEqual(executor.commands, [])
 
     def test_duplicate_handoff_cancel_is_critical_failure(self) -> None:
