@@ -109,6 +109,15 @@ def _validate_external_summaries(
         validate_acceptance_summary(gate, value)
 
 
+def _fsync_copied_file(path: Path) -> None:
+    # Windows os.fsync() delegates to _commit(), which rejects a read-only
+    # descriptor with EBADF. The copied file is already closed by copyfile;
+    # reopen it read/write solely to commit its contents durably.
+    with path.open("rb+") as handle:
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 def _stage_summaries(
     *,
     sources: dict[AcceptanceGate, Path],
@@ -129,8 +138,7 @@ def _stage_summaries(
         for gate, source in sources.items():
             target = temporary / f"{gate.value.lower()}.summary.json"
             shutil.copyfile(source, target)
-            with target.open("rb") as handle:
-                os.fsync(handle.fileno())
+            _fsync_copied_file(target)
             staged[gate] = target
         os.replace(temporary, evidence)
         return evidence, {

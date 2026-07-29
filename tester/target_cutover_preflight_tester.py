@@ -5,6 +5,9 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+from scripts.build_target_acceptance_manifest import _fsync_copied_file
 
 from ibmd.foundation.atomic_json import atomic_write_json
 from ibmd.foundation.config import DeploymentSettings
@@ -279,6 +282,22 @@ class AcceptanceManifestTest(unittest.TestCase):
                 AcceptanceGate.DAILY_FLAT,
                 invalid_daily_flat,
             )
+
+    def test_copied_evidence_fsync_uses_writable_descriptor(self) -> None:
+        handle = MagicMock()
+        handle.fileno.return_value = 17
+        context = MagicMock()
+        context.__enter__.return_value = handle
+
+        with patch.object(Path, "open", return_value=context) as open_file:
+            with patch(
+                "scripts.build_target_acceptance_manifest.os.fsync"
+            ) as fsync:
+                _fsync_copied_file(Path("evidence.summary.json"))
+
+        open_file.assert_called_once_with("rb+")
+        handle.flush.assert_called_once_with()
+        fsync.assert_called_once_with(17)
 
     def test_manifest_roundtrip_and_tamper_detection(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
