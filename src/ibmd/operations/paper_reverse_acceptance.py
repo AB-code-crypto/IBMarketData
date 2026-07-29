@@ -382,7 +382,7 @@ class PaperReverseAcceptanceRunner(PaperAcceptanceDrillRunner):
             "--position-max-age-seconds",
             str(self.policy.position_max_age_seconds),
             "--cancel-client-id-offset",
-            "180",
+            str(self.policy.protective_submit_client_id_offset),
             "--reconciliation-client-id-offset",
             str(self.policy.reconciliation_client_id_offset),
             "--commission-wait-seconds",

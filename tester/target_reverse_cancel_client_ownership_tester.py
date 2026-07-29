@@ -1,41 +1,4 @@
-from pathlib import Path
-
-
-def replace_once(text: str, old: str, new: str, *, label: str) -> str:
-    count = text.count(old)
-    if count != 1:
-        raise RuntimeError(f"{label}: expected one match, found {count}")
-    return text.replace(old, new, 1)
-
-
-reverse_app_path = Path("apps/run_execution_reverse_handoff_v2.py")
-reverse_app = reverse_app_path.read_text(encoding="utf-8")
-reverse_app = replace_once(
-    reverse_app,
-    '    parser.add_argument("--cancel-client-id-offset", type=int, default=180)\n',
-    '    parser.add_argument("--cancel-client-id-offset", type=int, default=140)\n',
-    label="reverse handoff cancellation client default",
-)
-reverse_app_path.write_text(reverse_app, encoding="utf-8")
-
-
-acceptance_path = Path("src/ibmd/operations/paper_reverse_acceptance.py")
-acceptance = acceptance_path.read_text(encoding="utf-8")
-acceptance = replace_once(
-    acceptance,
-    '            "--cancel-client-id-offset",\n            "180",\n',
-    '            "--cancel-client-id-offset",\n            str(self.policy.protective_submit_client_id_offset),\n',
-    label="reverse acceptance cancellation client ownership",
-)
-acceptance_path.write_text(acceptance, encoding="utf-8")
-
-
-test_path = Path("tester/target_reverse_cancel_client_ownership_tester.py")
-if test_path.exists():
-    raise RuntimeError(f"test already exists: {test_path}")
-
-test_path.write_text(
-    '''from __future__ import annotations
+from __future__ import annotations
 
 import tempfile
 import unittest
@@ -118,8 +81,3 @@ class ReverseCancelClientOwnershipTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-''',
-    encoding="utf-8",
-)
-
-print("Patched reverse cancellation client ownership and added regression test.")
