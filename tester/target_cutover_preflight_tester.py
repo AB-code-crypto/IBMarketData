@@ -145,7 +145,12 @@ def summary(gate: AcceptanceGate) -> dict:
             "daily_halt_sticky": True,
             "cleanup_status_complete": True,
             "command_intake_enabled": False,
-            **closed(),
+            "position_episode_id": EPISODE,
+            "liquidation_operation_id": LIQUIDATION,
+            "liquidation_state": {"fully_closed": True},
+            "flat_proof": {"accepted": True},
+            "paper_account_left_flat": True,
+            "manual_cleanup_required": False,
             "synthetic_trigger": {
                 "triggered_calculation": {"calculated_at_utc": T1}
             },
@@ -211,6 +216,29 @@ class AcceptanceManifestTest(unittest.TestCase):
                 self.assertEqual(finished, T1)
                 self.assertTrue(primary_id)
                 self.assertTrue(facts)
+
+    def test_daily_halt_uses_liquidation_state_contract(self) -> None:
+        value = summary(AcceptanceGate.DAILY_HALT)
+        self.assertNotIn("state", value)
+        self.assertTrue(value["liquidation_state"]["fully_closed"])
+
+        _finished, _primary_id, facts = validate_acceptance_summary(
+            AcceptanceGate.DAILY_HALT,
+            value,
+        )
+        self.assertTrue(facts["fully_closed"])
+        self.assertTrue(facts["flat_proof_accepted"])
+
+        invalid = dict(value)
+        invalid.pop("liquidation_state")
+        with self.assertRaisesRegex(
+            TargetAcceptanceError,
+            "liquidation_state must be a JSON object",
+        ):
+            validate_acceptance_summary(
+                AcceptanceGate.DAILY_HALT,
+                invalid,
+            )
 
     def test_rollover_accepts_only_daily_flat_qualification_blocker(self) -> None:
         value = summary(AcceptanceGate.ROLLOVER)

@@ -150,10 +150,17 @@ def _protected_position_facts(value: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _closed_position_facts(value: Mapping[str, Any]) -> dict[str, Any]:
-    state = _mapping(value.get("state"), field_name="state")
+def _closed_position_facts(
+    value: Mapping[str, Any],
+    *,
+    state_field: str = "state",
+) -> dict[str, Any]:
+    state = _mapping(value.get(state_field), field_name=state_field)
     proof = _mapping(value.get("flat_proof"), field_name="flat_proof")
-    _required_true(state.get("fully_closed"), field_name="state.fully_closed")
+    _required_true(
+        state.get("fully_closed"),
+        field_name=f"{state_field}.fully_closed",
+    )
     _required_true(proof.get("accepted"), field_name="flat_proof.accepted")
     _required_true(
         value.get("paper_account_left_flat"),
@@ -454,7 +461,10 @@ def _validate_daily_halt(
         value.get("command_intake_enabled"),
         field_name="command_intake_enabled",
     )
-    facts = _closed_position_facts(value)
+    facts = _closed_position_facts(
+        value,
+        state_field="liquidation_state",
+    )
     state = _mapping(
         value.get("final_daily_risk_state"),
         field_name="final_daily_risk_state",
