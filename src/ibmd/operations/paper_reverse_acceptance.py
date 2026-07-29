@@ -33,6 +33,7 @@ class PaperReverseAcceptanceResultV1:
     order_ref: str
     reverse_order_quantity: int
     handoff_cancel_actions: tuple[str, ...]
+    protective_cancel_mode: str
     handoff_invocation_count: int
     reverse_submission_count: int
     reverse_invocation_count: int
@@ -61,6 +62,7 @@ class PaperReverseAcceptanceResultV1:
             "order_ref": self.order_ref,
             "reverse_order_quantity": self.reverse_order_quantity,
             "handoff_cancel_actions": list(self.handoff_cancel_actions),
+            "protective_cancel_mode": self.protective_cancel_mode,
             "handoff_invocation_count": self.handoff_invocation_count,
             "reverse_submission_count": self.reverse_submission_count,
             "reverse_invocation_count": self.reverse_invocation_count,
@@ -392,7 +394,7 @@ class PaperReverseAcceptanceRunner(PaperAcceptanceDrillRunner):
         *,
         command_id: str,
         source_protection: Mapping[str, Any],
-    ) -> tuple[tuple[str, ...], int]:
+    ) -> tuple[tuple[str, ...], int, str]:
         orders = source_protection.get("orders")
         if not isinstance(orders, list):
             raise PaperAcceptanceError(
@@ -419,6 +421,7 @@ class PaperReverseAcceptanceRunner(PaperAcceptanceDrillRunner):
         actions: list[str] = []
         invocations = 0
         ready = False
+        ready_payload: Mapping[str, Any] | None = None
         for index in range(1, self.handoff_max_invocations + 1):
             payload = self._run_json(
                 step_name=f"reverse-handoff-{index:02d}",
@@ -468,6 +471,7 @@ class PaperReverseAcceptanceRunner(PaperAcceptanceDrillRunner):
                 actions.append(kind)
             if payload.get("ready_for_reverse_submit") is True:
                 ready = True
+                ready_payload = payload
                 break
             if payload.get("action") == "OPERATOR_REQUIRED":
                 raise PaperAcceptanceError(
@@ -484,9 +488,52 @@ class PaperReverseAcceptanceRunner(PaperAcceptanceDrillRunner):
                 stage="reverse-handoff",
                 position_may_be_open=True,
             )
-        if actions != expected:
+        if ready_payload is None:
             raise PaperAcceptanceError(
-                "reverse handoff cancellation order differs from the TP-then-STOP "
+                "reverse handoff reached ready without a final payload",
+                stage="reverse-handoff",
+                position_may_be_open=True,
+            )
+        final_protection = self._mapping(
+            ready_payload.get("protection"),
+            field_name="protection",
+            stage="reverse-handoff",
+            position_may_be_open=True,
+        )
+        final_orders = final_protection.get("orders")
+        if not isinstance(final_orders, list):
+            raise PaperAcceptanceError(
+                "reverse handoff final protection orders must be a list",
+                stage="reverse-handoff",
+                position_may_be_open=True,
+            )
+        final_states = {
+            str(item.get("kind")): str(item.get("state"))
+            for item in final_orders
+            if isinstance(item, Mapping)
+        }
+        if expected == ["TAKE_PROFIT", "STOP_LOSS"]:
+            if actions == expected:
+                protective_cancel_mode = "EXPLICIT_BOTH"
+            elif (
+                actions == ["TAKE_PROFIT"]
+                and final_states.get("TAKE_PROFIT") == "CANCELLED"
+                and final_states.get("STOP_LOSS") == "CANCELLED"
+            ):
+                protective_cancel_mode = "OCA_AUTO_CANCELLED_STOP"
+            else:
+                raise PaperAcceptanceError(
+                    "reverse handoff cancellation path is neither explicit TP/STOP "
+                    "nor broker-confirmed OCA sibling cancellation: "
+                    f"expected={expected}, actual={actions}, final={final_states}",
+                    stage="reverse-handoff",
+                    position_may_be_open=True,
+                )
+        elif expected == ["STOP_LOSS"] and actions == expected:
+            protective_cancel_mode = "STOP_ONLY"
+        else:
+            raise PaperAcceptanceError(
+                "reverse handoff cancellation order differs from the protection "
                 f"contract: expected={expected}, actual={actions}",
                 stage="reverse-handoff",
                 position_may_be_open=True,
@@ -506,7 +553,7 @@ class PaperReverseAcceptanceRunner(PaperAcceptanceDrillRunner):
                 stage="reverse-handoff-idempotency",
                 position_may_be_open=True,
             )
-        return tuple(actions), invocations
+        return tuple(actions), invocations, protective_cancel_mode
 
     def _finalize_reverse(
         self,
@@ -663,7 +710,11 @@ class PaperReverseAcceptanceRunner(PaperAcceptanceDrillRunner):
             stage="reverse-prepare",
             position_may_be_open=True,
         )
-        cancel_actions, handoff_invocations = self._complete_handoff(
+        (
+            cancel_actions,
+            handoff_invocations,
+            protective_cancel_mode,
+        ) = self._complete_handoff(
             command_id=command_id,
             source_protection=source_protection,
         )
@@ -702,6 +753,7 @@ class PaperReverseAcceptanceRunner(PaperAcceptanceDrillRunner):
             order_ref=identity[4],
             reverse_order_quantity=reverse_order_quantity,
             handoff_cancel_actions=cancel_actions,
+            protective_cancel_mode=protective_cancel_mode,
             handoff_invocation_count=handoff_invocations,
             reverse_submission_count=reverse_submissions,
             reverse_invocation_count=reverse_invocations,
