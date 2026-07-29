@@ -27,6 +27,11 @@ class RuntimeAuthorizationError(RuntimeError):
     pass
 
 
+ENABLED_CONTINUOUS_BROKER_MUTATION_STAGES = (
+    "LIQUIDATION_ADVANCE",
+)
+
+
 @dataclass(frozen=True)
 class RuntimeAuthorizationProofV1:
     authorization: TargetRuntimeAuthorizationV1
@@ -103,7 +108,10 @@ class RuntimeAuthorizationProofV1:
                 self.authorization.allow_unqualified_session
             ),
             "continuous_broker_mutations_authorized": True,
-            "continuous_broker_mutation_adapters_enabled": False,
+            "continuous_broker_mutation_adapters_enabled": True,
+            "enabled_broker_mutation_stages": list(
+                ENABLED_CONTINUOUS_BROKER_MUTATION_STAGES
+            ),
             "live_account_enablement": False,
             "automatic_retry_enabled": False,
         }
@@ -212,6 +220,7 @@ def verify_runtime_start_authorization(
 
 
 __all__ = [
+    "ENABLED_CONTINUOUS_BROKER_MUTATION_STAGES",
     "RuntimeAuthorizationError",
     "RuntimeAuthorizationProofV1",
     "verify_runtime_start_authorization",

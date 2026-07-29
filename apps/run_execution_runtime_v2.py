@@ -48,6 +48,10 @@ from ibmd.execution.application.liquidation_triggers import (
     LiquidationTriggerProducerPolicyV1,
     LiquidationTriggerProducerService,
 )
+from ibmd.execution.application.paper_liquidation import (
+    PaperLiquidationCoordinator,
+    PaperLiquidationPolicy,
+)
 from ibmd.execution.application.protection import PositionEpisodeProtectionService
 from ibmd.execution.application.protective_lifecycle import (
     ProtectiveLifecycleService,
@@ -92,12 +96,25 @@ from ibmd.foundation.atomic_json import canonical_json_text
 from ibmd.foundation.config import load_deployment_settings
 from ibmd.foundation.identity import new_id
 from ibmd.foundation.process_lock import ServiceProcessLock
-from ibmd.foundation.time import parse_utc
+from ibmd.foundation.time import parse_utc, utc_now_text
 from ibmd.ib_gateway.ib_async_broker_reconciliation import (
     IBAsyncBrokerReconciliationReader,
     IBBrokerReconciliationConnectionSettings,
 )
+from ibmd.ib_gateway.ib_async_paper_cancellations import (
+    IBAsyncPaperOrderCancellationGateway,
+    IBPaperCancellationConnectionSettings,
+)
+from ibmd.ib_gateway.ib_async_paper_orders import (
+    IBAsyncPaperOrderGateway,
+    IBPaperOrderConnectionSettings,
+)
+from ibmd.ib_gateway.paper_orders import PaperOrderRoute
 from ibmd.operations.health import ServiceHealthFile
+from ibmd.operations.runtime_authorization import (
+    RuntimeAuthorizationError,
+    RuntimeAuthorizationProofV1,
+)
 from ibmd.public_contracts.execution import (
     DailyRiskCleanupStatus,
     DailyRiskStateV1,
@@ -112,6 +129,13 @@ from ibmd.public_contracts.health import (
 from ibmd.public_contracts.protection import PositionEpisodePolicyV1
 
 SERVICE_NAME = "execution"
+AUTHORIZED_MUTATION_STAGES = (
+    ExecutionRuntimeStage.LIQUIDATION_ADVANCE,
+)
+_SUCCESSFUL_LIQUIDATION_STATES = {
+    "SUCCEEDED",
+    "CANCELLED_AS_ALREADY_FLAT",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -119,8 +143,9 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Run the single-owner execution control loop in broker-safe mode. "
             "The loop performs read-only reconciliation and broker-free state "
-            "transitions, while every broker-mutating stage remains disabled "
-            "until the controlled paper acceptance gate is completed."
+            "transitions. Accepted paper mutation stages are available only when "
+            "a verified authorization proof is passed in-process by the authorized "
+            "runtime wrapper."
         )
     )
     parser.add_argument("--validate-store-only", action="store_true")
@@ -141,6 +166,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--market-max-age-seconds", type=float, default=None)
     parser.add_argument("--missing-stop-grace-seconds", type=float, default=30.0)
     parser.add_argument("--reconciliation-client-id-offset", type=int, default=100)
+    parser.add_argument(
+        "--liquidation-cancel-client-id-offset",
+        type=int,
+        default=140,
+    )
+    parser.add_argument(
+        "--liquidation-submit-client-id-offset",
+        type=int,
+        default=160,
+    )
+    parser.add_argument(
+        "--liquidation-reconciliation-read-attempts",
+        type=int,
+        default=5,
+    )
+    parser.add_argument(
+        "--liquidation-reconciliation-poll-seconds",
+        type=float,
+        default=1.0,
+    )
     parser.add_argument("--connect-timeout-seconds", type=float, default=15.0)
     parser.add_argument("--request-timeout-seconds", type=float, default=15.0)
     parser.add_argument("--commission-wait-seconds", type=float, default=2.0)
@@ -158,18 +203,135 @@ def _configuration_hash(
     bundle,
     paths: tuple[Path, ...],
     poll_interval_seconds: float,
+    broker_mutations_enabled: bool,
+    authorization_hash: str | None,
+    enabled_mutation_stages: tuple[ExecutionRuntimeStage, ...],
 ) -> str:
     payload = {
         "deployment_hash": settings.configuration_hash,
         "catalog_hash": bundle.bundle_hash,
         "paths": [str(item) for item in paths],
         "poll_interval_seconds": float(poll_interval_seconds),
-        "broker_mutations_enabled": False,
+        "broker_mutations_enabled": bool(broker_mutations_enabled),
+        "runtime_authorization_hash": authorization_hash,
+        "enabled_mutation_stages": [
+            item.value for item in enabled_mutation_stages
+        ],
         "runtime_stage_order": [item.value for item in EXECUTION_RUNTIME_STAGE_ORDER],
     }
     return hashlib.sha256(
         canonical_json_text(payload).encode("utf-8")
     ).hexdigest()
+
+
+def _require_runtime_mutation_authorization(
+    *,
+    authorization_proof: RuntimeAuthorizationProofV1 | None,
+    settings,
+    catalog_root: Path,
+    observed_at_utc: str,
+) -> bool:
+    if authorization_proof is None:
+        return False
+    if not isinstance(authorization_proof, RuntimeAuthorizationProofV1):
+        raise RuntimeAuthorizationError(
+            "execution runtime requires RuntimeAuthorizationProofV1"
+        )
+    authorization = authorization_proof.authorization
+    expected = (
+        "PAPER_SOAK",
+        settings.environment,
+        settings.ib_account_id,
+        settings.deployment_id,
+        settings.application_version,
+        str(settings.data_root.resolve()),
+    )
+    actual = (
+        authorization.mode.value,
+        authorization.environment,
+        authorization.account_id,
+        authorization.deployment_id,
+        authorization.application_version,
+        str(Path(authorization.data_root).resolve()),
+    )
+    if actual != expected:
+        raise RuntimeAuthorizationError(
+            "in-process runtime authorization scope differs from deployment"
+        )
+    if authorization_proof.acceptance_gate_count != 8:
+        raise RuntimeAuthorizationError(
+            "authorized liquidation runtime requires all eight acceptance gates"
+        )
+    if Path(authorization_proof.catalog_root).resolve() != catalog_root.resolve():
+        raise RuntimeAuthorizationError(
+            "runtime authorization catalog root differs from runtime catalog"
+        )
+    observed = parse_utc(observed_at_utc)
+    if observed < parse_utc(authorization.issued_at_utc):
+        raise RuntimeAuthorizationError(
+            "runtime authorization cannot be used before issued_at_utc"
+        )
+    if observed >= parse_utc(authorization.expires_at_utc):
+        raise RuntimeAuthorizationError("runtime authorization has expired")
+    return True
+
+
+def _route_for_episode(*, bundle, instrument, episode) -> PaperOrderRoute:
+    matches = [
+        item
+        for item in bundle.contract_calendar.contracts
+        if item.con_id == episode.con_id
+        and item.local_symbol == episode.local_symbol
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            "liquidation episode contract is absent or ambiguous in catalog: "
+            f"con_id={episode.con_id}, local_symbol={episode.local_symbol}"
+        )
+    contract = matches[0]
+    return PaperOrderRoute(
+        instrument_id=instrument.instrument_id,
+        con_id=contract.con_id,
+        local_symbol=contract.local_symbol,
+        last_trade_date=contract.last_trade_date,
+        sec_type=instrument.sec_type,
+        exchange=instrument.exchange,
+        currency=instrument.currency,
+        trading_class=instrument.trading_class,
+        multiplier=instrument.multiplier,
+    )
+
+
+def _liquidation_stage_result(
+    run,
+    *,
+    observed_at_utc: str,
+) -> ExecutionRuntimeStageResultV1:
+    operation = run.after.operation
+    detail = (
+        f"action={run.action.value}, state={operation.state.value}, "
+        f"mutation_error={run.mutation_error}"
+    )
+    if run.broker_mutation_performed:
+        return ExecutionRuntimeStageResultV1.mutated(
+            ExecutionRuntimeStage.LIQUIDATION_ADVANCE,
+            observed_at_utc=observed_at_utc,
+            subject_id=operation.liquidation_operation_id,
+            detail=detail,
+        )
+    if operation.state.value in _SUCCESSFUL_LIQUIDATION_STATES:
+        return ExecutionRuntimeStageResultV1.updated(
+            ExecutionRuntimeStage.LIQUIDATION_ADVANCE,
+            observed_at_utc=observed_at_utc,
+            subject_id=operation.liquidation_operation_id,
+            detail=detail,
+        )
+    return ExecutionRuntimeStageResultV1.blocked(
+        ExecutionRuntimeStage.LIQUIDATION_ADVANCE,
+        observed_at_utc=observed_at_utc,
+        subject_id=operation.liquidation_operation_id,
+        detail=detail,
+    )
 
 
 def _protective_policy(instrument, strategy_policy) -> PositionEpisodePolicyV1:
@@ -222,7 +384,11 @@ def _safe_daily_risk(
     )
 
 
-async def run(arguments: argparse.Namespace) -> int:
+async def run(
+    arguments: argparse.Namespace,
+    *,
+    authorization_proof: RuntimeAuthorizationProofV1 | None = None,
+) -> int:
     settings = load_deployment_settings()
     bundle = load_catalog_bundle(
         arguments.catalog_root.resolve(),
@@ -235,6 +401,15 @@ async def run(arguments: argparse.Namespace) -> int:
         raise ValueError("execution runtime currently supports futures only")
     if not strategy_policy.trading_enabled:
         raise ValueError(f"strategy trading is disabled for {instrument_id}")
+    broker_mutations_enabled = _require_runtime_mutation_authorization(
+        authorization_proof=authorization_proof,
+        settings=settings,
+        catalog_root=arguments.catalog_root.resolve(),
+        observed_at_utc=utc_now_text(),
+    )
+    enabled_mutation_stages = (
+        AUTHORIZED_MUTATION_STAGES if broker_mutations_enabled else ()
+    )
 
     execution_database = (
         arguments.execution_database.resolve()
@@ -311,7 +486,18 @@ async def run(arguments: argparse.Namespace) -> int:
                     "decision_database": str(decision_database),
                     "position_feed_database": str(position_feed_database),
                     "market_database": str(market_database),
-                    "broker_mutations_enabled": False,
+                    "broker_mutations_enabled": broker_mutations_enabled,
+                    "continuous_broker_mutation_adapters_enabled": (
+                        broker_mutations_enabled
+                    ),
+                    "enabled_mutation_stages": [
+                        item.value for item in enabled_mutation_stages
+                    ],
+                    "runtime_authorization_hash": (
+                        None
+                        if authorization_proof is None
+                        else authorization_proof.authorization.content_hash
+                    ),
                     "stage_order": [
                         item.value for item in EXECUTION_RUNTIME_STAGE_ORDER
                     ],
@@ -367,6 +553,24 @@ async def run(arguments: argparse.Namespace) -> int:
     )
     if reconciliation_client_id < 0:
         raise ValueError("resolved reconciliation client id must be non-negative")
+    liquidation_cancel_client_id = (
+        settings.ib_client_id
+        + int(arguments.liquidation_cancel_client_id_offset)
+    )
+    liquidation_submit_client_id = (
+        settings.ib_client_id
+        + int(arguments.liquidation_submit_client_id_offset)
+    )
+    if broker_mutations_enabled:
+        client_ids = {
+            reconciliation_client_id,
+            liquidation_cancel_client_id,
+            liquidation_submit_client_id,
+        }
+        if min(client_ids) < 0 or len(client_ids) != 3:
+            raise ValueError(
+                "authorized liquidation client IDs must be distinct and non-negative"
+            )
     timeout = float(arguments.request_timeout_seconds)
     broker_reader = IBAsyncBrokerReconciliationReader(
         IBBrokerReconciliationConnectionSettings(
@@ -547,6 +751,100 @@ async def run(arguments: argparse.Namespace) -> int:
             (None, None)
             if value is None
             else (value.subject_id, value.detail)
+        )
+
+    async def liquidation_advance_step(
+        observed_at_utc: str,
+    ) -> ExecutionRuntimeStageResultV1:
+        _require_runtime_mutation_authorization(
+            authorization_proof=authorization_proof,
+            settings=settings,
+            catalog_root=arguments.catalog_root.resolve(),
+            observed_at_utc=utc_now_text(),
+        )
+        candidate = runtime_reader.read_active_liquidation(**scope)
+        if candidate is None:
+            return ExecutionRuntimeStageResultV1.no_action(
+                ExecutionRuntimeStage.LIQUIDATION_ADVANCE,
+                observed_at_utc=observed_at_utc,
+            )
+        operation = liquidation_store.read_operation(candidate.subject_id)
+        if operation is None:
+            raise RuntimeError(
+                "active liquidation operation disappeared: "
+                f"{candidate.subject_id}"
+            )
+        episode = protection_reader.read_episode(operation.position_episode_id)
+        if episode is None:
+            raise RuntimeError(
+                "active liquidation episode disappeared: "
+                f"{operation.position_episode_id}"
+            )
+        route = _route_for_episode(
+            bundle=bundle,
+            instrument=instrument,
+            episode=episode,
+        )
+        order_gateway = IBAsyncPaperOrderGateway(
+            IBPaperOrderConnectionSettings(
+                host=settings.ib_host,
+                port=settings.ib_port,
+                client_id=liquidation_submit_client_id,
+                account_id=account_id,
+                connect_timeout_seconds=float(
+                    arguments.connect_timeout_seconds
+                ),
+            )
+        )
+        cancellation_gateway = IBAsyncPaperOrderCancellationGateway(
+            IBPaperCancellationConnectionSettings(
+                host=settings.ib_host,
+                port=settings.ib_port,
+                client_id=liquidation_cancel_client_id,
+                account_id=account_id,
+                connect_timeout_seconds=float(
+                    arguments.connect_timeout_seconds
+                ),
+            )
+        )
+        coordinator = PaperLiquidationCoordinator(
+            policy=PaperLiquidationPolicy(
+                account_id=account_id,
+                environment=settings.environment,
+                confirmed_paper_account_id=(
+                    authorization_proof.authorization.account_id
+                ),
+                strategy_id=strategy_id,
+                strategy_version=strategy_version,
+                deployment_id=deployment_id,
+                instrument_id=instrument.instrument_id,
+                order_route=route,
+                position_max_age_seconds=position_max_age,
+                reconciliation_read_attempts=int(
+                    arguments.liquidation_reconciliation_read_attempts
+                ),
+                reconciliation_poll_seconds=float(
+                    arguments.liquidation_reconciliation_poll_seconds
+                ),
+            ),
+            protection_source=protection_reader,
+            execution_state_source=execution_state,
+            position_snapshot_source=position_source,
+            repository=liquidation_store,
+            order_gateway=order_gateway,
+            cancellation_gateway=cancellation_gateway,
+            broker_snapshot_source=broker_reader,
+        )
+        try:
+            result = await coordinator.run_once(
+                position_episode_id=operation.position_episode_id
+            )
+        finally:
+            await cancellation_gateway.close()
+            await order_gateway.close()
+        return _liquidation_stage_result(
+            result,
+            observed_at_utc=observed_at_utc,
         )
 
     def finalization_step(observed_at_utc: str) -> ExecutionRuntimeStageResultV1:
@@ -777,6 +1075,21 @@ async def run(arguments: argparse.Namespace) -> int:
             else (value.subject_id, value.detail)
         )
 
+    liquidation_stage = (
+        CallableExecutionRuntimeStage(
+            ExecutionRuntimeStage.LIQUIDATION_ADVANCE,
+            liquidation_advance_step,
+        )
+        if broker_mutations_enabled
+        else DisabledMutationExecutionRuntimeStage(
+            ExecutionRuntimeStage.LIQUIDATION_ADVANCE,
+            pending=liquidation_pending,
+            disabled_reason=(
+                "continuous liquidation broker mutations require a verified "
+                "in-process PAPER_SOAK authorization proof"
+            ),
+        )
+    )
     stages = (
         CallableExecutionRuntimeStage(
             ExecutionRuntimeStage.STRATEGIC_RECONCILIATION,
@@ -786,14 +1099,7 @@ async def run(arguments: argparse.Namespace) -> int:
             ExecutionRuntimeStage.PROTECTIVE_RECONCILIATION,
             protective_reconciliation_step,
         ),
-        DisabledMutationExecutionRuntimeStage(
-            ExecutionRuntimeStage.LIQUIDATION_ADVANCE,
-            pending=liquidation_pending,
-            disabled_reason=(
-                "continuous liquidation broker mutations are disabled until "
-                "the paper acceptance gate passes"
-            ),
-        ),
+        liquidation_stage,
         CallableExecutionRuntimeStage(
             ExecutionRuntimeStage.POSITION_FINALIZATION,
             finalization_step,
@@ -841,7 +1147,7 @@ async def run(arguments: argparse.Namespace) -> int:
     )
     coordinator = ExecutionRuntimeCoordinator(
         stages=stages,
-        broker_mutations_enabled=False,
+        broker_mutations_enabled=broker_mutations_enabled,
     )
 
     instance_id = new_id("instance")
@@ -855,6 +1161,13 @@ async def run(arguments: argparse.Namespace) -> int:
             market_database,
         ),
         poll_interval_seconds=interval,
+        broker_mutations_enabled=broker_mutations_enabled,
+        authorization_hash=(
+            None
+            if authorization_proof is None
+            else authorization_proof.authorization.content_hash
+        ),
+        enabled_mutation_stages=enabled_mutation_stages,
     )
     health_file = ServiceHealthFile(
         settings.paths_for(SERVICE_NAME).health_file,
@@ -871,7 +1184,17 @@ async def run(arguments: argparse.Namespace) -> int:
 
     async def one_tick():
         nonlocal health
-        tick = await coordinator.run_tick()
+        observed_at_utc = utc_now_text()
+        if authorization_proof is not None:
+            _require_runtime_mutation_authorization(
+                authorization_proof=authorization_proof,
+                settings=settings,
+                catalog_root=arguments.catalog_root.resolve(),
+                observed_at_utc=observed_at_utc,
+            )
+        tick = await coordinator.run_tick(
+            observed_at_utc=observed_at_utc
+        )
         last = tick.results[-1] if tick.results else None
         if tick.status == ExecutionRuntimeTickStatus.FAILED:
             readiness = Readiness.BLOCKED
@@ -940,7 +1263,11 @@ async def run(arguments: argparse.Namespace) -> int:
         await broker_reader.close()
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    authorization_proof: RuntimeAuthorizationProofV1 | None = None,
+) -> int:
     arguments = build_parser().parse_args(argv)
     selected = sum(
         int(value)
@@ -958,7 +1285,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     try:
-        return asyncio.run(run(arguments))
+        return asyncio.run(
+            run(
+                arguments,
+                authorization_proof=authorization_proof,
+            )
+        )
     except KeyboardInterrupt:
         return 130
     except Exception as exc:

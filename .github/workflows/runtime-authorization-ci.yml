@@ -122,7 +122,10 @@ jobs:
               Path('/tmp/runtime-authorization-proof.json').read_text()
           )
           assert value['continuous_broker_mutations_authorized'] is True
-          assert value['continuous_broker_mutation_adapters_enabled'] is False
+          assert value['continuous_broker_mutation_adapters_enabled'] is True
+          assert value['enabled_broker_mutation_stages'] == [
+              'LIQUIDATION_ADVANCE'
+          ]
           assert value['execution_runtime_started'] is False
           assert value['live_account_enablement'] is False
           PY
@@ -141,7 +144,11 @@ jobs:
           )
           assert value['runtime_authorization_verified'] is True
           assert value['continuous_broker_mutations_authorized'] is True
-          assert value['continuous_broker_mutation_adapters_enabled'] is False
+          assert value['continuous_broker_mutation_adapters_enabled'] is True
+          assert value['continuous_broker_mutations_enabled'] is True
+          assert value['enabled_broker_mutation_stages'] == [
+              'LIQUIDATION_ADVANCE'
+          ]
           execution = next(
               item for item in value['services']
               if item['service'] == 'execution'
@@ -174,6 +181,7 @@ jobs:
       - name: Compile authorization files
         run: |
           python -m compileall -q \
+            apps/run_execution_runtime_v2.py \
             apps/run_execution_authorized_runtime_v2.py \
             apps/run_target_supervisor.py \
             src/ibmd/operations/runtime_authorization.py \
@@ -186,6 +194,7 @@ jobs:
           ruff check \
             --select E4,E7,E9,F \
             --ignore E402 \
+            apps/run_execution_runtime_v2.py \
             apps/run_execution_authorized_runtime_v2.py \
             apps/run_target_supervisor.py \
             src/ibmd/operations/runtime_authorization.py \
