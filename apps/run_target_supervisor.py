@@ -18,6 +18,7 @@ from ibmd.foundation.process_lock import ServiceProcessLock
 from ibmd.foundation.time import utc_now_text
 from ibmd.operations.health import ServiceHealthFile, read_service_health
 from ibmd.operations.runtime_authorization import (
+    ENABLED_CONTINUOUS_BROKER_MUTATION_STAGES,
     RuntimeAuthorizationError,
     RuntimeAuthorizationProofV1,
     verify_runtime_start_authorization,
@@ -182,6 +183,11 @@ def _configuration_hash(
     policy: SupervisorPolicyV1,
     authorization_proof: RuntimeAuthorizationProofV1 | None,
 ) -> str:
+    enabled_stages = (
+        ()
+        if authorization_proof is None
+        else ENABLED_CONTINUOUS_BROKER_MUTATION_STAGES
+    )
     payload = {
         "deployment_hash": deployment_hash,
         "services": [
@@ -204,7 +210,8 @@ def _configuration_hash(
             if authorization_proof is None
             else authorization_proof.authorization.content_hash
         ),
-        "continuous_broker_mutation_adapters_enabled": False,
+        "continuous_broker_mutation_adapters_enabled": bool(enabled_stages),
+        "enabled_broker_mutation_stages": list(enabled_stages),
         "automatic_restart_enabled": False,
         "database_access": False,
     }
@@ -220,7 +227,12 @@ def _plan_payload(
     policy: SupervisorPolicyV1,
     authorization_proof: RuntimeAuthorizationProofV1 | None,
 ) -> dict:
-    adapters_enabled = False
+    enabled_stages = (
+        ()
+        if authorization_proof is None
+        else ENABLED_CONTINUOUS_BROKER_MUTATION_STAGES
+    )
+    adapters_enabled = bool(enabled_stages)
     return {
         "deployment_id": settings.deployment_id,
         "environment": settings.environment,
@@ -248,6 +260,7 @@ def _plan_payload(
             authorization_proof is not None
         ),
         "continuous_broker_mutation_adapters_enabled": adapters_enabled,
+        "enabled_broker_mutation_stages": list(enabled_stages),
         "continuous_broker_mutations_enabled": adapters_enabled,
         "automatic_restart_enabled": False,
         "trading_database_access": False,

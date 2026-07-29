@@ -3,12 +3,18 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
+from apps import run_execution_authorized_runtime_v2
+from apps.run_execution_runtime_v2 import (
+    _require_runtime_mutation_authorization,
+)
 from apps.run_execution_authorized_runtime_v2 import (
     _forwarded_runtime_args,
     build_parser,
 )
-from apps.run_target_supervisor import _service_specs
+from apps.run_target_supervisor import _plan_payload, _service_specs
 from ibmd.foundation.atomic_json import atomic_write_json
 from ibmd.foundation.config import DeploymentSettings
 from ibmd.operations.acceptance_manifest import (
@@ -21,9 +27,11 @@ from ibmd.operations.cutover_preflight import (
     TargetRuntimeAuthorizationV1,
 )
 from ibmd.operations.runtime_authorization import (
+    ENABLED_CONTINUOUS_BROKER_MUTATION_STAGES,
     RuntimeAuthorizationError,
     verify_runtime_start_authorization,
 )
+from ibmd.operations.supervisor import SupervisorPolicyV1
 from tester.target_cutover_preflight_tester import summary
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -139,8 +147,12 @@ class RuntimeAuthorizationVerificationTest(unittest.TestCase):
             self.assertFalse(proof.session_production_qualified)
             payload = proof.to_dict()
             self.assertTrue(payload["continuous_broker_mutations_authorized"])
-            self.assertFalse(
+            self.assertTrue(
                 payload["continuous_broker_mutation_adapters_enabled"]
+            )
+            self.assertEqual(
+                payload["enabled_broker_mutation_stages"],
+                list(ENABLED_CONTINUOUS_BROKER_MUTATION_STAGES),
             )
             self.assertFalse(payload["live_account_enablement"])
 
@@ -199,6 +211,38 @@ class RuntimeAuthorizationVerificationTest(unittest.TestCase):
                     observed_at_utc=T2,
                 )
 
+    def test_in_process_runtime_proof_expires_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve() / "target"
+            (
+                deployment,
+                _bootstrap,
+                _manifest,
+                manifest_path,
+                _authorization,
+                authorization_path,
+                _summaries,
+            ) = build_target(root)
+            proof = verify_runtime_start_authorization(
+                settings=deployment,
+                source_root=ROOT,
+                authorization_path=authorization_path,
+                acceptance_manifest_path=manifest_path,
+                bootstrap_manifest_path=ROOT / "bootstrap" / "target.v1.json",
+                catalog_root=root / "catalog",
+                observed_at_utc=T1,
+            )
+            with self.assertRaisesRegex(
+                RuntimeAuthorizationError,
+                "expired",
+            ):
+                _require_runtime_mutation_authorization(
+                    authorization_proof=proof,
+                    settings=deployment,
+                    catalog_root=root / "catalog",
+                    observed_at_utc=T2,
+                )
+
 
 class AuthorizedWrapperTest(unittest.TestCase):
     def test_wrapper_forwards_runtime_mode_and_target_catalog(self) -> None:
@@ -218,15 +262,53 @@ class AuthorizedWrapperTest(unittest.TestCase):
             catalog_root=Path("/target/catalog"),
         )
         self.assertEqual(
-            forwarded,
+            forwarded[:4],
             [
                 "--continuous",
                 "--poll-interval-seconds",
                 "2",
                 "--catalog-root",
-                "/target/catalog",
             ],
         )
+        self.assertEqual(Path(forwarded[4]), Path("/target/catalog"))
+
+    def test_verified_proof_is_passed_in_process_to_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            arguments = build_parser().parse_args(
+                [
+                    "--runtime-authorization",
+                    str(root / "authorization.json"),
+                ]
+            )
+            proof = SimpleNamespace(to_dict=lambda: {"proof": True})
+            deployment = SimpleNamespace(data_root=root)
+            with patch.object(
+                run_execution_authorized_runtime_v2,
+                "load_deployment_settings",
+                return_value=deployment,
+            ), patch.object(
+                run_execution_authorized_runtime_v2,
+                "verify_runtime_start_authorization",
+                return_value=proof,
+            ), patch.object(
+                run_execution_authorized_runtime_v2,
+                "atomic_write_json",
+            ), patch.object(
+                run_execution_authorized_runtime_v2.run_execution_runtime_v2,
+                "main",
+                return_value=0,
+            ) as runtime_main:
+                result = run_execution_authorized_runtime_v2.run(
+                    arguments,
+                    ["--once"],
+                )
+            self.assertEqual(result, 0)
+            runtime_main.assert_called_once()
+            self.assertIs(
+                runtime_main.call_args.kwargs["authorization_proof"],
+                proof,
+            )
 
     def test_validation_only_rejects_inner_runtime_arguments(self) -> None:
         parser = build_parser()
@@ -250,7 +332,7 @@ class AuthorizedWrapperTest(unittest.TestCase):
 
 
 class AuthorizedSupervisorPlanTest(unittest.TestCase):
-    def test_authorized_plan_selects_wrapper_but_keeps_adapters_disabled(self) -> None:
+    def test_authorized_plan_enables_only_liquidation_adapter(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve() / "target"
             (
@@ -280,13 +362,26 @@ class AuthorizedSupervisorPlanTest(unittest.TestCase):
             execution = next(
                 item for item in specs if item.service_name == "execution"
             )
-            self.assertTrue(
-                execution.argv[1].endswith(
-                    "apps/run_execution_authorized_runtime_v2.py"
-                )
+            self.assertEqual(
+                Path(execution.argv[1]).name,
+                "run_execution_authorized_runtime_v2.py",
             )
             self.assertIn("--runtime-authorization", execution.argv)
             self.assertIn("--allow-unqualified-session", execution.argv)
+            plan = _plan_payload(
+                settings=deployment,
+                specs=specs,
+                policy=SupervisorPolicyV1(),
+                authorization_proof=proof,
+            )
+            self.assertTrue(
+                plan["continuous_broker_mutation_adapters_enabled"]
+            )
+            self.assertTrue(plan["continuous_broker_mutations_enabled"])
+            self.assertEqual(
+                plan["enabled_broker_mutation_stages"],
+                list(ENABLED_CONTINUOUS_BROKER_MUTATION_STAGES),
+            )
 
     def test_read_only_plan_keeps_canonical_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -300,10 +395,26 @@ class AuthorizedSupervisorPlanTest(unittest.TestCase):
             execution = next(
                 item for item in specs if item.service_name == "execution"
             )
-            self.assertTrue(
-                execution.argv[1].endswith("apps/run_execution_runtime_v2.py")
+            self.assertEqual(
+                Path(execution.argv[1]).name,
+                "run_execution_runtime_v2.py",
             )
             self.assertNotIn("--runtime-authorization", execution.argv)
+            plan = _plan_payload(
+                settings=SimpleNamespace(
+                    deployment_id="read-only",
+                    environment="paper",
+                    data_root=root,
+                ),
+                specs=specs,
+                policy=SupervisorPolicyV1(),
+                authorization_proof=None,
+            )
+            self.assertFalse(
+                plan["continuous_broker_mutation_adapters_enabled"]
+            )
+            self.assertFalse(plan["continuous_broker_mutations_enabled"])
+            self.assertEqual(plan["enabled_broker_mutation_stages"], [])
 
 
 if __name__ == "__main__":

@@ -26,8 +26,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Verify one immutable PAPER_SOAK runtime authorization and then invoke "
-            "the canonical execution runtime in the same process. The current "
-            "continuous broker-mutation adapters remain disabled."
+            "the canonical execution runtime in the same process. Only explicitly "
+            "accepted mutation stages are enabled by the in-process proof."
         ),
         add_help=False,
     )
@@ -117,7 +117,10 @@ def run(
             )
         )
         return 0
-    return run_execution_runtime_v2.main(forwarded)
+    return run_execution_runtime_v2.main(
+        forwarded,
+        authorization_proof=proof,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

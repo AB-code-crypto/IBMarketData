@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import unittest
 from dataclasses import dataclass
+from types import SimpleNamespace
 
+from apps.run_execution_runtime_v2 import _liquidation_stage_result
 from ibmd.execution.application.runtime import (
     EXECUTION_RUNTIME_STAGE_ORDER,
     ExecutionRuntimeCoordinator,
@@ -230,6 +232,49 @@ class ExecutionRuntimeKernelTest(unittest.TestCase):
                 observed_at_utc=T0,
                 detail="",
             )
+
+    def test_authorized_liquidation_result_blocks_until_terminal(self) -> None:
+        def run(*, mutated: bool, state: str, error: str | None = None):
+            return SimpleNamespace(
+                after=SimpleNamespace(
+                    operation=SimpleNamespace(
+                        liquidation_operation_id="liquidation_operation_a",
+                        state=SimpleNamespace(value=state),
+                    )
+                ),
+                action=SimpleNamespace(value="CANCEL_TAKE_PROFIT"),
+                broker_mutation_performed=mutated,
+                mutation_error=error,
+            )
+
+        mutated = _liquidation_stage_result(
+            run(mutated=True, state="CANCELING_EXITS"),
+            observed_at_utc=T0,
+        )
+        self.assertEqual(mutated.status, ExecutionRuntimeStageStatus.MUTATED)
+
+        blocked = _liquidation_stage_result(
+            run(mutated=False, state="CANCELING_EXITS"),
+            observed_at_utc=T0,
+        )
+        self.assertEqual(blocked.status, ExecutionRuntimeStageStatus.BLOCKED)
+        self.assertTrue(blocked.blocks_lower_priority)
+
+        terminal = _liquidation_stage_result(
+            run(mutated=False, state="SUCCEEDED"),
+            observed_at_utc=T0,
+        )
+        self.assertEqual(terminal.status, ExecutionRuntimeStageStatus.UPDATED)
+
+        operator_required = _liquidation_stage_result(
+            run(mutated=False, state="FAILED_OPERATOR_REQUIRED"),
+            observed_at_utc=T0,
+        )
+        self.assertEqual(
+            operator_required.status,
+            ExecutionRuntimeStageStatus.BLOCKED,
+        )
+        self.assertTrue(operator_required.blocks_lower_priority)
 
     def test_missing_or_reordered_stages_are_rejected(self) -> None:
         values = stages()
