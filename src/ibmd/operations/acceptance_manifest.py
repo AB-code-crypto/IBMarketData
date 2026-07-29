@@ -514,8 +514,36 @@ def _validate_policy(
         field_name="policy_trigger_proven",
     )
     blocked = value.get("blocked_reasons")
-    if not isinstance(blocked, list) or blocked:
-        raise TargetAcceptanceError("policy liquidation blocked_reasons must be empty")
+    if (
+        not isinstance(blocked, list)
+        or any(
+            not isinstance(item, str) or not item.strip()
+            for item in blocked
+        )
+    ):
+        raise TargetAcceptanceError(
+            "policy liquidation blocked_reasons must be a list of non-empty strings"
+        )
+    if scenario == "DAILY_FLAT":
+        if blocked:
+            raise TargetAcceptanceError(
+                "DAILY_FLAT blocked_reasons must be empty"
+            )
+    elif scenario == "ROLLOVER":
+        allowed_prefix = "daily_flat_session_not_production_qualified:"
+        unexpected = [
+            item for item in blocked
+            if not item.startswith(allowed_prefix)
+        ]
+        if unexpected:
+            raise TargetAcceptanceError(
+                "ROLLOVER contains unexpected blockers: "
+                + repr(unexpected)
+            )
+    else:
+        raise TargetAcceptanceError(
+            f"unsupported policy liquidation scenario: {scenario}"
+        )
     candidates = value.get("trigger_candidate_reasons")
     if not isinstance(candidates, list) or scenario not in candidates:
         raise TargetAcceptanceError(
@@ -530,6 +558,7 @@ def _validate_policy(
                 field_name="trigger_source_ref",
             ),
             "policy_trigger_proven": True,
+            "blocked_reasons": list(blocked),
         }
     )
     return (

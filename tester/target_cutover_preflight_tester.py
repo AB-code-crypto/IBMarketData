@@ -212,6 +212,46 @@ class AcceptanceManifestTest(unittest.TestCase):
                 self.assertTrue(primary_id)
                 self.assertTrue(facts)
 
+    def test_rollover_accepts_only_daily_flat_qualification_blocker(self) -> None:
+        value = summary(AcceptanceGate.ROLLOVER)
+        value["blocked_reasons"] = [
+            "daily_flat_session_not_production_qualified:CME_EQUITY_INDEX"
+        ]
+        _finished, _primary_id, facts = validate_acceptance_summary(
+            AcceptanceGate.ROLLOVER,
+            value,
+        )
+        self.assertEqual(
+            facts["blocked_reasons"],
+            value["blocked_reasons"],
+        )
+
+        invalid_rollover = summary(AcceptanceGate.ROLLOVER)
+        invalid_rollover["blocked_reasons"] = [
+            "rollover_contract_still_active:MNQU6"
+        ]
+        with self.assertRaisesRegex(
+            TargetAcceptanceError,
+            "ROLLOVER contains unexpected blockers",
+        ):
+            validate_acceptance_summary(
+                AcceptanceGate.ROLLOVER,
+                invalid_rollover,
+            )
+
+        invalid_daily_flat = summary(AcceptanceGate.DAILY_FLAT)
+        invalid_daily_flat["blocked_reasons"] = [
+            "daily_flat_session_not_production_qualified:CME_EQUITY_INDEX"
+        ]
+        with self.assertRaisesRegex(
+            TargetAcceptanceError,
+            "DAILY_FLAT blocked_reasons must be empty",
+        ):
+            validate_acceptance_summary(
+                AcceptanceGate.DAILY_FLAT,
+                invalid_daily_flat,
+            )
+
     def test_manifest_roundtrip_and_tamper_detection(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
