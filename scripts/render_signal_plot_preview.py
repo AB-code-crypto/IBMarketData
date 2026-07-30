@@ -92,6 +92,9 @@ def render_preview() -> tuple[Path, str]:
         pearson_scores=score_result.pearson_scores,
         candidate_scores=score_result.candidate_scores,
         candidate_potential_result=potential,
+        total_candidates_count=len(pattern_matrix.valid_candidates),
+        pearson_passed_count=len(passed_candidates),
+        minmax_passed_count=len(minmax_result.valid_candidates),
         output_dir=OUTPUT_DIR,
     )
 

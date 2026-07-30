@@ -43,6 +43,12 @@ class CandidatePotentialResult:
     # Сколько кандидатов взяли в расчёт после проверки future-window.
     used_candidates_count: int
 
+    # Signal timestamp каждого кандидата, реально использованного в прогнозе.
+    used_candidate_signal_bar_ts: np.ndarray
+
+    # Индивидуальные future path использованных кандидатов в пунктах текущего инструмента.
+    candidate_future_delta_points: np.ndarray
+
     # Временная шкала future path в минутах от signal_bar.
     x_minutes: np.ndarray
 
@@ -221,6 +227,8 @@ def build_empty_potential_result(
         max_count=int(max_count),
         source_candidates_count=int(source_candidates_count),
         used_candidates_count=int(used_candidates_count),
+        used_candidate_signal_bar_ts=np.empty((0,), dtype=np.int64),
+        candidate_future_delta_points=np.empty((0, 0), dtype=float),
         x_minutes=np.empty((0,), dtype=float),
         weighted_future_delta_bps=np.empty((0,), dtype=float),
         weighted_future_delta_points=np.empty((0,), dtype=float),
@@ -401,7 +409,9 @@ def build_candidate_potential_result(
     )
 
     current_entry_price = float(current_values[-1])
+    candidate_future_points = future_matrix / 10000.0 * abs(current_entry_price)
     weighted_future_points = weighted_future_bps / 10000.0 * abs(current_entry_price)
+    used_candidate_signal_bar_ts = np.asarray([candidate.signal_bar_ts for candidate in valid_candidates], dtype=np.int64)
 
     x_minutes = np.arange(weighted_future_points.size, dtype=float) * bar_size_seconds / 60.0
 
@@ -468,6 +478,8 @@ def build_candidate_potential_result(
         max_count=max_count,
         source_candidates_count=len(candidates),
         used_candidates_count=used_count,
+        used_candidate_signal_bar_ts=used_candidate_signal_bar_ts,
+        candidate_future_delta_points=candidate_future_points.astype(float),
         x_minutes=x_minutes,
         weighted_future_delta_bps=weighted_future_bps.astype(float),
         weighted_future_delta_points=weighted_future_points.astype(float),
