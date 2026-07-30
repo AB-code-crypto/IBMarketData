@@ -8,35 +8,6 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(BASE_DIR / ".env", encoding="utf-8-sig")
 
 
-def _read_required_env(name: str) -> str:
-    value = os.getenv(name)
-    if value is None or not value.strip():
-        raise RuntimeError(
-            f"Обязательная переменная окружения не задана: {name}"
-        )
-    return value.strip()
-
-
-def _read_required_int_env(name: str) -> int:
-    value = _read_required_env(name)
-    try:
-        return int(value)
-    except ValueError as exc:
-        raise ValueError(
-            f"{name} должен быть целым числом; получено: {value!r}"
-        ) from exc
-
-
-def _read_required_float_env(name: str) -> float:
-    value = _read_required_env(name)
-    try:
-        return float(value)
-    except ValueError as exc:
-        raise ValueError(
-            f"{name} должен быть числом; получено: {value!r}"
-        ) from exc
-
-
 @dataclass(frozen=True)
 class SignalConfig:
     # A complete BID/ASK close bar older than this is not safe for live signals.
@@ -46,15 +17,9 @@ class SignalConfig:
     decision_pipeline_max_age_seconds: int = 30
 
     # The only supported signal window is rolling.
-    rolling_signal_step_seconds: int = _read_required_int_env(
-        "ROLLING_SIGNAL_STEP_SECONDS"
-    )
-    rolling_back_minutes: int = _read_required_int_env(
-        "ROLLING_BACK_MINUTES"
-    )
-    rolling_trade_minutes: int = _read_required_int_env(
-        "ROLLING_TRADE_MINUTES"
-    )
+    rolling_signal_step_seconds: int = int(os.environ["ROLLING_SIGNAL_STEP_SECONDS"].strip())
+    rolling_back_minutes: int = int(os.environ["ROLLING_BACK_MINUTES"].strip())
+    rolling_trade_minutes: int = int(os.environ["ROLLING_TRADE_MINUTES"].strip())
 
     # Ordinary protective TP/SL safety remains independent from signal features.
     protective_order_accept_timeout_seconds: float = 5.0
@@ -70,46 +35,11 @@ class SignalConfig:
     candidate_score_end_delta_weight: float = 1.0
     candidate_score_minmax_weight: float = 1.0
 
-    candidate_potential_min_count: int = _read_required_int_env(
-        "CANDIDATE_POTENTIAL_MIN_COUNT"
-    )
-    candidate_potential_max_count: int = _read_required_int_env(
-        "CANDIDATE_POTENTIAL_MAX_COUNT"
-    )
-    candidate_potential_min_abs_end_delta_points: float = (
-        _read_required_float_env(
-            "CANDIDATE_POTENTIAL_MIN_ABS_END_DELTA_POINTS"
-        )
-    )
+    candidate_potential_min_count: int = int(os.environ["CANDIDATE_POTENTIAL_MIN_COUNT"].strip())
+    candidate_potential_max_count: int = int(os.environ["CANDIDATE_POTENTIAL_MAX_COUNT"].strip())
+    candidate_potential_min_abs_end_delta_points: float = float(os.environ["CANDIDATE_POTENTIAL_MIN_ABS_END_DELTA_POINTS"].strip())
 
     signal_event_retention_days: int = 7
-
-    def __post_init__(self) -> None:
-        if self.rolling_signal_step_seconds <= 0:
-            raise ValueError(
-                "ROLLING_SIGNAL_STEP_SECONDS должен быть > 0"
-            )
-        if self.rolling_back_minutes <= 0:
-            raise ValueError("ROLLING_BACK_MINUTES должен быть > 0")
-        if self.rolling_trade_minutes <= 0:
-            raise ValueError("ROLLING_TRADE_MINUTES должен быть > 0")
-        if self.candidate_potential_min_count <= 0:
-            raise ValueError(
-                "CANDIDATE_POTENTIAL_MIN_COUNT должен быть > 0"
-            )
-        if (
-            self.candidate_potential_max_count
-            < self.candidate_potential_min_count
-        ):
-            raise ValueError(
-                "CANDIDATE_POTENTIAL_MAX_COUNT должен быть >= "
-                "CANDIDATE_POTENTIAL_MIN_COUNT"
-            )
-        if self.candidate_potential_min_abs_end_delta_points < 0.0:
-            raise ValueError(
-                "CANDIDATE_POTENTIAL_MIN_ABS_END_DELTA_POINTS "
-                "должен быть >= 0"
-            )
 
 
 DEFAULT_SIGNAL_CONFIG = SignalConfig()
