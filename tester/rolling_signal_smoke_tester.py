@@ -73,14 +73,41 @@ class RollingSignalSmokeTest(unittest.TestCase):
         )
 
     def test_candidate_hour_groups(self) -> None:
+        self.assertEqual(
+            resolve_allowed_hours(2, "FUT"),
+            [0, 1, 2, 3, 4, 5, 6, 7],
+        )
+        self.assertEqual(
+            resolve_allowed_hours(3, "FUT"),
+            [1, 2, 3, 4, 5, 6, 7],
+        )
+        self.assertEqual(
+            resolve_allowed_hours(8, "FUT"),
+            [6, 7, 8],
+        )
+        self.assertEqual(
+            resolve_allowed_hours(9, "FUT"),
+            [7, 8, 9, 10, 11, 12, 13, 14, 15],
+        )
+        self.assertEqual(
+            resolve_allowed_hours(10, "FUT"),
+            [8, 9, 10, 11, 12, 13, 14, 15],
+        )
+        self.assertEqual(
+            resolve_allowed_hours(11, "FUT"),
+            [9, 10, 11, 12, 13, 14, 15],
+        )
         self.assertEqual(resolve_allowed_hours(15, "FUT"), [])
         self.assertEqual(resolve_allowed_hours(16, "FUT"), [])
-        self.assertIn(9, resolve_allowed_hours(8, "FUT"))
+
         self.assertEqual(
             resolve_allowed_hours(8, "CASH"),
             [7, 8, 9, 10],
         )
-        self.assertEqual(len(resolve_allowed_hours(3, "CRYPTO")), 24)
+        self.assertEqual(
+            len(resolve_allowed_hours(3, "CRYPTO")),
+            24,
+        )
 
     def test_mid_close_is_read_time_expression(self) -> None:
         expression = mid_close_sql("MNQ")
@@ -306,14 +333,13 @@ class RollingSignalSmokeTest(unittest.TestCase):
             )
             conn.execute(
                 """
-                INSERT INTO protective_orders (
-                    instrument_code, parent_trade_intent_id, role, oca_group,
-                    order_ref, order_id, order_action, order_quantity,
-                    order_type, limit_price, stop_price, status, error_text,
-                    filled_qty, avg_fill_price, total_commission, realized_pnl,
-                    filled_at_ts, synthetic_trade_intent_id, created_at_ts,
-                    updated_at_ts, finished_at_ts
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO protective_orders (instrument_code, parent_trade_intent_id, role, oca_group,
+                                               order_ref, order_id, order_action, order_quantity,
+                                               order_type, limit_price, stop_price, status, error_text,
+                                               filled_qty, avg_fill_price, total_commission, realized_pnl,
+                                               filled_at_ts, synthetic_trade_intent_id, created_at_ts,
+                                               updated_at_ts, finished_at_ts)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 base_values[:4] + ("IBMD_INTENT_1_MNQ_EXT_SL",) + base_values[5:],
             )
@@ -322,14 +348,13 @@ class RollingSignalSmokeTest(unittest.TestCase):
             normal_values[5] = 11
             conn.execute(
                 """
-                INSERT INTO protective_orders (
-                    instrument_code, parent_trade_intent_id, role, oca_group,
-                    order_ref, order_id, order_action, order_quantity,
-                    order_type, limit_price, stop_price, status, error_text,
-                    filled_qty, avg_fill_price, total_commission, realized_pnl,
-                    filled_at_ts, synthetic_trade_intent_id, created_at_ts,
-                    updated_at_ts, finished_at_ts
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO protective_orders (instrument_code, parent_trade_intent_id, role, oca_group,
+                                               order_ref, order_id, order_action, order_quantity,
+                                               order_type, limit_price, stop_price, status, error_text,
+                                               filled_qty, avg_fill_price, total_commission, realized_pnl,
+                                               filled_at_ts, synthetic_trade_intent_id, created_at_ts,
+                                               updated_at_ts, finished_at_ts)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 tuple(normal_values),
             )
@@ -419,8 +444,8 @@ class LegacyAuxiliaryBrokerCleanupTest(unittest.IsolatedAsyncioTestCase):
             return SimpleNamespace(terminal_status="Cancelled")
 
         with patch(
-            "ib_execution.emergency_close.cancel_order_and_require_terminal",
-            side_effect=cancel_side_effect,
+                "ib_execution.emergency_close.cancel_order_and_require_terminal",
+                side_effect=cancel_side_effect,
         ) as cancel_mock:
             cancelled = await cancel_legacy_auxiliary_exit_orders_once(service)
 
@@ -457,8 +482,8 @@ class LegacyAuxiliaryBrokerCleanupTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
         with self.assertRaisesRegex(
-            RuntimeError,
-            "cannot verify legacy auxiliary exit orders",
+                RuntimeError,
+                "cannot verify legacy auxiliary exit orders",
         ):
             await cancel_legacy_auxiliary_exit_orders_once(service)
 
