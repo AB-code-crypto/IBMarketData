@@ -14,7 +14,7 @@ Registry = Dict[str, InstrumentRow]
 PLACEHOLDER_CON_ID = 111
 
 DEFAULTS_DATA: InstrumentRow = {
-    "history_enabled": True,
+    "history_enabled": False,
     "realtime_enabled": False,
     "trading_enabled": False,
     "useRTH": False,
@@ -59,9 +59,10 @@ Instrument: Registry = {
         "tradingClass": "MNQ",
         "multiplier": 2.0,
         "db_filename": "MNQ.sqlite3",
+        "history_enabled": True,
         "realtime_enabled": True,
         "trading_enabled": True,
-        "take_profit_points": 75.0,
+        "take_profit_points": 50.0,
         "stop_loss_points": 150.0,
         "contracts": [
             {"conId": 620730945, "localSymbol": "MNQM4", "lastTradeDateOrContractMonth": "20240621",

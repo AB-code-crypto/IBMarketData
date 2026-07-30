@@ -179,6 +179,10 @@ def _calculate_signal_once(
         total_candidates_count=len(pattern_matrix.valid_candidates),
         pearson_passed_count=len(passed_candidates),
         minmax_passed_count=len(minmax_result.valid_candidates),
+        pearson_best_initial=float(max(passed_pearson)) if len(passed_pearson) else None,
+        pearson_worst_initial=float(min(passed_pearson)) if len(passed_pearson) else None,
+        pearson_best_after_minmax=float(max(score_result.pearson_scores)) if len(score_result.pearson_scores) else None,
+        pearson_worst_after_minmax=float(min(score_result.pearson_scores)) if len(score_result.pearson_scores) else None,
     )
 
     signal_id: int | None = None

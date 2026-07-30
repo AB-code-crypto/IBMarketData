@@ -15,10 +15,12 @@ from core.bar_utils import get_bar_size_seconds
 from core.time_utils import CT_TIMEZONE, MSK_TIMEZONE, SQLITE_DATETIME_FORMAT
 from ib_signal.signal_candidate_potential import CandidatePotentialResult
 from ib_signal.signal_candidates import CandidateWindow
+from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG
 from ib_signal.signal_window import SignalWindow
 
 
 CURRENT_PATTERN_COLOR = "#d62728"
+FORECAST_COLOR = "#d62728"
 FIXED_CANDIDATE_COLORS = (
     "#1f77b4",
     "#ff7f0e",
@@ -122,6 +124,38 @@ def build_display_indices(valid_candidates: list[CandidateWindow], potential: Ca
     return indices if indices else list(range(max_count))
 
 
+def _format_opt(value: float | None, digits: int = 3) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value):.{digits}f}"
+
+
+def _count_final_outcomes(candidate_future_delta_points: np.ndarray) -> tuple[int, int, int]:
+    future = np.asarray(candidate_future_delta_points, dtype=float)
+
+    if future.size == 0 or future.shape[0] == 0 or future.shape[1] == 0:
+        return 0, 0, 0
+
+    final_values = future[:, -1]
+    up = int(np.count_nonzero(final_values > 0))
+    down = int(np.count_nonzero(final_values < 0))
+    flat = int(final_values.size - up - down)
+    return up, down, flat
+
+
+def _format_title(instrument_code: str, signal_bar_time_ct: str) -> str:
+    settings = DEFAULT_SIGNAL_CONFIG
+    first_line = f"{instrument_code} — {format_signal_time_msk(signal_bar_time_ct)} МСК"
+    second_line = (
+        f"back={int(settings.rolling_back_minutes)}m  "
+        f"trade={int(settings.rolling_trade_minutes)}m  "
+        f"pot_n={int(settings.candidate_potential_min_count)}..{int(settings.candidate_potential_max_count)}  "
+        f"abs_end≥{float(settings.candidate_potential_min_abs_end_delta_points):.1f}  "
+        f"mm_ratio≤{float(settings.candidate_minmax_hard_filter_max_ratio):.2f}"
+    )
+    return first_line + "\n" + second_line
+
+
 def save_signal_candidate_plot(
     *,
     instrument_code: str,
@@ -136,6 +170,10 @@ def save_signal_candidate_plot(
     total_candidates_count: int,
     pearson_passed_count: int,
     minmax_passed_count: int,
+    pearson_best_initial: float | None = None,
+    pearson_worst_initial: float | None = None,
+    pearson_best_after_minmax: float | None = None,
+    pearson_worst_after_minmax: float | None = None,
     output_dir: Path | None = None,
 ) -> Path:
     current = np.asarray(current_values, dtype=float)
@@ -158,9 +196,9 @@ def save_signal_candidate_plot(
     colors = build_candidate_colors(len(display_indices))
     color_by_signal_ts: dict[int, str] = {}
 
-    fig, (pattern_ax, potential_ax) = plt.subplots(2, 1, figsize=(15, 9))
-    fig.subplots_adjust(left=0.08, right=0.70, top=0.91, bottom=0.08, hspace=0.26)
-    fig.suptitle(f"{instrument_code} — {format_signal_time_msk(signal_bar_time_ct)} МСК", fontsize=15, fontweight="bold")
+    fig, (pattern_ax, potential_ax) = plt.subplots(2, 1, figsize=(16, 9.5))
+    fig.subplots_adjust(left=0.08, right=0.69, top=0.89, bottom=0.08, hspace=0.26)
+    fig.suptitle(_format_title(str(instrument_code), str(signal_bar_time_ct)), fontsize=13.5, fontweight="bold")
 
     candidate_legend_handles: list[Line2D] = []
     candidate_legend_labels: list[str] = []
@@ -196,10 +234,9 @@ def save_signal_candidate_plot(
         potential_ax.plot(future_x, future_matrix[row_index], color=color, linewidth=1.5, alpha=0.80, zorder=2)
 
     forecast_label = "Прогноз недоступен"
-    forecast_handle = Line2D([0], [0], color=CURRENT_PATTERN_COLOR, linewidth=3.2, linestyle="--")
 
     if potential.is_available:
-        potential_ax.plot(future_x, potential.weighted_future_delta_points, color=CURRENT_PATTERN_COLOR, linewidth=3.2, linestyle="--", alpha=1.0, zorder=10)
+        potential_ax.plot(future_x, potential.weighted_future_delta_points, color=FORECAST_COLOR, linewidth=3.2, linestyle="--", alpha=1.0, zorder=10)
         potential_ax.set_xlim(float(future_x[0]), float(future_x[-1]))
         forecast_label = f"Взвешенный прогноз: {potential.direction}, end={potential.end_delta_points:+.2f} pt, used={potential.used_candidates_count}"
     else:
@@ -211,35 +248,77 @@ def save_signal_candidate_plot(
     potential_ax.set_ylabel("Изменение цены, пункты")
     potential_ax.grid(True, alpha=0.25)
 
-    stats_text = (
-        "КАНДИДАТЫ\n"
-        f"Всего: {int(total_candidates_count)}\n"
-        f"Прошли Pearson: {int(pearson_passed_count)}\n"
-        f"Прошли min/max: {int(minmax_passed_count)}"
-    )
+    end_up_count, end_down_count, end_flat_count = _count_final_outcomes(potential.candidate_future_delta_points)
+
+    weighted_points = np.asarray(potential.weighted_future_delta_points, dtype=float)
+    if weighted_points.size:
+        weighted_max = float(np.max(weighted_points))
+        weighted_min = float(np.min(weighted_points))
+    else:
+        weighted_max = 0.0
+        weighted_min = 0.0
+
+    stats_lines = [
+        "КАНДИДАТЫ",
+        f"всего: {int(total_candidates_count)}",
+        f"Pearson: {int(pearson_passed_count)}",
+        f"min/max: {int(minmax_passed_count)}",
+        f"в прогнозе: {int(potential.used_candidates_count)} / {int(potential.max_count)}",
+        "",
+        "ФИНАЛ КАНДИДАТОВ",
+        f"выросло: {end_up_count}",
+        f"упало: {end_down_count}",
+        f"флэт: {end_flat_count}",
+    ]
+
+    if potential.is_available:
+        stats_lines.extend([
+            "",
+            "ПОТЕНЦИАЛ",
+            f"dir: {potential.direction}",
+            f"end: {float(potential.end_delta_points):+.2f} pt",
+            f"max: {weighted_max:+.2f} pt",
+            f"min: {weighted_min:+.2f} pt",
+            f"best_dir: {float(potential.max_profit_points):+.2f} pt",
+            f"worst_dir: {float(potential.max_drawdown_points):+.2f} pt",
+            f"same/opposite/flat: {int(potential.same_direction_count)}/{int(potential.opposite_direction_count)}/{int(potential.flat_count)}",
+            f"w_same/opposite/flat: {float(potential.same_direction_weight_share):.2f}/{float(potential.opposite_direction_weight_share):.2f}/{float(potential.flat_weight_share):.2f}",
+        ])
+
     fig.text(
-        0.73,
+        0.72,
         0.90,
-        stats_text,
+        "\n".join(stats_lines),
         ha="left",
         va="top",
-        fontsize=11,
-        linespacing=1.45,
+        fontsize=10.4,
+        linespacing=1.38,
         bbox={"boxstyle": "round,pad=0.6", "facecolor": "white", "edgecolor": "#cccccc", "alpha": 0.95},
     )
 
-    legend_handles = [Line2D([0], [0], color=CURRENT_PATTERN_COLOR, linewidth=3.2), forecast_handle, *candidate_legend_handles]
-    legend_labels = ["Текущий паттерн", forecast_label, *candidate_legend_labels]
+    summary_handles = [
+        Line2D([0], [0], color=FORECAST_COLOR, linewidth=3.2, linestyle="--"),
+        Line2D([], [], color="none"),
+        Line2D([], [], color="none"),
+    ]
+    summary_labels = [
+        forecast_label,
+        f"Pearson до min/max: best={_format_opt(pearson_best_initial)}  worst={_format_opt(pearson_worst_initial)}",
+        f"Pearson после min/max: best={_format_opt(pearson_best_after_minmax)}  worst={_format_opt(pearson_worst_after_minmax)}",
+    ]
+    legend_handles = [*summary_handles, *candidate_legend_handles]
+    legend_labels = [*summary_labels, *candidate_legend_labels]
+
     fig.legend(
         legend_handles,
         legend_labels,
         loc="upper left",
-        bbox_to_anchor=(0.73, 0.73),
-        fontsize=8.5,
+        bbox_to_anchor=(0.72, 0.62),
+        fontsize=8.3,
         frameon=True,
         borderaxespad=0.0,
         handlelength=3.0,
-        labelspacing=0.8,
+        labelspacing=0.75,
     )
 
     target = build_plot_path(str(instrument_code), str(signal_bar_time_ct), output_dir)
