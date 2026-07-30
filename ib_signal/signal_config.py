@@ -11,8 +11,8 @@ class SignalConfig:
 
     # The only supported signal window is rolling.
     rolling_signal_step_seconds: int = 60
-    rolling_back_minutes: int = 90
-    rolling_trade_minutes: int = 30
+    rolling_back_minutes: int = 45
+    rolling_trade_minutes: int = 15
 
     # Ordinary protective TP/SL safety remains independent from signal features.
     protective_order_accept_timeout_seconds: float = 5.0
@@ -28,9 +28,9 @@ class SignalConfig:
     candidate_score_end_delta_weight: float = 1.0
     candidate_score_minmax_weight: float = 1.0
 
-    candidate_potential_min_count: int = 7
+    candidate_potential_min_count: int = 3
     candidate_potential_max_count: int = 9
-    candidate_potential_min_abs_end_delta_points: float = 30.0
+    candidate_potential_min_abs_end_delta_points: float = 10.0
 
     signal_event_retention_days: int = 7
 
