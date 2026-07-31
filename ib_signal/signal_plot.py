@@ -7,7 +7,6 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 import numpy as np
 
 from contracts import Instrument
@@ -82,9 +81,9 @@ def _format_candidate_time_msk(signal_bar_time_ct: str) -> str:
     return dt_ct.astimezone(MSK_TIMEZONE).strftime("%m-%d %H:%M")
 
 
-def format_candidate_legend_label(index: int, candidate: CandidateWindow, pearson: float, score: float) -> str:
+def format_candidate_label(index: int, candidate: CandidateWindow, pearson: float, score: float) -> str:
     compact_time_msk = _format_candidate_time_msk(candidate.signal_bar_time_ct)
-    return f"#{index + 1} {compact_time_msk} MSK  r={pearson:.3f}  score={score:.3f}"
+    return f"#{index + 1} {compact_time_msk}  r={pearson:.3f}  s={score:.3f}"
 
 
 def validate_candidate_arrays(candidates: list[CandidateWindow], candidate_matrix: np.ndarray, pearson_scores: np.ndarray, candidate_scores: np.ndarray) -> None:
@@ -162,6 +161,102 @@ def _format_title(instrument_code: str, signal_bar_time_ct: str) -> str:
     return first_line + "\n" + second_line
 
 
+def _draw_text(side_ax, x: float, y: float, text: str, *, fontsize: float = 9.0, weight: str = "normal", color: str = "black") -> float:
+    side_ax.text(x, y, text, transform=side_ax.transAxes, ha="left", va="top", fontsize=fontsize, fontweight=weight, color=color)
+    return y
+
+
+def _draw_side_panel(
+    side_ax,
+    *,
+    total_candidates_count: int,
+    pearson_passed_count: int,
+    minmax_passed_count: int,
+    pearson_best_initial: float | None,
+    pearson_worst_initial: float | None,
+    pearson_best_after_minmax: float | None,
+    pearson_worst_after_minmax: float | None,
+    potential: CandidatePotentialResult,
+    end_up_count: int,
+    end_down_count: int,
+    candidate_entries: list[tuple[str, str]],
+) -> None:
+    side_ax.set_xticks([])
+    side_ax.set_yticks([])
+    side_ax.set_xlim(0.0, 1.0)
+    side_ax.set_ylim(0.0, 1.0)
+    side_ax.set_facecolor("white")
+    for spine in side_ax.spines.values():
+        spine.set_visible(True)
+        spine.set_edgecolor("#c7c7c7")
+        spine.set_linewidth(1.0)
+
+    removed_by_minmax = max(int(pearson_passed_count) - int(minmax_passed_count), 0)
+    weighted_points = np.asarray(potential.weighted_future_delta_points, dtype=float)
+    weighted_max = float(np.max(weighted_points)) if weighted_points.size else 0.0
+    weighted_min = float(np.min(weighted_points)) if weighted_points.size else 0.0
+
+    y = 0.985
+    line_step = 0.036
+    section_gap = 0.018
+
+    _draw_text(side_ax, 0.05, y, "Сводка:", fontsize=10.2, weight="bold")
+    y -= line_step
+    _draw_text(side_ax, 0.05, y, f"всего кандидатов: {int(total_candidates_count)}", fontsize=9.2)
+    y -= line_step
+    _draw_text(side_ax, 0.05, y, f"прошли Pearson: {int(pearson_passed_count)}", fontsize=9.2)
+    y -= line_step
+    _draw_text(side_ax, 0.05, y, f"прошли min/max: {int(minmax_passed_count)}  (-{removed_by_minmax})", fontsize=9.2)
+    y -= line_step
+    _draw_text(side_ax, 0.05, y, f"в прогнозе: {int(potential.used_candidates_count)} / {int(potential.max_count)}", fontsize=9.2)
+    y -= line_step
+    _draw_text(side_ax, 0.05, y, "Pearson:", fontsize=9.4, weight="bold")
+    y -= line_step
+    _draw_text(side_ax, 0.09, y, f"до min/max: {_format_opt(pearson_best_initial)} / {_format_opt(pearson_worst_initial)}", fontsize=8.8)
+    y -= line_step
+    _draw_text(side_ax, 0.09, y, f"после min/max: {_format_opt(pearson_best_after_minmax)} / {_format_opt(pearson_worst_after_minmax)}", fontsize=8.8)
+
+    y -= (line_step + section_gap)
+    _draw_text(side_ax, 0.05, y, "Финал кандидатов:", fontsize=10.0, weight="bold")
+    y -= line_step
+    _draw_text(side_ax, 0.05, y, f"выросло: {end_up_count}", fontsize=9.2)
+    y -= line_step
+    _draw_text(side_ax, 0.05, y, f"упало: {end_down_count}", fontsize=9.2)
+
+    y -= (line_step + section_gap)
+    _draw_text(side_ax, 0.05, y, "Потенциал:", fontsize=10.0, weight="bold")
+    y -= line_step
+    _draw_text(side_ax, 0.05, y, f"направление: {potential.direction}", fontsize=9.2)
+    y -= line_step
+    _draw_text(side_ax, 0.05, y, f"конец: {float(potential.end_delta_points):+.2f} pt", fontsize=9.2)
+    y -= line_step
+    _draw_text(side_ax, 0.05, y, f"макс: {weighted_max:+.2f} pt", fontsize=9.2)
+    y -= line_step
+    _draw_text(side_ax, 0.05, y, f"мин: {weighted_min:+.2f} pt", fontsize=9.2)
+    y -= line_step
+    _draw_text(side_ax, 0.05, y, f"макс прибыль: {float(potential.max_profit_points):+.2f} pt", fontsize=9.2)
+    y -= line_step
+    _draw_text(side_ax, 0.05, y, f"макс просадка: {float(potential.max_drawdown_points):+.2f} pt", fontsize=9.2)
+
+    y -= (line_step + section_gap)
+    _draw_text(side_ax, 0.05, y, "Кандидаты:", fontsize=10.0, weight="bold")
+    y -= line_step * 0.90
+
+    candidate_font = 8.1
+    candidate_step = 0.035
+    line_x1 = 0.05
+    line_x2 = 0.16
+    text_x = 0.20
+
+    for color, label in candidate_entries:
+        if y < 0.045:
+            _draw_text(side_ax, 0.05, y, "…", fontsize=10.0, weight="bold")
+            break
+        side_ax.plot([line_x1, line_x2], [y - 0.010, y - 0.010], transform=side_ax.transAxes, color=color, linewidth=2.4, solid_capstyle="round", clip_on=False)
+        _draw_text(side_ax, text_x, y, label, fontsize=candidate_font)
+        y -= candidate_step
+
+
 def save_signal_candidate_plot(
     *,
     instrument_code: str,
@@ -198,16 +293,18 @@ def save_signal_candidate_plot(
     bar_size_seconds = get_bar_size_seconds(instrument_row["barSizeSetting"])
     pattern_x_minutes = (np.arange(current.size, dtype=float) - float(current.size - 1)) * bar_size_seconds / 60.0
 
+    fig = plt.figure(figsize=(16, 9.5))
+    grid = fig.add_gridspec(2, 2, width_ratios=[6.3, 0.72], hspace=0.26, wspace=0.06)
+    pattern_ax = fig.add_subplot(grid[0, 0])
+    potential_ax = fig.add_subplot(grid[1, 0])
+    side_ax = fig.add_subplot(grid[:, 1])
+    fig.subplots_adjust(left=0.07, right=0.97, top=0.89, bottom=0.08)
+    fig.suptitle(_format_title(str(instrument_code), str(signal_bar_time_ct)), fontsize=13.5, fontweight="bold")
+
     display_indices = build_display_indices(valid_candidates, potential)
     colors = build_candidate_colors(len(display_indices))
     color_by_signal_ts: dict[int, str] = {}
-
-    fig, (pattern_ax, potential_ax) = plt.subplots(2, 1, figsize=(16, 9.5))
-    fig.subplots_adjust(left=0.08, right=0.72, top=0.89, bottom=0.08, hspace=0.26)
-    fig.suptitle(_format_title(str(instrument_code), str(signal_bar_time_ct)), fontsize=13.5, fontweight="bold")
-
-    candidate_legend_handles: list[Line2D] = []
-    candidate_legend_labels: list[str] = []
+    candidate_entries: list[tuple[str, str]] = []
 
     for display_position in range(len(display_indices) - 1, -1, -1):
         candidate_index = display_indices[display_position]
@@ -219,8 +316,7 @@ def save_signal_candidate_plot(
     for display_position, candidate_index in enumerate(display_indices):
         candidate = valid_candidates[candidate_index]
         color = colors[display_position]
-        candidate_legend_handles.append(Line2D([0], [0], color=color, linewidth=2.0))
-        candidate_legend_labels.append(format_candidate_legend_label(candidate_index, candidate, float(pearson[candidate_index]), float(scores[candidate_index])))
+        candidate_entries.append((color, format_candidate_label(candidate_index, candidate, float(pearson[candidate_index]), float(scores[candidate_index]))))
 
     pattern_ax.plot(pattern_x_minutes, normalize_series_for_plot(current), color=CURRENT_PATTERN_COLOR, linewidth=3.2, alpha=1.0, zorder=10)
     pattern_ax.axvline(0.0, color="#555555", linewidth=1.0, linestyle="--")
@@ -251,73 +347,21 @@ def save_signal_candidate_plot(
     potential_ax.set_ylabel("Изменение цены, пункты")
     potential_ax.grid(True, alpha=0.25)
 
-    end_up_count, end_down_count, end_flat_count = _count_final_outcomes(potential.candidate_future_delta_points)
-
-    weighted_points = np.asarray(potential.weighted_future_delta_points, dtype=float)
-    if weighted_points.size:
-        weighted_max = float(np.max(weighted_points))
-        weighted_min = float(np.min(weighted_points))
-    else:
-        weighted_max = 0.0
-        weighted_min = 0.0
-
-    stats_lines = [
-        "СВОДКА",
-        f"всего кандидатов: {int(total_candidates_count)}",
-        f"прошли Pearson: {int(pearson_passed_count)}",
-        f"прошли min/max: {int(minmax_passed_count)}",
-        f"в прогнозе: {int(potential.used_candidates_count)} / {int(potential.max_count)}",
-        f"Pearson до min/max: best={_format_opt(pearson_best_initial)}  worst={_format_opt(pearson_worst_initial)}",
-        f"Pearson после min/max: best={_format_opt(pearson_best_after_minmax)}  worst={_format_opt(pearson_worst_after_minmax)}",
-        "",
-        "ФИНАЛ КАНДИДАТОВ",
-        f"выросло: {end_up_count}",
-        f"упало: {end_down_count}",
-        f"флэт: {end_flat_count}",
-    ]
-
-    if potential.is_available:
-        stats_lines.extend([
-            "",
-            "ПОТЕНЦИАЛ",
-            f"direction: {potential.direction}",
-            f"used: {int(potential.used_candidates_count)}",
-            f"end: {float(potential.end_delta_points):+.2f} pt",
-            f"max: {weighted_max:+.2f} pt",
-            f"min: {weighted_min:+.2f} pt",
-            f"best_dir: {float(potential.max_profit_points):+.2f} pt",
-            f"worst_dir: {float(potential.max_drawdown_points):+.2f} pt",
-            f"same/opposite/flat: {int(potential.same_direction_count)}/{int(potential.opposite_direction_count)}/{int(potential.flat_count)}",
-            f"w_same/opposite/flat: {float(potential.same_direction_weight_share):.2f}/{float(potential.opposite_direction_weight_share):.2f}/{float(potential.flat_weight_share):.2f}",
-        ])
-    else:
-        stats_lines.extend(["", "ПОТЕНЦИАЛ", "not available"])
-
-    fig.text(
-        0.74,
-        0.90,
-        "\n".join(stats_lines),
-        ha="left",
-        va="top",
-        fontsize=9.7,
-        linespacing=1.33,
-        bbox={"boxstyle": "round,pad=0.55", "facecolor": "white", "edgecolor": "#cccccc", "alpha": 0.95},
+    end_up_count, end_down_count, _ = _count_final_outcomes(potential.candidate_future_delta_points)
+    _draw_side_panel(
+        side_ax,
+        total_candidates_count=int(total_candidates_count),
+        pearson_passed_count=int(pearson_passed_count),
+        minmax_passed_count=int(minmax_passed_count),
+        pearson_best_initial=pearson_best_initial,
+        pearson_worst_initial=pearson_worst_initial,
+        pearson_best_after_minmax=pearson_best_after_minmax,
+        pearson_worst_after_minmax=pearson_worst_after_minmax,
+        potential=potential,
+        end_up_count=end_up_count,
+        end_down_count=end_down_count,
+        candidate_entries=candidate_entries,
     )
-
-    candidate_legend = fig.legend(
-        candidate_legend_handles,
-        candidate_legend_labels,
-        loc="upper left",
-        bbox_to_anchor=(0.74, 0.39),
-        fontsize=8.0,
-        title="КАНДИДАТЫ (MSK)",
-        title_fontsize=9.0,
-        frameon=True,
-        borderaxespad=0.0,
-        handlelength=3.0,
-        labelspacing=0.75,
-    )
-    candidate_legend.get_frame().set_alpha(0.95)
 
     target = build_plot_path(str(instrument_code), str(signal_bar_time_ct), output_dir)
     fig.savefig(target, dpi=140, facecolor="white")
