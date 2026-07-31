@@ -45,8 +45,14 @@ def sanitize_filename_part(value: str) -> str:
     return str(value).replace(" ", "_").replace(":", "-").replace("/", "-")
 
 
+def format_signal_time_msk(signal_bar_time_ct: str) -> str:
+    dt_ct = datetime.strptime(str(signal_bar_time_ct), SQLITE_DATETIME_FORMAT).replace(tzinfo=CT_TIMEZONE)
+    return dt_ct.astimezone(MSK_TIMEZONE).strftime(SQLITE_DATETIME_FORMAT)
+
+
 def build_plot_path(instrument_code: str, signal_bar_time_ct: str, output_dir: Path | None = None) -> Path:
-    filename = f"signal_candidates_{str(instrument_code).lower()}_{sanitize_filename_part(signal_bar_time_ct)}_CT.png"
+    signal_bar_time_msk = format_signal_time_msk(signal_bar_time_ct)
+    filename = f"signal_candidates_{str(instrument_code).lower()}_{sanitize_filename_part(signal_bar_time_msk)}_MSK.png"
     base_dir = Path(output_dir) if output_dir is not None else get_signal_png_dir()
     target_dir = base_dir / str(instrument_code).lower()
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -71,14 +77,14 @@ def build_candidate_colors(count: int) -> list[str]:
     return colors
 
 
-def format_signal_time_msk(signal_bar_time_ct: str) -> str:
+def _format_candidate_time_msk(signal_bar_time_ct: str) -> str:
     dt_ct = datetime.strptime(str(signal_bar_time_ct), SQLITE_DATETIME_FORMAT).replace(tzinfo=CT_TIMEZONE)
-    return dt_ct.astimezone(MSK_TIMEZONE).strftime(SQLITE_DATETIME_FORMAT)
+    return dt_ct.astimezone(MSK_TIMEZONE).strftime("%m-%d %H:%M")
 
 
 def format_candidate_legend_label(index: int, candidate: CandidateWindow, pearson: float, score: float) -> str:
-    compact_time = candidate.signal_bar_time_ct[5:16]
-    return f"#{index + 1} {compact_time} CT  r={pearson:.3f}  score={score:.3f}"
+    compact_time_msk = _format_candidate_time_msk(candidate.signal_bar_time_ct)
+    return f"#{index + 1} {compact_time_msk} MSK  r={pearson:.3f}  score={score:.3f}"
 
 
 def validate_candidate_arrays(candidates: list[CandidateWindow], candidate_matrix: np.ndarray, pearson_scores: np.ndarray, candidate_scores: np.ndarray) -> None:
@@ -197,7 +203,7 @@ def save_signal_candidate_plot(
     color_by_signal_ts: dict[int, str] = {}
 
     fig, (pattern_ax, potential_ax) = plt.subplots(2, 1, figsize=(16, 9.5))
-    fig.subplots_adjust(left=0.08, right=0.69, top=0.89, bottom=0.08, hspace=0.26)
+    fig.subplots_adjust(left=0.08, right=0.72, top=0.89, bottom=0.08, hspace=0.26)
     fig.suptitle(_format_title(str(instrument_code), str(signal_bar_time_ct)), fontsize=13.5, fontweight="bold")
 
     candidate_legend_handles: list[Line2D] = []
@@ -233,12 +239,9 @@ def save_signal_candidate_plot(
         color = color_by_signal_ts.get(int(signal_ts), extra_colors[row_index])
         potential_ax.plot(future_x, future_matrix[row_index], color=color, linewidth=1.5, alpha=0.80, zorder=2)
 
-    forecast_label = "Прогноз недоступен"
-
     if potential.is_available:
         potential_ax.plot(future_x, potential.weighted_future_delta_points, color=FORECAST_COLOR, linewidth=3.2, linestyle="--", alpha=1.0, zorder=10)
         potential_ax.set_xlim(float(future_x[0]), float(future_x[-1]))
-        forecast_label = f"Взвешенный прогноз: {potential.direction}, end={potential.end_delta_points:+.2f} pt, used={potential.used_candidates_count}"
     else:
         potential_ax.set_xlim(0.0, float(signal_window.trade_seconds) / 60.0)
 
@@ -259,11 +262,13 @@ def save_signal_candidate_plot(
         weighted_min = 0.0
 
     stats_lines = [
-        "КАНДИДАТЫ",
-        f"всего: {int(total_candidates_count)}",
-        f"Pearson: {int(pearson_passed_count)}",
-        f"min/max: {int(minmax_passed_count)}",
+        "СВОДКА",
+        f"всего кандидатов: {int(total_candidates_count)}",
+        f"прошли Pearson: {int(pearson_passed_count)}",
+        f"прошли min/max: {int(minmax_passed_count)}",
         f"в прогнозе: {int(potential.used_candidates_count)} / {int(potential.max_count)}",
+        f"Pearson до min/max: best={_format_opt(pearson_best_initial)}  worst={_format_opt(pearson_worst_initial)}",
+        f"Pearson после min/max: best={_format_opt(pearson_best_after_minmax)}  worst={_format_opt(pearson_worst_after_minmax)}",
         "",
         "ФИНАЛ КАНДИДАТОВ",
         f"выросло: {end_up_count}",
@@ -275,7 +280,8 @@ def save_signal_candidate_plot(
         stats_lines.extend([
             "",
             "ПОТЕНЦИАЛ",
-            f"dir: {potential.direction}",
+            f"direction: {potential.direction}",
+            f"used: {int(potential.used_candidates_count)}",
             f"end: {float(potential.end_delta_points):+.2f} pt",
             f"max: {weighted_max:+.2f} pt",
             f"min: {weighted_min:+.2f} pt",
@@ -284,42 +290,34 @@ def save_signal_candidate_plot(
             f"same/opposite/flat: {int(potential.same_direction_count)}/{int(potential.opposite_direction_count)}/{int(potential.flat_count)}",
             f"w_same/opposite/flat: {float(potential.same_direction_weight_share):.2f}/{float(potential.opposite_direction_weight_share):.2f}/{float(potential.flat_weight_share):.2f}",
         ])
+    else:
+        stats_lines.extend(["", "ПОТЕНЦИАЛ", "not available"])
 
     fig.text(
-        0.72,
+        0.74,
         0.90,
         "\n".join(stats_lines),
         ha="left",
         va="top",
-        fontsize=10.4,
-        linespacing=1.38,
-        bbox={"boxstyle": "round,pad=0.6", "facecolor": "white", "edgecolor": "#cccccc", "alpha": 0.95},
+        fontsize=9.7,
+        linespacing=1.33,
+        bbox={"boxstyle": "round,pad=0.55", "facecolor": "white", "edgecolor": "#cccccc", "alpha": 0.95},
     )
 
-    summary_handles = [
-        Line2D([0], [0], color=FORECAST_COLOR, linewidth=3.2, linestyle="--"),
-        Line2D([], [], color="none"),
-        Line2D([], [], color="none"),
-    ]
-    summary_labels = [
-        forecast_label,
-        f"Pearson до min/max: best={_format_opt(pearson_best_initial)}  worst={_format_opt(pearson_worst_initial)}",
-        f"Pearson после min/max: best={_format_opt(pearson_best_after_minmax)}  worst={_format_opt(pearson_worst_after_minmax)}",
-    ]
-    legend_handles = [*summary_handles, *candidate_legend_handles]
-    legend_labels = [*summary_labels, *candidate_legend_labels]
-
-    fig.legend(
-        legend_handles,
-        legend_labels,
+    candidate_legend = fig.legend(
+        candidate_legend_handles,
+        candidate_legend_labels,
         loc="upper left",
-        bbox_to_anchor=(0.72, 0.62),
-        fontsize=8.3,
+        bbox_to_anchor=(0.74, 0.39),
+        fontsize=8.0,
+        title="КАНДИДАТЫ (MSK)",
+        title_fontsize=9.0,
         frameon=True,
         borderaxespad=0.0,
         handlelength=3.0,
         labelspacing=0.75,
     )
+    candidate_legend.get_frame().set_alpha(0.95)
 
     target = build_plot_path(str(instrument_code), str(signal_bar_time_ct), output_dir)
     fig.savefig(target, dpi=140, facecolor="white")
