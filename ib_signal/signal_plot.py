@@ -156,9 +156,9 @@ def _format_title(instrument_code: str, signal_bar_time_ct: str) -> str:
     second_line = (
         f"back={int(settings.rolling_back_minutes)}m  "
         f"trade={int(settings.rolling_trade_minutes)}m  "
-        f"pot_n={int(settings.candidate_potential_min_count)}..{int(settings.candidate_potential_max_count)}  "
-        f"abs_end≥{float(settings.candidate_potential_min_abs_end_delta_points):.1f}  "
-        f"mm_ratio≤{float(settings.candidate_minmax_hard_filter_max_ratio):.2f}"
+        f"pot_count={int(settings.candidate_potential_min_count)}..{int(settings.candidate_potential_max_count)}  "
+        f"pot_points≥{float(settings.candidate_potential_min_abs_end_delta_points):.1f}  "
+        f"minmax≤{float(settings.candidate_minmax_hard_filter_max_ratio):.2f}"
     )
     return first_line + "\n" + second_line
 
@@ -237,10 +237,6 @@ def _draw_side_panel(
     _draw_text(side_ax, 0.04, y, f"направление: {potential.direction}", fontsize=8.8)
     y -= line_step
     _draw_text(side_ax, 0.04, y, f"конец: {float(potential.end_delta_points):+.2f} pt", fontsize=8.8)
-    y -= line_step
-    _draw_text(side_ax, 0.04, y, f"макс: {weighted_max:+.2f} pt", fontsize=8.8)
-    y -= line_step
-    _draw_text(side_ax, 0.04, y, f"мин: {weighted_min:+.2f} pt", fontsize=8.8)
     y -= line_step
     _draw_text(side_ax, 0.04, y, f"макс прибыль: {float(potential.max_profit_points):+.2f} pt", fontsize=8.8)
     y -= line_step
