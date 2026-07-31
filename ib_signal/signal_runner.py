@@ -12,6 +12,7 @@ from core.price_source import (
 )
 from ib_signal.pearson import calculate_centered_pearson_batch
 from ib_signal.signal_candidate_potential import (
+    build_candidate_final_outcome_result,
     build_candidate_potential_result,
     format_candidate_potential_result,
 )
@@ -165,6 +166,10 @@ def _calculate_signal_once(
         min_count=settings.candidate_potential_min_count,
         max_count=settings.candidate_potential_max_count,
     )
+    minmax_final_outcomes = build_candidate_final_outcome_result(
+        instrument_code=instrument_code,
+        candidates=score_result.valid_candidates,
+    )
 
     saved_plot_path = save_signal_candidate_plot(
         instrument_code=instrument_code,
@@ -176,6 +181,7 @@ def _calculate_signal_once(
         pearson_scores=score_result.pearson_scores,
         candidate_scores=score_result.candidate_scores,
         candidate_potential_result=potential,
+        minmax_final_outcome_result=minmax_final_outcomes,
         total_candidates_count=len(pattern_matrix.valid_candidates),
         pearson_passed_count=len(passed_candidates),
         minmax_passed_count=len(minmax_result.valid_candidates),

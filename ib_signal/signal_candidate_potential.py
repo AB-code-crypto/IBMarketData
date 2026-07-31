@@ -83,6 +83,15 @@ class CandidatePotentialResult:
     flat_weight_share: float
 
 
+@dataclass(frozen=True)
+class CandidateFinalOutcomeResult:
+    source_candidates_count: int
+    available_candidates_count: int
+    up_count: int
+    down_count: int
+    flat_count: int
+
+
 def read_candidate_full_values(
         *,
         instrument_code: str,
@@ -126,6 +135,87 @@ def read_candidate_full_values(
             return None
         values[index] = float(value)
     return values
+
+
+def build_candidate_final_outcome_result(
+        *,
+        instrument_code: str,
+        candidates: list[CandidateWindow],
+) -> CandidateFinalOutcomeResult:
+    source_count = len(candidates)
+    if source_count == 0:
+        return CandidateFinalOutcomeResult(0, 0, 0, 0, 0)
+
+    instrument_row = Instrument[instrument_code]
+    bar_size_seconds = get_bar_size_seconds(instrument_row["barSizeSetting"])
+    target = get_price_db_target(instrument_code)
+    midpoint = mid_close_sql(instrument_code, table_alias="p")
+    table_ref = quote_identifier(target.table_name)
+
+    conn = open_sqlite_connection(str(target.db_path), require_existing_file=True, use_wal=False)
+    try:
+        conn.execute("DROP TABLE IF EXISTS temp_candidate_final_outcomes")
+        conn.execute(
+            """
+            CREATE TEMP TABLE temp_candidate_final_outcomes (
+                candidate_index INTEGER PRIMARY KEY,
+                entry_bar_ts INTEGER NOT NULL,
+                final_bar_ts INTEGER NOT NULL
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO temp_candidate_final_outcomes(candidate_index, entry_bar_ts, final_bar_ts) VALUES (?, ?, ?)",
+            [
+                (
+                    index,
+                    int(candidate.pattern_end_ts) - bar_size_seconds,
+                    int(candidate.trade_end_ts) - bar_size_seconds,
+                )
+                for index, candidate in enumerate(candidates)
+            ],
+        )
+        rows = conn.execute(
+            f"""
+            SELECT
+                o.candidate_index,
+                MAX(CASE WHEN p.bar_time_ts = o.entry_bar_ts THEN {midpoint} END) AS entry_price,
+                MAX(CASE WHEN p.bar_time_ts = o.final_bar_ts THEN {midpoint} END) AS final_price
+            FROM temp_candidate_final_outcomes AS o
+            LEFT JOIN {table_ref} AS p
+              ON (p.bar_time_ts = o.entry_bar_ts OR p.bar_time_ts = o.final_bar_ts)
+             AND {complete_mid_close_predicate(table_alias="p")}
+            GROUP BY o.candidate_index
+            ORDER BY o.candidate_index
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    available_count = 0
+    up_count = 0
+    down_count = 0
+    flat_count = 0
+
+    for _, entry_price, final_price in rows:
+        if entry_price is None or final_price is None:
+            continue
+        available_count += 1
+        delta = float(final_price) - float(entry_price)
+        if delta > 0.0:
+            up_count += 1
+        elif delta < 0.0:
+            down_count += 1
+        else:
+            flat_count += 1
+
+    return CandidateFinalOutcomeResult(
+        source_candidates_count=source_count,
+        available_candidates_count=available_count,
+        up_count=up_count,
+        down_count=down_count,
+        flat_count=flat_count,
+    )
 
 
 def calculate_future_delta_bps(

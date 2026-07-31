@@ -22,7 +22,7 @@ from config import settings_live as app_settings
 from core.telegram_sender import TelegramSender
 from core.time_utils import CT_TIMEZONE, SQLITE_DATETIME_FORMAT
 from ib_signal.pearson import calculate_centered_pearson_batch
-from ib_signal.signal_candidate_potential import build_candidate_potential_result
+from ib_signal.signal_candidate_potential import build_candidate_final_outcome_result, build_candidate_potential_result
 from ib_signal.signal_candidate_rank_features import filter_candidates_by_minmax_ratio, rank_candidates_by_score
 from ib_signal.signal_candidates import find_candidate_windows
 from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG
@@ -81,6 +81,10 @@ def render_preview() -> tuple[Path, str]:
         min_count=settings.candidate_potential_min_count,
         max_count=settings.candidate_potential_max_count,
     )
+    minmax_final_outcomes = build_candidate_final_outcome_result(
+        instrument_code=instrument_code,
+        candidates=score_result.valid_candidates,
+    )
 
     plot_path = save_signal_candidate_plot(
         instrument_code=instrument_code,
@@ -92,6 +96,7 @@ def render_preview() -> tuple[Path, str]:
         pearson_scores=score_result.pearson_scores,
         candidate_scores=score_result.candidate_scores,
         candidate_potential_result=potential,
+        minmax_final_outcome_result=minmax_final_outcomes,
         total_candidates_count=len(pattern_matrix.valid_candidates),
         pearson_passed_count=len(passed_candidates),
         minmax_passed_count=len(minmax_result.valid_candidates),

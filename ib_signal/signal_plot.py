@@ -12,7 +12,7 @@ import numpy as np
 from contracts import Instrument
 from core.bar_utils import get_bar_size_seconds
 from core.time_utils import CT_TIMEZONE, MSK_TIMEZONE, SQLITE_DATETIME_FORMAT
-from ib_signal.signal_candidate_potential import CandidatePotentialResult
+from ib_signal.signal_candidate_potential import CandidateFinalOutcomeResult, CandidatePotentialResult
 from ib_signal.signal_candidates import CandidateWindow
 from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG
 from ib_signal.signal_window import SignalWindow
@@ -83,7 +83,9 @@ def _format_candidate_time_msk(signal_bar_time_ct: str) -> str:
 
 def format_candidate_label(index: int, candidate: CandidateWindow, pearson: float, score: float) -> str:
     compact_time_msk = _format_candidate_time_msk(candidate.signal_bar_time_ct)
-    return f"#{index + 1} {compact_time_msk}  r={pearson:.3f}  s={score:.3f}"
+    pearson_text = f"{pearson:.3f}".removeprefix("0")
+    score_text = f"{score:.3f}".removeprefix("0")
+    return f"#{index + 1} {compact_time_msk}  r={pearson_text}  s={score_text}"
 
 
 def validate_candidate_arrays(candidates: list[CandidateWindow], candidate_matrix: np.ndarray, pearson_scores: np.ndarray, candidate_scores: np.ndarray) -> None:
@@ -177,6 +179,7 @@ def _draw_side_panel(
     pearson_best_after_minmax: float | None,
     pearson_worst_after_minmax: float | None,
     potential: CandidatePotentialResult,
+    minmax_final_outcome_result: CandidateFinalOutcomeResult,
     end_up_count: int,
     end_down_count: int,
     candidate_entries: list[tuple[str, str]],
@@ -195,65 +198,65 @@ def _draw_side_panel(
     weighted_points = np.asarray(potential.weighted_future_delta_points, dtype=float)
     weighted_max = float(np.max(weighted_points)) if weighted_points.size else 0.0
     weighted_min = float(np.min(weighted_points)) if weighted_points.size else 0.0
+    top_total = int(potential.used_candidates_count)
+    all_total = int(minmax_final_outcome_result.source_candidates_count)
 
     y = 0.985
-    line_step = 0.036
-    section_gap = 0.018
+    line_step = 0.032
+    section_gap = 0.014
 
-    _draw_text(side_ax, 0.05, y, "Сводка:", fontsize=10.2, weight="bold")
+    _draw_text(side_ax, 0.04, y, "Сводка:", fontsize=10.0, weight="bold")
     y -= line_step
-    _draw_text(side_ax, 0.05, y, f"всего кандидатов: {int(total_candidates_count)}", fontsize=9.2)
+    _draw_text(side_ax, 0.04, y, f"всего кандидатов: {int(total_candidates_count)}", fontsize=8.8)
     y -= line_step
-    _draw_text(side_ax, 0.05, y, f"прошли Pearson: {int(pearson_passed_count)}", fontsize=9.2)
+    _draw_text(side_ax, 0.04, y, f"прошли Pearson: {int(pearson_passed_count)}", fontsize=8.8)
     y -= line_step
-    _draw_text(side_ax, 0.05, y, f"прошли min/max: {int(minmax_passed_count)}  (-{removed_by_minmax})", fontsize=9.2)
+    _draw_text(side_ax, 0.04, y, f"прошли min/max: {int(minmax_passed_count)}  (-{removed_by_minmax})", fontsize=8.8)
     y -= line_step
-    _draw_text(side_ax, 0.05, y, f"в прогнозе: {int(potential.used_candidates_count)} / {int(potential.max_count)}", fontsize=9.2)
+    _draw_text(side_ax, 0.04, y, f"в прогнозе: {top_total} / {int(potential.max_count)}", fontsize=8.8)
+    if minmax_final_outcome_result.available_candidates_count != all_total:
+        y -= line_step
+        _draw_text(side_ax, 0.04, y, f"future доступно: {int(minmax_final_outcome_result.available_candidates_count)} / {all_total}", fontsize=8.5)
     y -= line_step
-    _draw_text(side_ax, 0.05, y, "Pearson:", fontsize=9.4, weight="bold")
+    _draw_text(side_ax, 0.04, y, "Pearson:", fontsize=9.2, weight="bold")
     y -= line_step
-    _draw_text(side_ax, 0.09, y, f"до min/max: {_format_opt(pearson_best_initial)} / {_format_opt(pearson_worst_initial)}", fontsize=8.8)
+    _draw_text(side_ax, 0.07, y, f"до min/max: {_format_opt(pearson_best_initial)} / {_format_opt(pearson_worst_initial)}", fontsize=8.5)
     y -= line_step
-    _draw_text(side_ax, 0.09, y, f"после min/max: {_format_opt(pearson_best_after_minmax)} / {_format_opt(pearson_worst_after_minmax)}", fontsize=8.8)
+    _draw_text(side_ax, 0.07, y, f"после min/max: {_format_opt(pearson_best_after_minmax)} / {_format_opt(pearson_worst_after_minmax)}", fontsize=8.5)
 
-    y -= (line_step + section_gap)
-    _draw_text(side_ax, 0.05, y, "Финал кандидатов:", fontsize=10.0, weight="bold")
+    y -= line_step + section_gap
+    _draw_text(side_ax, 0.04, y, "Финал кандидатов:", fontsize=9.8, weight="bold")
     y -= line_step
-    _draw_text(side_ax, 0.05, y, f"выросло: {end_up_count}", fontsize=9.2)
+    _draw_text(side_ax, 0.04, y, f"выросло: топ {end_up_count}/{top_total} | все {int(minmax_final_outcome_result.up_count)}/{all_total}", fontsize=8.6)
     y -= line_step
-    _draw_text(side_ax, 0.05, y, f"упало: {end_down_count}", fontsize=9.2)
+    _draw_text(side_ax, 0.04, y, f"упало: топ {end_down_count}/{top_total} | все {int(minmax_final_outcome_result.down_count)}/{all_total}", fontsize=8.6)
 
-    y -= (line_step + section_gap)
-    _draw_text(side_ax, 0.05, y, "Потенциал:", fontsize=10.0, weight="bold")
+    y -= line_step + section_gap
+    _draw_text(side_ax, 0.04, y, "Потенциал:", fontsize=9.8, weight="bold")
     y -= line_step
-    _draw_text(side_ax, 0.05, y, f"направление: {potential.direction}", fontsize=9.2)
+    _draw_text(side_ax, 0.04, y, f"направление: {potential.direction}", fontsize=8.8)
     y -= line_step
-    _draw_text(side_ax, 0.05, y, f"конец: {float(potential.end_delta_points):+.2f} pt", fontsize=9.2)
+    _draw_text(side_ax, 0.04, y, f"конец: {float(potential.end_delta_points):+.2f} pt", fontsize=8.8)
     y -= line_step
-    _draw_text(side_ax, 0.05, y, f"макс: {weighted_max:+.2f} pt", fontsize=9.2)
+    _draw_text(side_ax, 0.04, y, f"макс: {weighted_max:+.2f} pt", fontsize=8.8)
     y -= line_step
-    _draw_text(side_ax, 0.05, y, f"мин: {weighted_min:+.2f} pt", fontsize=9.2)
+    _draw_text(side_ax, 0.04, y, f"мин: {weighted_min:+.2f} pt", fontsize=8.8)
     y -= line_step
-    _draw_text(side_ax, 0.05, y, f"макс прибыль: {float(potential.max_profit_points):+.2f} pt", fontsize=9.2)
+    _draw_text(side_ax, 0.04, y, f"макс прибыль: {float(potential.max_profit_points):+.2f} pt", fontsize=8.8)
     y -= line_step
-    _draw_text(side_ax, 0.05, y, f"макс просадка: {float(potential.max_drawdown_points):+.2f} pt", fontsize=9.2)
+    _draw_text(side_ax, 0.04, y, f"макс просадка: {float(potential.max_drawdown_points):+.2f} pt", fontsize=8.8)
 
-    y -= (line_step + section_gap)
-    _draw_text(side_ax, 0.05, y, "Кандидаты:", fontsize=10.0, weight="bold")
+    y -= line_step + section_gap
+    _draw_text(side_ax, 0.04, y, "Кандидаты (МСК):", fontsize=9.8, weight="bold")
     y -= line_step * 0.90
 
-    candidate_font = 8.1
-    candidate_step = 0.035
-    line_x1 = 0.05
-    line_x2 = 0.16
-    text_x = 0.20
-
+    candidate_step = 0.032
     for color, label in candidate_entries:
-        if y < 0.045:
-            _draw_text(side_ax, 0.05, y, "…", fontsize=10.0, weight="bold")
+        if y < 0.035:
+            _draw_text(side_ax, 0.04, y, "…", fontsize=9.5, weight="bold")
             break
-        side_ax.plot([line_x1, line_x2], [y - 0.010, y - 0.010], transform=side_ax.transAxes, color=color, linewidth=2.4, solid_capstyle="round", clip_on=False)
-        _draw_text(side_ax, text_x, y, label, fontsize=candidate_font)
+        side_ax.plot([0.04, 0.13], [y - 0.009, y - 0.009], transform=side_ax.transAxes, color=color, linewidth=2.4, solid_capstyle="round", clip_on=False)
+        _draw_text(side_ax, 0.16, y, label, fontsize=7.6)
         y -= candidate_step
 
 
@@ -268,6 +271,7 @@ def save_signal_candidate_plot(
     pearson_scores: np.ndarray,
     candidate_scores: np.ndarray,
     candidate_potential_result: CandidatePotentialResult,
+    minmax_final_outcome_result: CandidateFinalOutcomeResult,
     total_candidates_count: int,
     pearson_passed_count: int,
     minmax_passed_count: int,
@@ -293,8 +297,8 @@ def save_signal_candidate_plot(
     bar_size_seconds = get_bar_size_seconds(instrument_row["barSizeSetting"])
     pattern_x_minutes = (np.arange(current.size, dtype=float) - float(current.size - 1)) * bar_size_seconds / 60.0
 
-    fig = plt.figure(figsize=(16, 9.5))
-    grid = fig.add_gridspec(2, 2, width_ratios=[6.3, 0.72], hspace=0.26, wspace=0.06)
+    fig = plt.figure(figsize=(16.5, 9.5))
+    grid = fig.add_gridspec(2, 2, width_ratios=[5.7, 1.25], hspace=0.26, wspace=0.045)
     pattern_ax = fig.add_subplot(grid[0, 0])
     potential_ax = fig.add_subplot(grid[1, 0])
     side_ax = fig.add_subplot(grid[:, 1])
@@ -358,6 +362,7 @@ def save_signal_candidate_plot(
         pearson_best_after_minmax=pearson_best_after_minmax,
         pearson_worst_after_minmax=pearson_worst_after_minmax,
         potential=potential,
+        minmax_final_outcome_result=minmax_final_outcome_result,
         end_up_count=end_up_count,
         end_down_count=end_down_count,
         candidate_entries=candidate_entries,
