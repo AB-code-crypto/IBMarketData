@@ -18,7 +18,6 @@ os.environ["MKL_DYNAMIC"] = "FALSE"
 import gc
 import itertools
 import multiprocessing
-import subprocess
 import time
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
@@ -140,20 +139,6 @@ def build_execution_variants() -> list[ExecutionVariant]:
     ]
 
 
-def read_git_commit() -> str:
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=BASE_DIR,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return completed.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return "unknown"
-
-
 def main() -> None:
     start_ts = parse_msk_datetime(START_DATETIME_MSK)
     end_ts = parse_msk_datetime(END_DATETIME_MSK)
@@ -166,7 +151,6 @@ def main() -> None:
 
     result_dir = RESULTS_ROOT / datetime.now().strftime("%Y%m%d_%H%M%S")
     store = ResultStore(result_dir)
-    git_commit = read_git_commit()
 
     print(
         f"MNQ tester: {START_DATETIME_MSK} -> {END_DATETIME_MSK} MSK\n"
@@ -192,7 +176,6 @@ def main() -> None:
             max_rolling_back_minutes=max(ROLLING_BACK_MINUTES_VALUES),
         )
         bars = loaded.execution_bars
-        price_db_metadata = loaded.price_db_metadata
         load_stats = loaded.stats
         signal_source = loaded.signal_source
         print(
@@ -270,7 +253,6 @@ def main() -> None:
                     )
 
                     for execution_variant in execution_variants:
-                        run_started = time.perf_counter()
                         simulation = simulate_trading(
                             bars=bars,
                             signals=signal_batch.signals,
@@ -279,20 +261,11 @@ def main() -> None:
                                 COMMISSION_PER_CONTRACT_SIDE_USD
                             ),
                         )
-                        run_elapsed = time.perf_counter() - run_started
                         run_id = store.save_run(
-                            git_commit=git_commit,
-                            price_db_metadata=price_db_metadata,
-                            start_ts=start_ts,
-                            end_ts=end_ts,
                             signal_variant=signal_variant,
                             execution_variant=execution_variant,
-                            commission_per_contract_side_usd=(
-                                COMMISSION_PER_CONTRACT_SIDE_USD
-                            ),
                             signal_batch=signal_batch,
                             simulation=simulation,
-                            elapsed_seconds=signal_elapsed + run_elapsed,
                         )
                         completed_runs += 1
                         print(
