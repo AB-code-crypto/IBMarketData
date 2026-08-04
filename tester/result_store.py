@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import os
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -62,7 +62,6 @@ class ResultStore:
         self._summary_rows: list[dict[str, Any]] = []
 
     def close(self) -> None:
-        # Оставлено для совместимости с текущим run_tester.py.
         return None
 
     @staticmethod
@@ -105,40 +104,23 @@ class ResultStore:
     def save_run(
             self,
             *,
-            git_commit: str,
-            price_db_metadata: dict[str, Any],
-            start_ts: int,
-            end_ts: int,
             signal_variant: SignalVariant,
             execution_variant: ExecutionVariant,
-            commission_per_contract_side_usd: float,
             signal_batch: SignalBatchResult,
             simulation: SimulationResult,
-            elapsed_seconds: float,
     ) -> int:
         run_id = self._next_id
         self._next_id += 1
 
-        signal_values = signal_variant.to_dict()
-        execution_values = execution_variant.to_dict()
         common_config = {
             "id": run_id,
-            **signal_values,
-            **execution_values,
-            "commission_per_contract_side_usd": float(
-                commission_per_contract_side_usd
-            ),
+            **signal_variant.to_dict(),
+            **execution_variant.to_dict(),
         }
 
         self._append_summary(
             common_config=common_config,
-            git_commit=git_commit,
-            price_db_metadata=price_db_metadata,
-            start_ts=start_ts,
-            end_ts=end_ts,
-            signal_batch=signal_batch,
             metrics=simulation.metrics,
-            elapsed_seconds=elapsed_seconds,
         )
         self._append_signals_csv(
             common_config=common_config,
@@ -162,35 +144,13 @@ class ResultStore:
             self,
             *,
             common_config: dict[str, Any],
-            git_commit: str,
-            price_db_metadata: dict[str, Any],
-            start_ts: int,
-            end_ts: int,
-            signal_batch: SignalBatchResult,
             metrics: dict[str, Any],
-            elapsed_seconds: float,
     ) -> None:
         settings = self._settings_only(common_config)
         row = {
             "id": common_config["id"],
             "net_profit_usd": metrics.get("net_profit_usd"),
             **settings,
-            "created_at_utc": datetime.now(timezone.utc).strftime(
-                "%Y-%m-%d %H:%M:%S"
-            ),
-            "git_commit": str(git_commit),
-            "price_db_path": str(price_db_metadata["path"]),
-            "price_db_size": int(price_db_metadata["size"]),
-            "price_db_mtime_ns": int(price_db_metadata["mtime_ns"]),
-            "price_rows_count": int(price_db_metadata["rows_count"]),
-            "price_min_ts": price_db_metadata["min_ts"],
-            "price_max_ts": price_db_metadata["max_ts"],
-            "start_ts": int(start_ts),
-            "end_ts": int(end_ts),
-            "calculation_points": signal_batch.calculation_points,
-            "skipped_points": signal_batch.skipped_points,
-            "no_signal_points": signal_batch.no_signal_points,
-            "elapsed_seconds": elapsed_seconds,
             **{
                 name: metrics.get(name)
                 for name in RUN_METRIC_COLUMNS
