@@ -72,19 +72,11 @@ class PriceBar:
 @dataclass(frozen=True)
 class CompletedTrade:
     direction: str
-    entry_ts: int
-    exit_ts: int
     entry_time_msk: str
     exit_time_msk: str
     entry_price: float
     exit_price: float
-    entry_signal_bar_ts: int
-    exit_signal_bar_ts: int | None
     exit_reason: str
-    gross_points: float
-    gross_pnl_usd: float
-    entry_commission_usd: float
-    exit_commission_usd: float
     net_pnl_usd: float
     mfe_points: float
     mae_points: float
@@ -95,7 +87,6 @@ class CompletedTrade:
 class DailyResult:
     moscow_day: str
     net_realized_pnl_usd: float
-    commission_usd: float
     closed_trades_count: int
     executed_signals_count: int
     daily_take_profit_triggered: bool
