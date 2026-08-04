@@ -45,7 +45,7 @@ CANDIDATE_MIN_COUNT_VALUES = [3]
 CANDIDATE_MAX_COUNT_VALUES = [9]
 POTENTIAL_MIN_ABS_END_DELTA_POINTS_VALUES = [10.0]
 
-DELAY_SECONDS_VALUES = [5]                  # только значения, кратные 5
+DELAY_SECONDS_VALUES = [10]                 # только значения, кратные 5
 TAKE_PROFIT_POINTS_VALUES = [50.0]          # 0 отключает TP
 STOP_LOSS_POINTS_VALUES = [150.0]           # 0 отключает SL
 DAILY_TAKE_PROFIT_USD_VALUES = [0.0]        # 0 отключает дневной take-profit
