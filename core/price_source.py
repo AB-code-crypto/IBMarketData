@@ -12,6 +12,9 @@ from core.instrument_db import get_instrument_db_path, get_instrument_table_name
 from core.sqlite_utils import open_sqlite_connection
 
 
+_PRICE_DB_PATH_OVERRIDES: dict[str, Path] = {}
+
+
 @dataclass(frozen=True)
 class PriceDbTarget:
     instrument_code: str
@@ -39,6 +42,23 @@ def quote_identifier(value: str) -> str:
     return '"' + str(value).replace('"', '""') + '"'
 
 
+def set_price_db_path_override(
+        instrument_code: str,
+        db_path: str | Path | None,
+) -> None:
+    """Override one instrument price DB for the current process.
+
+    The live robot never calls this function. The historical tester uses it so
+    the shared signal calculator can read an explicitly configured database
+    without duplicating the signal pipeline or mutating contracts.py.
+    """
+    code = str(instrument_code)
+    if db_path is None:
+        _PRICE_DB_PATH_OVERRIDES.pop(code, None)
+        return
+    _PRICE_DB_PATH_OVERRIDES[code] = Path(db_path).expanduser().resolve()
+
+
 def get_price_db_target(
         instrument_code: str,
         *,
@@ -49,13 +69,15 @@ def get_price_db_target(
     if instrument_row is None:
         raise ValueError(f"Инструмент {code!r} не найден в contracts.py")
 
-    db_path = Path(
-        get_instrument_db_path(
-            settings=settings,
-            instrument_code=code,
-            instrument_row=instrument_row,
+    db_path = _PRICE_DB_PATH_OVERRIDES.get(code)
+    if db_path is None:
+        db_path = Path(
+            get_instrument_db_path(
+                settings=settings,
+                instrument_code=code,
+                instrument_row=instrument_row,
+            )
         )
-    )
     if require_existing_file and not db_path.is_file():
         raise FileNotFoundError(f"Price DB не найдена: {db_path}")
 
@@ -259,6 +281,7 @@ __all__ = [
     "PriceDbTarget",
     "FreshPriceBarStatus",
     "quote_identifier",
+    "set_price_db_path_override",
     "get_price_db_target",
     "mid_close_sql",
     "complete_mid_close_predicate",
