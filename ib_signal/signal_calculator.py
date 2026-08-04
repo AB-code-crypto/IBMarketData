@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import perf_counter
+from typing import Protocol
 
 import numpy as np
 
 from ib_signal.pearson import calculate_centered_pearson_batch
 from ib_signal.signal_candidate_potential import (
     CandidatePotentialResult,
+    CandidateFullValuesReader,
     build_candidate_potential_result,
 )
 from ib_signal.signal_candidate_rank_features import (
@@ -23,6 +26,36 @@ from ib_signal.signal_candidates import (
 from ib_signal.signal_config import SignalConfig
 from ib_signal.signal_pattern_matrix import PatternMatrixResult, build_pattern_matrix
 from ib_signal.signal_window import SignalWindow, build_current_signal_window
+
+
+class SignalCalculationDataSource(Protocol):
+    def find_candidate_windows(
+            self,
+            *,
+            instrument_code: str,
+            current_window: SignalWindow,
+            settings: SignalConfig,
+    ) -> CandidateSearchResult:
+        ...
+
+    def build_pattern_matrix(
+            self,
+            *,
+            instrument_code: str,
+            window: SignalWindow,
+            candidates: list[CandidateWindow],
+    ) -> PatternMatrixResult:
+        ...
+
+    def read_candidate_full_values(
+            self,
+            *,
+            instrument_code: str,
+            candidate: CandidateWindow,
+            expected_points: int,
+            bar_size_seconds: int,
+    ) -> np.ndarray | None:
+        ...
 
 
 @dataclass(frozen=True)
@@ -45,6 +78,7 @@ class SignalCalculationResult:
     entry_price: float
     best_signal_pearson: float
     best_candidate_score: float | None
+    stage_timings_seconds: dict[str, float]
 
     @property
     def has_signal(self) -> bool:
@@ -68,31 +102,60 @@ def calculate_signal(
         instrument_code: str,
         signal_bar_ts: int,
         settings: SignalConfig,
+        data_source: SignalCalculationDataSource | None = None,
 ) -> SignalCalculationResult:
     """Calculate one rolling signal without writes, plots, logging or clock access."""
+    timings: dict[str, float] = {}
+    total_started = perf_counter()
+
+    stage_started = perf_counter()
     signal_window = build_current_signal_window(
         signal_bar_ts=int(signal_bar_ts),
         settings=settings,
     )
-    candidate_search = find_candidate_windows(
-        instrument_code=instrument_code,
-        current_window=signal_window,
-        settings=settings,
-    )
-    pattern_matrix = build_pattern_matrix(
-        instrument_code=instrument_code,
-        window=signal_window,
-        candidates=candidate_search.candidates,
-    )
+    timings["window"] = perf_counter() - stage_started
 
+    stage_started = perf_counter()
+    if data_source is None:
+        candidate_search = find_candidate_windows(
+            instrument_code=instrument_code,
+            current_window=signal_window,
+            settings=settings,
+        )
+    else:
+        candidate_search = data_source.find_candidate_windows(
+            instrument_code=instrument_code,
+            current_window=signal_window,
+            settings=settings,
+        )
+    timings["candidate_search"] = perf_counter() - stage_started
+
+    stage_started = perf_counter()
+    if data_source is None:
+        pattern_matrix = build_pattern_matrix(
+            instrument_code=instrument_code,
+            window=signal_window,
+            candidates=candidate_search.candidates,
+        )
+    else:
+        pattern_matrix = data_source.build_pattern_matrix(
+            instrument_code=instrument_code,
+            window=signal_window,
+            candidates=candidate_search.candidates,
+        )
+    timings["pattern_matrix"] = perf_counter() - stage_started
+
+    stage_started = perf_counter()
     all_pearson_scores = calculate_centered_pearson_batch(
         pattern_matrix.current_values,
         pattern_matrix.candidate_matrix,
     )
+    timings["pearson"] = perf_counter() - stage_started
     best_raw_pearson = (
         float(all_pearson_scores.max()) if all_pearson_scores.size else 0.0
     )
 
+    stage_started = perf_counter()
     passed_indices = np.flatnonzero(
         all_pearson_scores >= float(settings.pearson_min)
     )
@@ -119,6 +182,13 @@ def calculate_signal(
         end_delta_weight=settings.candidate_score_end_delta_weight,
         minmax_weight=settings.candidate_score_minmax_weight,
     )
+    timings["filter_and_score"] = perf_counter() - stage_started
+
+    full_values_reader: CandidateFullValuesReader | None = None
+    if data_source is not None:
+        full_values_reader = data_source.read_candidate_full_values
+
+    stage_started = perf_counter()
     potential = build_candidate_potential_result(
         instrument_code=instrument_code,
         signal_window=signal_window,
@@ -127,7 +197,9 @@ def calculate_signal(
         candidate_scores=score_result.candidate_scores,
         min_count=settings.candidate_potential_min_count,
         max_count=settings.candidate_potential_max_count,
+        full_values_reader=full_values_reader,
     )
+    timings["potential"] = perf_counter() - stage_started
 
     threshold = abs(float(settings.candidate_potential_min_abs_end_delta_points))
     signal_direction: str | None = None
@@ -148,6 +220,7 @@ def calculate_signal(
         if score_result.candidate_scores.size
         else None
     )
+    timings["total"] = perf_counter() - total_started
 
     return SignalCalculationResult(
         instrument_code=str(instrument_code),
@@ -168,7 +241,12 @@ def calculate_signal(
         entry_price=float(pattern_matrix.current_values[-1]),
         best_signal_pearson=best_signal_pearson,
         best_candidate_score=best_candidate_score,
+        stage_timings_seconds=timings,
     )
 
 
-__all__ = ["SignalCalculationResult", "calculate_signal"]
+__all__ = [
+    "SignalCalculationDataSource",
+    "SignalCalculationResult",
+    "calculate_signal",
+]
