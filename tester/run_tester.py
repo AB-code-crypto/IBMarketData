@@ -33,8 +33,8 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 PRICE_DB_PATH = BASE_DIR / "data" / "prices" / "MNQ.sqlite3"
 PRICE_TABLE_NAME = "MNQ_5s"
 
-START_DATETIME_MSK = "2026-01-01 00:00:00"
-END_DATETIME_MSK = "2026-01-01 23:59:59"
+START_DATETIME_MSK = "2026-08-04 00:00:00"
+END_DATETIME_MSK = "2026-08-04 23:59:59"
 
 # Для перебора добавь значения в соответствующий список.
 ROLLING_BACK_MINUTES_VALUES = [90]          # пример: [30, 60, 90]
@@ -50,10 +50,7 @@ TAKE_PROFIT_POINTS_VALUES = [50.0]          # 0 отключает TP
 STOP_LOSS_POINTS_VALUES = [150.0]           # 0 отключает SL
 DAILY_TAKE_PROFIT_USD_VALUES = [0.0]        # 0 отключает дневной take-profit
 
-COMMISSION_PER_CONTRACT_SIDE_USD = 0.0
-MULTIPLIER_USD_PER_POINT = 2.0
-SIGNAL_STEP_SECONDS = 60
-HISTORY_LOOKBACK_DAYS = 365
+COMMISSION_PER_CONTRACT_SIDE_USD = 0.62
 
 RESULTS_ROOT = BASE_DIR / "tester" / "results"
 PROGRESS_EVERY_CALCULATIONS = 100
@@ -156,11 +153,11 @@ def build_execution_variants() -> list[ExecutionVariant]:
 def build_signal_config(variant: SignalVariant) -> SignalConfig:
     return replace(
         DEFAULT_SIGNAL_CONFIG,
-        rolling_signal_step_seconds=SIGNAL_STEP_SECONDS,
+        rolling_signal_step_seconds=60,
         rolling_back_minutes=variant.rolling_back_minutes,
         rolling_trade_minutes=variant.rolling_trade_minutes,
         pearson_min=variant.pearson_min,
-        history_lookback_days=HISTORY_LOOKBACK_DAYS,
+        history_lookback_days=365,
         candidate_minmax_hard_filter_max_ratio=(
             variant.minmax_hard_filter_max_ratio
         ),
@@ -212,7 +209,7 @@ def calculate_signal_batch(
     for signal_bar_ts in iter_signal_bar_timestamps(
         start_ts=start_ts,
         end_ts=end_ts,
-        step_seconds=SIGNAL_STEP_SECONDS,
+        step_seconds=60,
     ):
         calculation_points += 1
         if (
@@ -322,7 +319,7 @@ def main() -> None:
         table_name=PRICE_TABLE_NAME,
         start_ts=start_ts,
         end_ts=end_ts,
-        history_lookback_days=HISTORY_LOOKBACK_DAYS,
+        history_lookback_days=365,
         max_rolling_back_minutes=max(ROLLING_BACK_MINUTES_VALUES),
     )
     bars = loaded.execution_bars
@@ -375,7 +372,6 @@ def main() -> None:
                     commission_per_contract_side_usd=(
                         COMMISSION_PER_CONTRACT_SIDE_USD
                     ),
-                    multiplier_usd_per_point=MULTIPLIER_USD_PER_POINT,
                 )
                 run_elapsed = time.perf_counter() - run_started
                 run_id = store.save_run(
@@ -388,7 +384,6 @@ def main() -> None:
                     commission_per_contract_side_usd=(
                         COMMISSION_PER_CONTRACT_SIDE_USD
                     ),
-                    multiplier_usd_per_point=MULTIPLIER_USD_PER_POINT,
                     signal_batch=signal_batch,
                     simulation=simulation,
                     elapsed_seconds=signal_elapsed + run_elapsed,
