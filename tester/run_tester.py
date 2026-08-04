@@ -1,24 +1,37 @@
 from __future__ import annotations
 
+import os
+
+# Должно выполняться до первого import NumPy. Каждый worker использует один
+# вычислительный поток, а параллелизм создаётся отдельными процессами.
+for _thread_env_name in (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+):
+    os.environ[_thread_env_name] = "1"
+os.environ["OMP_DYNAMIC"] = "FALSE"
+os.environ["MKL_DYNAMIC"] = "FALSE"
+
+import gc
 import itertools
+import multiprocessing
 import subprocess
 import time
-from collections import defaultdict
-from dataclasses import replace
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
 from zoneinfo import ZoneInfo
 
-from ib_signal.signal_calculator import calculate_signal
-from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG, SignalConfig
-from ib_signal.signal_errors import SignalDataNotReadyError
-from tester.in_memory_signal_data import InMemorySignalDataSource, load_tester_data
-from tester.models import (
-    ExecutionVariant,
-    SignalBatchResult,
-    SignalVariant,
-    TesterSignal,
+from tester.in_memory_signal_data import load_tester_data
+from tester.models import ExecutionVariant, SignalVariant
+from tester.parallel_signal_runner import (
+    SharedSignalDataOwner,
+    calculate_signal_batch_parallel,
+    format_stage_timings,
+    initialize_signal_worker,
 )
 from tester.result_store import ResultStore
 from tester.trading_simulator import simulate_trading
@@ -35,6 +48,11 @@ PRICE_TABLE_NAME = "MNQ_5s"
 
 START_DATETIME_MSK = "2026-08-04 00:00:00"
 END_DATETIME_MSK = "2026-08-04 23:59:59"
+
+# Для i7-14700 используем 20 worker-процессов: по одному на физическое ядро.
+# Если параллельно на компьютере выполняется тяжёлая работа, значение можно
+# временно уменьшить.
+WORKER_PROCESSES = 20
 
 # Для перебора добавь значения в соответствующий список.
 ROLLING_BACK_MINUTES_VALUES = [90]          # пример: [30, 60, 90]
@@ -53,7 +71,6 @@ DAILY_TAKE_PROFIT_USD_VALUES = [0.0]        # 0 отключает дневно�
 COMMISSION_PER_CONTRACT_SIDE_USD = 0.62
 
 RESULTS_ROOT = BASE_DIR / "tester" / "results"
-PROGRESS_EVERY_CALCULATIONS = 100
 
 
 MSK_TIMEZONE = ZoneInfo("Europe/Moscow")
@@ -66,14 +83,6 @@ def parse_msk_datetime(value: str) -> int:
     return int(local_dt.astimezone(timezone.utc).timestamp())
 
 
-def format_ts_msk(ts: int) -> str:
-    return (
-        datetime.fromtimestamp(int(ts), tz=timezone.utc)
-        .astimezone(MSK_TIMEZONE)
-        .strftime("%Y-%m-%d %H:%M:%S")
-    )
-
-
 def format_bytes(value: int) -> str:
     size = float(value)
     for suffix in ("B", "KiB", "MiB", "GiB", "TiB"):
@@ -81,25 +90,6 @@ def format_bytes(value: int) -> str:
             return f"{size:.2f} {suffix}"
         size /= 1024.0
     return f"{size:.2f} TiB"
-
-
-def ceil_to_step(ts: int, step_seconds: int) -> int:
-    remainder = int(ts) % int(step_seconds)
-    if remainder == 0:
-        return int(ts)
-    return int(ts) + int(step_seconds) - remainder
-
-
-def iter_signal_bar_timestamps(
-        *,
-        start_ts: int,
-        end_ts: int,
-        step_seconds: int,
-) -> Iterable[int]:
-    current = ceil_to_step(start_ts, step_seconds)
-    while current <= int(end_ts):
-        yield current
-        current += int(step_seconds)
 
 
 def build_signal_variants() -> list[SignalVariant]:
@@ -150,133 +140,6 @@ def build_execution_variants() -> list[ExecutionVariant]:
     ]
 
 
-def build_signal_config(variant: SignalVariant) -> SignalConfig:
-    return replace(
-        DEFAULT_SIGNAL_CONFIG,
-        rolling_signal_step_seconds=60,
-        rolling_back_minutes=variant.rolling_back_minutes,
-        rolling_trade_minutes=variant.rolling_trade_minutes,
-        pearson_min=variant.pearson_min,
-        history_lookback_days=365,
-        candidate_minmax_hard_filter_max_ratio=(
-            variant.minmax_hard_filter_max_ratio
-        ),
-        candidate_potential_min_count=variant.candidate_min_count,
-        candidate_potential_max_count=variant.candidate_max_count,
-        candidate_potential_min_abs_end_delta_points=(
-            variant.potential_min_abs_end_delta_points
-        ),
-    )
-
-
-def format_stage_timings(
-        totals: dict[str, float],
-        calculation_points: int,
-) -> str:
-    if calculation_points <= 0:
-        return "no timing data"
-    order = [
-        "candidate_search",
-        "pattern_matrix",
-        "pearson",
-        "filter_and_score",
-        "potential",
-        "total",
-    ]
-    parts = []
-    for name in order:
-        elapsed = float(totals.get(name, 0.0))
-        parts.append(
-            f"{name}={elapsed:.2f}s/{elapsed * 1000.0 / calculation_points:.2f}ms"
-        )
-    return ", ".join(parts)
-
-
-def calculate_signal_batch(
-        *,
-        variant: SignalVariant,
-        start_ts: int,
-        end_ts: int,
-        data_source: InMemorySignalDataSource,
-) -> SignalBatchResult:
-    settings = build_signal_config(variant)
-    signals: list[TesterSignal] = []
-    calculation_points = 0
-    skipped_points = 0
-    no_signal_points = 0
-    stage_totals: dict[str, float] = defaultdict(float)
-
-    for signal_bar_ts in iter_signal_bar_timestamps(
-        start_ts=start_ts,
-        end_ts=end_ts,
-        step_seconds=60,
-    ):
-        calculation_points += 1
-        if (
-            PROGRESS_EVERY_CALCULATIONS > 0
-            and calculation_points % PROGRESS_EVERY_CALCULATIONS == 0
-        ):
-            print(
-                f"    signal points: {calculation_points}, "
-                f"current={format_ts_msk(signal_bar_ts)} MSK",
-                flush=True,
-            )
-
-        try:
-            result = calculate_signal(
-                instrument_code="MNQ",
-                signal_bar_ts=signal_bar_ts,
-                settings=settings,
-                data_source=data_source,
-            )
-        except SignalDataNotReadyError:
-            skipped_points += 1
-            continue
-
-        for name, elapsed in result.stage_timings_seconds.items():
-            stage_totals[name] += float(elapsed)
-
-        if not result.has_signal:
-            no_signal_points += 1
-            continue
-
-        signals.append(
-            TesterSignal(
-                signal_bar_ts=result.signal_bar_ts,
-                signal_time_msk=format_ts_msk(result.signal_bar_ts),
-                signal_time_ct=result.candidate_search.current_signal_bar_time_ct,
-                direction=str(result.signal_direction),
-                reference_price=result.entry_price,
-                best_pearson=result.best_signal_pearson,
-                best_candidate_score=result.best_candidate_score,
-                potential_end_delta_points=result.potential.end_delta_points,
-                potential_max_profit_points=result.potential.max_profit_points,
-                potential_max_drawdown_points=(
-                    result.potential.max_drawdown_points
-                ),
-                potential_used=result.potential.used_candidates_count,
-                raw_candidates_count=(
-                    result.candidate_search.raw_candidate_rows_count
-                ),
-                valid_candidates_count=result.total_candidates_count,
-                pearson_passed_count=result.pearson_passed_count,
-                minmax_passed_count=result.minmax_passed_count,
-            )
-        )
-
-    print(
-        "  signal stage profile: "
-        + format_stage_timings(stage_totals, calculation_points),
-        flush=True,
-    )
-    return SignalBatchResult(
-        signals=signals,
-        calculation_points=calculation_points,
-        skipped_points=skipped_points,
-        no_signal_points=no_signal_points,
-    )
-
-
 def read_git_commit() -> str:
     try:
         completed = subprocess.run(
@@ -298,6 +161,8 @@ def main() -> None:
     signal_variants = build_signal_variants()
     execution_variants = build_execution_variants()
     run_count = len(signal_variants) * len(execution_variants)
+    logical_cpu_count = os.cpu_count() or 1
+    worker_count = max(1, min(int(WORKER_PROCESSES), logical_cpu_count))
 
     result_dir = RESULTS_ROOT / datetime.now().strftime("%Y%m%d_%H%M%S")
     store = ResultStore(result_dir)
@@ -309,93 +174,134 @@ def main() -> None:
         f"signal variants: {len(signal_variants)}\n"
         f"execution variants: {len(execution_variants)}\n"
         f"total runs: {run_count}\n"
+        f"worker processes: {worker_count} "
+        f"(logical CPUs detected: {logical_cpu_count})\n"
         f"results: {result_dir}\n"
         "Loading price history into RAM through one SQLite connection...",
         flush=True,
     )
 
-    loaded = load_tester_data(
-        db_path=PRICE_DB_PATH,
-        table_name=PRICE_TABLE_NAME,
-        start_ts=start_ts,
-        end_ts=end_ts,
-        history_lookback_days=365,
-        max_rolling_back_minutes=max(ROLLING_BACK_MINUTES_VALUES),
-    )
-    bars = loaded.execution_bars
-    price_db_metadata = loaded.price_db_metadata
-    signal_source = loaded.signal_source
-    print(
-        f"RAM load complete: signal_rows={loaded.stats.signal_rows}, "
-        f"candidate_signal_rows={loaded.stats.candidate_signal_rows}, "
-        f"execution_bars={loaded.stats.execution_bars}, "
-        f"signal_memory={format_bytes(loaded.stats.signal_memory_bytes)}, "
-        f"elapsed={loaded.stats.elapsed_seconds:.2f}s",
-        flush=True,
-    )
-
     completed_runs = 0
     try:
-        for signal_index, signal_variant in enumerate(signal_variants, start=1):
+        loaded = load_tester_data(
+            db_path=PRICE_DB_PATH,
+            table_name=PRICE_TABLE_NAME,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            history_lookback_days=365,
+            max_rolling_back_minutes=max(ROLLING_BACK_MINUTES_VALUES),
+        )
+        bars = loaded.execution_bars
+        price_db_metadata = loaded.price_db_metadata
+        load_stats = loaded.stats
+        signal_source = loaded.signal_source
+        print(
+            f"RAM load complete: signal_rows={load_stats.signal_rows}, "
+            f"candidate_signal_rows={load_stats.candidate_signal_rows}, "
+            f"execution_bars={load_stats.execution_bars}, "
+            f"signal_memory={format_bytes(load_stats.signal_memory_bytes)}, "
+            f"elapsed={load_stats.elapsed_seconds:.2f}s\n"
+            "Copying immutable signal arrays to shared memory...",
+            flush=True,
+        )
+
+        with SharedSignalDataOwner(signal_source) as shared_owner:
             print(
-                f"\nSignal variant {signal_index}/{len(signal_variants)}: "
-                f"{signal_variant}",
-                flush=True,
-            )
-            signal_started = time.perf_counter()
-            signal_batch = calculate_signal_batch(
-                variant=signal_variant,
-                start_ts=start_ts,
-                end_ts=end_ts,
-                data_source=signal_source,
-            )
-            signal_elapsed = time.perf_counter() - signal_started
-            average_ms = (
-                signal_elapsed * 1000.0 / signal_batch.calculation_points
-                if signal_batch.calculation_points
-                else 0.0
-            )
-            print(
-                f"  signals={len(signal_batch.signals)}, "
-                f"skipped={signal_batch.skipped_points}, "
-                f"signal calculation={signal_elapsed:.2f}s, "
-                f"average={average_ms:.2f}ms/point",
+                "Shared memory ready: "
+                f"{format_bytes(shared_owner.descriptor.memory_bytes)}",
                 flush=True,
             )
 
-            for execution_variant in execution_variants:
-                run_started = time.perf_counter()
-                simulation = simulate_trading(
-                    bars=bars,
-                    signals=signal_batch.signals,
-                    execution=execution_variant,
-                    commission_per_contract_side_usd=(
-                        COMMISSION_PER_CONTRACT_SIDE_USD
-                    ),
-                )
-                run_elapsed = time.perf_counter() - run_started
-                run_id = store.save_run(
-                    git_commit=git_commit,
-                    price_db_metadata=price_db_metadata,
-                    start_ts=start_ts,
-                    end_ts=end_ts,
-                    signal_variant=signal_variant,
-                    execution_variant=execution_variant,
-                    commission_per_contract_side_usd=(
-                        COMMISSION_PER_CONTRACT_SIDE_USD
-                    ),
-                    signal_batch=signal_batch,
-                    simulation=simulation,
-                    elapsed_seconds=signal_elapsed + run_elapsed,
-                )
-                completed_runs += 1
-                print(
-                    f"  run {completed_runs}/{run_count}, id={run_id}, "
-                    f"execution={execution_variant}, "
-                    f"trades={simulation.metrics['trades_count']}, "
-                    f"net={simulation.metrics['net_profit_usd']:+.2f} USD",
-                    flush=True,
-                )
+            # После копирования исходный набор signal-массивов в главном
+            # процессе больше не нужен. Worker-процессы используют общие блоки.
+            del signal_source
+            del loaded
+            gc.collect()
+
+            process_context = multiprocessing.get_context("spawn")
+            with ProcessPoolExecutor(
+                max_workers=worker_count,
+                mp_context=process_context,
+                initializer=initialize_signal_worker,
+                initargs=(shared_owner.descriptor,),
+            ) as executor:
+                for signal_index, signal_variant in enumerate(
+                    signal_variants,
+                    start=1,
+                ):
+                    print(
+                        f"\nSignal variant {signal_index}/"
+                        f"{len(signal_variants)}: {signal_variant}",
+                        flush=True,
+                    )
+                    signal_started = time.perf_counter()
+                    parallel_result = calculate_signal_batch_parallel(
+                        executor=executor,
+                        variant_index=signal_index,
+                        variant=signal_variant,
+                        start_ts=start_ts,
+                        end_ts=end_ts,
+                        worker_count=worker_count,
+                    )
+                    signal_elapsed = time.perf_counter() - signal_started
+                    signal_batch = parallel_result.signal_batch
+                    wall_average_ms = (
+                        signal_elapsed * 1000.0 / signal_batch.calculation_points
+                        if signal_batch.calculation_points
+                        else 0.0
+                    )
+                    print(
+                        "  worker stage totals: "
+                        + format_stage_timings(
+                            parallel_result.stage_timings_seconds,
+                            signal_batch.calculation_points,
+                        ),
+                        flush=True,
+                    )
+                    print(
+                        f"  chunks={parallel_result.chunk_count}, "
+                        f"signals={len(signal_batch.signals)}, "
+                        f"skipped={signal_batch.skipped_points}, "
+                        f"parallel wall={signal_elapsed:.2f}s, "
+                        f"worker time sum="
+                        f"{parallel_result.worker_elapsed_seconds:.2f}s, "
+                        f"wall average={wall_average_ms:.2f}ms/point",
+                        flush=True,
+                    )
+
+                    for execution_variant in execution_variants:
+                        run_started = time.perf_counter()
+                        simulation = simulate_trading(
+                            bars=bars,
+                            signals=signal_batch.signals,
+                            execution=execution_variant,
+                            commission_per_contract_side_usd=(
+                                COMMISSION_PER_CONTRACT_SIDE_USD
+                            ),
+                        )
+                        run_elapsed = time.perf_counter() - run_started
+                        run_id = store.save_run(
+                            git_commit=git_commit,
+                            price_db_metadata=price_db_metadata,
+                            start_ts=start_ts,
+                            end_ts=end_ts,
+                            signal_variant=signal_variant,
+                            execution_variant=execution_variant,
+                            commission_per_contract_side_usd=(
+                                COMMISSION_PER_CONTRACT_SIDE_USD
+                            ),
+                            signal_batch=signal_batch,
+                            simulation=simulation,
+                            elapsed_seconds=signal_elapsed + run_elapsed,
+                        )
+                        completed_runs += 1
+                        print(
+                            f"  run {completed_runs}/{run_count}, id={run_id}, "
+                            f"execution={execution_variant}, "
+                            f"trades={simulation.metrics['trades_count']}, "
+                            f"net={simulation.metrics['net_profit_usd']:+.2f} USD",
+                            flush=True,
+                        )
     finally:
         store.close()
 
@@ -406,4 +312,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     main()
