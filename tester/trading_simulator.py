@@ -21,6 +21,7 @@ MSK_TIMEZONE = ZoneInfo("Europe/Moscow")
 CT_TIMEZONE = ZoneInfo("America/Chicago")
 FUTURES_DAILY_FLAT_START_CT = time(14, 59, 50)
 FUTURES_CLEARING_END_CT = time(16, 0, 0)
+MNQ_MULTIPLIER_USD_PER_POINT = 2.0
 
 
 def quote_identifier(value: str) -> str:
@@ -136,14 +137,12 @@ def build_metrics(
         trades: list[CompletedTrade],
         signals_count: int,
         counters: Counter,
-        total_commission_usd: float,
 ) -> dict[str, float | int | None]:
     net_results = [float(trade.net_pnl_usd) for trade in trades]
-    gross_results = [float(trade.gross_pnl_usd) for trade in trades]
     winners = [value for value in net_results if value > 0.0]
     losers = [value for value in net_results if value < 0.0]
-    gross_profit = sum(value for value in net_results if value > 0.0)
-    gross_loss = sum(value for value in net_results if value < 0.0)
+    winning_sum = sum(winners)
+    losing_sum = sum(losers)
     exit_counts = Counter(trade.exit_reason for trade in trades)
     long_results = [
         trade.net_pnl_usd for trade in trades if trade.direction == "LONG"
@@ -154,16 +153,12 @@ def build_metrics(
 
     return {
         "net_profit_usd": float(sum(net_results)),
-        "gross_trade_pnl_usd": float(sum(gross_results)),
-        "gross_profit_usd": float(gross_profit),
-        "gross_loss_usd": float(gross_loss),
-        "total_commission_usd": float(total_commission_usd),
         "trades_count": len(trades),
         "winning_trades_count": len(winners),
         "losing_trades_count": len(losers),
         "win_rate": (len(winners) / len(trades)) if trades else 0.0,
         "profit_factor": (
-            float(gross_profit / abs(gross_loss)) if gross_loss < 0.0 else None
+            float(winning_sum / abs(losing_sum)) if losing_sum < 0.0 else None
         ),
         "average_trade_usd": (
             float(sum(net_results) / len(net_results)) if net_results else 0.0
@@ -213,7 +208,6 @@ def simulate_trading(
         signals: list[TesterSignal],
         execution: ExecutionVariant,
         commission_per_contract_side_usd: float,
-        multiplier_usd_per_point: float,
 ) -> SimulationResult:
     signals_by_execution_ts: dict[int, list[TesterSignal]] = defaultdict(list)
     for signal in signals:
@@ -229,19 +223,16 @@ def simulate_trading(
 
     trades: list[CompletedTrade] = []
     daily_results: list[DailyResult] = []
-    total_commission_usd = 0.0
 
     position_side = "FLAT"
     entry_price = 0.0
     entry_ts = 0
-    entry_signal_bar_ts = 0
     entry_commission_usd = 0.0
     mfe_points = 0.0
     mae_points = 0.0
 
     current_day: str | None = None
     day_net_realized_usd = 0.0
-    day_commission_usd = 0.0
     day_closed_trades_count = 0
     day_executed_signals_count = 0
     day_take_profit_triggered = False
@@ -254,7 +245,6 @@ def simulate_trading(
             DailyResult(
                 moscow_day=current_day,
                 net_realized_pnl_usd=float(day_net_realized_usd),
-                commission_usd=float(day_commission_usd),
                 closed_trades_count=int(day_closed_trades_count),
                 executed_signals_count=int(day_executed_signals_count),
                 daily_take_profit_triggered=bool(day_take_profit_triggered),
@@ -269,83 +259,67 @@ def simulate_trading(
             return float(bar.bid_close if at_close else bar.bid_open)
         return float(bar.ask_close if at_close else bar.ask_open)
 
-    def open_position(side: str, bar: PriceBar, signal: TesterSignal) -> None:
+    def open_position(side: str, bar: PriceBar) -> None:
         nonlocal position_side
         nonlocal entry_price
         nonlocal entry_ts
-        nonlocal entry_signal_bar_ts
         nonlocal entry_commission_usd
         nonlocal mfe_points
         nonlocal mae_points
         nonlocal day_net_realized_usd
-        nonlocal day_commission_usd
-        nonlocal total_commission_usd
 
         commission = float(commission_per_contract_side_usd)
         position_side = str(side)
         entry_price = executable_open_price(position_side, bar)
         entry_ts = int(bar.bar_time_ts)
-        entry_signal_bar_ts = int(signal.signal_bar_ts)
         entry_commission_usd = commission
         mfe_points = 0.0
         mae_points = 0.0
         day_net_realized_usd -= commission
-        day_commission_usd += commission
-        total_commission_usd += commission
 
     def close_position(
             *,
             exit_ts: int,
             exit_price: float,
             exit_reason: str,
-            exit_signal_bar_ts: int | None,
     ) -> None:
         nonlocal position_side
         nonlocal entry_price
         nonlocal entry_ts
-        nonlocal entry_signal_bar_ts
         nonlocal entry_commission_usd
         nonlocal mfe_points
         nonlocal mae_points
         nonlocal day_net_realized_usd
-        nonlocal day_commission_usd
         nonlocal day_closed_trades_count
-        nonlocal total_commission_usd
 
         if position_side == "FLAT":
             return
 
         if position_side == "LONG":
-            gross_points = float(exit_price) - entry_price
+            pnl_points = float(exit_price) - entry_price
         else:
-            gross_points = entry_price - float(exit_price)
-        gross_pnl_usd = gross_points * float(multiplier_usd_per_point)
+            pnl_points = entry_price - float(exit_price)
+        pnl_before_commission_usd = (
+            pnl_points * MNQ_MULTIPLIER_USD_PER_POINT
+        )
         exit_commission_usd = float(commission_per_contract_side_usd)
         net_pnl_usd = (
-            gross_pnl_usd - entry_commission_usd - exit_commission_usd
+            pnl_before_commission_usd
+            - entry_commission_usd
+            - exit_commission_usd
         )
 
-        day_net_realized_usd += gross_pnl_usd - exit_commission_usd
-        day_commission_usd += exit_commission_usd
+        day_net_realized_usd += pnl_before_commission_usd - exit_commission_usd
         day_closed_trades_count += 1
-        total_commission_usd += exit_commission_usd
 
         trades.append(
             CompletedTrade(
                 direction=position_side,
-                entry_ts=entry_ts,
-                exit_ts=int(exit_ts),
                 entry_time_msk=format_ts_msk(entry_ts),
                 exit_time_msk=format_ts_msk(exit_ts),
                 entry_price=float(entry_price),
                 exit_price=float(exit_price),
-                entry_signal_bar_ts=entry_signal_bar_ts,
-                exit_signal_bar_ts=exit_signal_bar_ts,
                 exit_reason=str(exit_reason),
-                gross_points=float(gross_points),
-                gross_pnl_usd=float(gross_pnl_usd),
-                entry_commission_usd=float(entry_commission_usd),
-                exit_commission_usd=float(exit_commission_usd),
                 net_pnl_usd=float(net_pnl_usd),
                 mfe_points=float(mfe_points),
                 mae_points=float(mae_points),
@@ -356,7 +330,6 @@ def simulate_trading(
         position_side = "FLAT"
         entry_price = 0.0
         entry_ts = 0
-        entry_signal_bar_ts = 0
         entry_commission_usd = 0.0
         mfe_points = 0.0
         mae_points = 0.0
@@ -377,7 +350,6 @@ def simulate_trading(
             finalize_day()
             current_day = bar_day
             day_net_realized_usd = 0.0
-            day_commission_usd = 0.0
             day_closed_trades_count = 0
             day_executed_signals_count = 0
             day_take_profit_triggered = False
@@ -393,7 +365,6 @@ def simulate_trading(
                     at_close=False,
                 ),
                 exit_reason="DAILY_FLAT",
-                exit_signal_bar_ts=None,
             )
 
         due_signals = signals_by_execution_ts.get(bar.bar_time_ts, [])
@@ -419,9 +390,8 @@ def simulate_trading(
                         at_close=False,
                     ),
                     exit_reason="REVERSE",
-                    exit_signal_bar_ts=signal.signal_bar_ts,
                 )
-            open_position(signal.direction, bar, signal)
+            open_position(signal.direction, bar)
 
         if position_side != "FLAT":
             update_excursions(bar)
@@ -452,14 +422,12 @@ def simulate_trading(
                     exit_ts=bar.bar_time_ts,
                     exit_price=float(stop_loss_price),
                     exit_reason="STOP_LOSS",
-                    exit_signal_bar_ts=None,
                 )
             elif take_profit_hit:
                 close_position(
                     exit_ts=bar.bar_time_ts,
                     exit_price=float(take_profit_price),
                     exit_reason="TAKE_PROFIT",
-                    exit_signal_bar_ts=None,
                 )
 
         daily_target = float(execution.daily_take_profit_usd)
@@ -468,11 +436,11 @@ def simulate_trading(
             if position_side == "LONG":
                 unrealized_usd = (
                     float(bar.bid_close) - entry_price
-                ) * float(multiplier_usd_per_point)
+                ) * MNQ_MULTIPLIER_USD_PER_POINT
             elif position_side == "SHORT":
                 unrealized_usd = (
                     entry_price - float(bar.ask_close)
-                ) * float(multiplier_usd_per_point)
+                ) * MNQ_MULTIPLIER_USD_PER_POINT
 
             if day_net_realized_usd + unrealized_usd >= daily_target:
                 if position_side != "FLAT":
@@ -484,7 +452,6 @@ def simulate_trading(
                             at_close=True,
                         ),
                         exit_reason="DAILY_TAKE_PROFIT",
-                        exit_signal_bar_ts=None,
                     )
                 daily_take_profit_halted = True
                 day_take_profit_triggered = True
@@ -499,7 +466,6 @@ def simulate_trading(
                 at_close=True,
             ),
             exit_reason="TEST_END",
-            exit_signal_bar_ts=None,
         )
 
     finalize_day()
@@ -507,7 +473,6 @@ def simulate_trading(
         trades=trades,
         signals_count=len(signals),
         counters=counters,
-        total_commission_usd=total_commission_usd,
     )
     return SimulationResult(
         trades=trades,
