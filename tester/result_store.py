@@ -5,7 +5,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from tester.models import (
     ExecutionVariant,
@@ -52,8 +52,13 @@ class ResultStore:
     def __init__(self, result_dir: Path) -> None:
         self.result_dir = Path(result_dir)
         self.result_dir.mkdir(parents=True, exist_ok=True)
+
         self.db_path = self.result_dir / "results.sqlite3"
         self.summary_path = self.result_dir / "summary.csv"
+        self.signals_path = self.result_dir / "signals.csv"
+        self.trades_path = self.result_dir / "trades.csv"
+        self.daily_results_path = self.result_dir / "daily_results.csv"
+
         self.conn = sqlite3.connect(str(self.db_path))
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
@@ -140,6 +145,21 @@ class ResultStore:
         )
         self.conn.commit()
 
+    @staticmethod
+    def _append_csv_rows(
+            path: Path,
+            *,
+            fieldnames: list[str],
+            rows: Iterable[dict[str, Any]],
+    ) -> None:
+        materialized = list(rows)
+        file_exists = path.is_file()
+        with path.open("a", newline="", encoding="utf-8-sig") as file:
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            if not file_exists:
+                writer.writeheader()
+            writer.writerows(materialized)
+
     def save_run(
             self,
             *,
@@ -154,12 +174,15 @@ class ResultStore:
             simulation: SimulationResult,
             elapsed_seconds: float,
     ) -> int:
+        signal_values = signal_variant.to_dict()
+        execution_values = execution_variant.to_dict()
         metrics_json = json.dumps(
             simulation.metrics,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
         )
+
         cursor = self.conn.execute(
             """
             INSERT INTO runs (
@@ -194,12 +217,8 @@ class ResultStore:
                 price_db_metadata["max_ts"],
                 int(start_ts),
                 int(end_ts),
-                json.dumps(signal_variant.to_dict(), ensure_ascii=False, sort_keys=True),
-                json.dumps(
-                    execution_variant.to_dict(),
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
+                json.dumps(signal_values, ensure_ascii=False, sort_keys=True),
+                json.dumps(execution_values, ensure_ascii=False, sort_keys=True),
                 float(commission_per_contract_side_usd),
                 int(signal_batch.calculation_points),
                 int(signal_batch.skipped_points),
@@ -210,6 +229,28 @@ class ResultStore:
         )
         run_id = int(cursor.lastrowid)
 
+        signal_db_rows = [
+            (
+                run_id,
+                index,
+                signal.signal_bar_ts,
+                signal.signal_time_msk,
+                signal.signal_time_ct,
+                signal.direction,
+                signal.reference_price,
+                signal.best_pearson,
+                signal.best_candidate_score,
+                signal.potential_end_delta_points,
+                signal.potential_max_profit_points,
+                signal.potential_max_drawdown_points,
+                signal.potential_used,
+                signal.raw_candidates_count,
+                signal.valid_candidates_count,
+                signal.pearson_passed_count,
+                signal.minmax_passed_count,
+            )
+            for index, signal in enumerate(signal_batch.signals, start=1)
+        ]
         self.conn.executemany(
             """
             INSERT INTO signals (
@@ -232,30 +273,26 @@ class ResultStore:
                 minmax_passed_count
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            [
-                (
-                    run_id,
-                    index,
-                    signal.signal_bar_ts,
-                    signal.signal_time_msk,
-                    signal.signal_time_ct,
-                    signal.direction,
-                    signal.reference_price,
-                    signal.best_pearson,
-                    signal.best_candidate_score,
-                    signal.potential_end_delta_points,
-                    signal.potential_max_profit_points,
-                    signal.potential_max_drawdown_points,
-                    signal.potential_used,
-                    signal.raw_candidates_count,
-                    signal.valid_candidates_count,
-                    signal.pearson_passed_count,
-                    signal.minmax_passed_count,
-                )
-                for index, signal in enumerate(signal_batch.signals, start=1)
-            ],
+            signal_db_rows,
         )
 
+        trade_db_rows = [
+            (
+                run_id,
+                index,
+                trade.direction,
+                trade.entry_time_msk,
+                trade.exit_time_msk,
+                trade.entry_price,
+                trade.exit_price,
+                trade.exit_reason,
+                trade.net_pnl_usd,
+                trade.mfe_points,
+                trade.mae_points,
+                trade.holding_seconds,
+            )
+            for index, trade in enumerate(simulation.trades, start=1)
+        ]
         self.conn.executemany(
             """
             INSERT INTO trades (
@@ -273,25 +310,20 @@ class ResultStore:
                 holding_seconds
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            [
-                (
-                    run_id,
-                    index,
-                    trade.direction,
-                    trade.entry_time_msk,
-                    trade.exit_time_msk,
-                    trade.entry_price,
-                    trade.exit_price,
-                    trade.exit_reason,
-                    trade.net_pnl_usd,
-                    trade.mfe_points,
-                    trade.mae_points,
-                    trade.holding_seconds,
-                )
-                for index, trade in enumerate(simulation.trades, start=1)
-            ],
+            trade_db_rows,
         )
 
+        daily_db_rows = [
+            (
+                run_id,
+                row.moscow_day,
+                row.net_realized_pnl_usd,
+                row.closed_trades_count,
+                row.executed_signals_count,
+                int(row.daily_take_profit_triggered),
+            )
+            for row in simulation.daily_results
+        ]
         self.conn.executemany(
             """
             INSERT INTO daily_results (
@@ -303,59 +335,186 @@ class ResultStore:
                 daily_take_profit_triggered
             ) VALUES (?, ?, ?, ?, ?, ?)
             """,
-            [
-                (
-                    run_id,
-                    row.moscow_day,
-                    row.net_realized_pnl_usd,
-                    row.closed_trades_count,
-                    row.executed_signals_count,
-                    int(row.daily_take_profit_triggered),
-                )
-                for row in simulation.daily_results
-            ],
+            daily_db_rows,
         )
         self.conn.commit()
 
+        common_config = {
+            "run_id": run_id,
+            **signal_values,
+            **execution_values,
+            "commission_per_contract_side_usd": float(
+                commission_per_contract_side_usd
+            ),
+        }
+
         self._append_summary(
-            run_id=run_id,
-            signal_variant=signal_variant,
-            execution_variant=execution_variant,
+            common_config=common_config,
             signal_batch=signal_batch,
             metrics=simulation.metrics,
             elapsed_seconds=elapsed_seconds,
+        )
+        self._append_signals_csv(
+            common_config=common_config,
+            signal_batch=signal_batch,
+        )
+        self._append_trades_csv(
+            common_config=common_config,
+            simulation=simulation,
+        )
+        self._append_daily_results_csv(
+            common_config=common_config,
+            simulation=simulation,
         )
         return run_id
 
     def _append_summary(
             self,
             *,
-            run_id: int,
-            signal_variant: SignalVariant,
-            execution_variant: ExecutionVariant,
+            common_config: dict[str, Any],
             signal_batch: SignalBatchResult,
             metrics: dict[str, Any],
             elapsed_seconds: float,
     ) -> None:
-        signal_values = signal_variant.to_dict()
-        execution_values = execution_variant.to_dict()
         row = {
-            "run_id": run_id,
-            **signal_values,
-            **execution_values,
+            **common_config,
             "calculation_points": signal_batch.calculation_points,
             "skipped_points": signal_batch.skipped_points,
             "no_signal_points": signal_batch.no_signal_points,
             "elapsed_seconds": elapsed_seconds,
             **{name: metrics.get(name) for name in RUN_METRIC_COLUMNS},
         }
-        fieldnames = list(row.keys())
-        file_exists = self.summary_path.is_file()
-        with self.summary_path.open("a", newline="", encoding="utf-8-sig") as file:
-            writer = csv.DictWriter(file, fieldnames=fieldnames)
-            if not file_exists:
-                writer.writeheader()
-            writer.writerow(row)
+        self._append_csv_rows(
+            self.summary_path,
+            fieldnames=list(row.keys()),
+            rows=[row],
+        )
+
+    def _append_signals_csv(
+            self,
+            *,
+            common_config: dict[str, Any],
+            signal_batch: SignalBatchResult,
+    ) -> None:
+        rows = [
+            {
+                **common_config,
+                "signal_index": index,
+                "signal_time_msk": signal.signal_time_msk,
+                "signal_time_ct": signal.signal_time_ct,
+                "direction": signal.direction,
+                "reference_price": signal.reference_price,
+                "best_pearson": signal.best_pearson,
+                "best_candidate_score": signal.best_candidate_score,
+                "potential_end_delta_points": signal.potential_end_delta_points,
+                "potential_max_profit_points": signal.potential_max_profit_points,
+                "potential_max_drawdown_points": (
+                    signal.potential_max_drawdown_points
+                ),
+                "potential_used": signal.potential_used,
+                "raw_candidates_count": signal.raw_candidates_count,
+                "valid_candidates_count": signal.valid_candidates_count,
+                "pearson_passed_count": signal.pearson_passed_count,
+                "minmax_passed_count": signal.minmax_passed_count,
+            }
+            for index, signal in enumerate(signal_batch.signals, start=1)
+        ]
+        fieldnames = list(common_config.keys()) + [
+            "signal_index",
+            "signal_time_msk",
+            "signal_time_ct",
+            "direction",
+            "reference_price",
+            "best_pearson",
+            "best_candidate_score",
+            "potential_end_delta_points",
+            "potential_max_profit_points",
+            "potential_max_drawdown_points",
+            "potential_used",
+            "raw_candidates_count",
+            "valid_candidates_count",
+            "pearson_passed_count",
+            "minmax_passed_count",
+        ]
+        self._append_csv_rows(
+            self.signals_path,
+            fieldnames=fieldnames,
+            rows=rows,
+        )
+
+    def _append_trades_csv(
+            self,
+            *,
+            common_config: dict[str, Any],
+            simulation: SimulationResult,
+    ) -> None:
+        rows = [
+            {
+                **common_config,
+                "trade_index": index,
+                "direction": trade.direction,
+                "entry_time_msk": trade.entry_time_msk,
+                "exit_time_msk": trade.exit_time_msk,
+                "entry_price": trade.entry_price,
+                "exit_price": trade.exit_price,
+                "exit_reason": trade.exit_reason,
+                "net_pnl_usd": trade.net_pnl_usd,
+                "mfe_points": trade.mfe_points,
+                "mae_points": trade.mae_points,
+                "holding_seconds": trade.holding_seconds,
+            }
+            for index, trade in enumerate(simulation.trades, start=1)
+        ]
+        fieldnames = list(common_config.keys()) + [
+            "trade_index",
+            "direction",
+            "entry_time_msk",
+            "exit_time_msk",
+            "entry_price",
+            "exit_price",
+            "exit_reason",
+            "net_pnl_usd",
+            "mfe_points",
+            "mae_points",
+            "holding_seconds",
+        ]
+        self._append_csv_rows(
+            self.trades_path,
+            fieldnames=fieldnames,
+            rows=rows,
+        )
+
+    def _append_daily_results_csv(
+            self,
+            *,
+            common_config: dict[str, Any],
+            simulation: SimulationResult,
+    ) -> None:
+        rows = [
+            {
+                **common_config,
+                "moscow_day": row.moscow_day,
+                "net_realized_pnl_usd": row.net_realized_pnl_usd,
+                "closed_trades_count": row.closed_trades_count,
+                "executed_signals_count": row.executed_signals_count,
+                "daily_take_profit_triggered": int(
+                    row.daily_take_profit_triggered
+                ),
+            }
+            for row in simulation.daily_results
+        ]
+        fieldnames = list(common_config.keys()) + [
+            "moscow_day",
+            "net_realized_pnl_usd",
+            "closed_trades_count",
+            "executed_signals_count",
+            "daily_take_profit_triggered",
+        ]
+        self._append_csv_rows(
+            self.daily_results_path,
+            fieldnames=fieldnames,
+            rows=rows,
+        )
 
 
 __all__ = ["ResultStore"]
