@@ -5,11 +5,11 @@ import os
 # Должно выполняться до первого import NumPy. Каждый worker использует один
 # вычислительный поток, а параллелизм создаётся отдельными процессами.
 for _thread_env_name in (
-    "OMP_NUM_THREADS",
-    "OPENBLAS_NUM_THREADS",
-    "MKL_NUM_THREADS",
-    "NUMEXPR_NUM_THREADS",
-    "VECLIB_MAXIMUM_THREADS",
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
 ):
     os.environ[_thread_env_name] = "1"
 os.environ["OMP_DYNAMIC"] = "FALSE"
@@ -35,7 +35,6 @@ from tester.parallel_signal_runner import (
 from tester.result_store import ResultStore
 from tester.trading_simulator import simulate_trading
 
-
 # =============================================================================
 # НАСТРОЙКИ ТЕСТЕРА. Аргументов командной строки нет.
 # =============================================================================
@@ -45,32 +44,31 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 PRICE_DB_PATH = BASE_DIR / "data" / "prices" / "MNQ.sqlite3"
 PRICE_TABLE_NAME = "MNQ_5s"
 
-START_DATETIME_MSK = "2026-08-04 00:00:00"
-END_DATETIME_MSK = "2026-08-04 23:59:59"
+START_DATETIME_MSK = "2026-07-01 00:00:00"
+END_DATETIME_MSK = "2026-07-31 23:59:59"
 
 # Для i7-14700 используем 20 worker-процессов: по одному на физическое ядро.
 # Если параллельно на компьютере выполняется тяжёлая работа, значение можно
 # временно уменьшить.
-WORKER_PROCESSES = 20
+WORKER_PROCESSES = 16
 
 # Для перебора добавь значения в соответствующий список.
-ROLLING_BACK_MINUTES_VALUES = [90]          # пример: [30, 60, 90]
-ROLLING_TRADE_MINUTES_VALUES = [30]         # пример: [10, 15, 20]
-PEARSON_MIN_VALUES = [0.70]
-MINMAX_HARD_FILTER_MAX_RATIO_VALUES = [1.50]
+ROLLING_BACK_MINUTES_VALUES = [30, 60, 90]  # пример: [30, 60, 90]
+ROLLING_TRADE_MINUTES_VALUES = [15, 30]  # пример: [10, 15, 20]
+PEARSON_MIN_VALUES = [0.60, 0.70]
+MINMAX_HARD_FILTER_MAX_RATIO_VALUES = [1.50, 3]
 CANDIDATE_MIN_COUNT_VALUES = [3]
 CANDIDATE_MAX_COUNT_VALUES = [9]
 POTENTIAL_MIN_ABS_END_DELTA_POINTS_VALUES = [10.0]
 
-DELAY_SECONDS_VALUES = [10]                 # только значения, кратные 5
-TAKE_PROFIT_POINTS_VALUES = [50.0]          # 0 отключает TP
-STOP_LOSS_POINTS_VALUES = [150.0]           # 0 отключает SL
-DAILY_TAKE_PROFIT_USD_VALUES = [0.0]        # 0 отключает дневной take-profit
+DELAY_SECONDS_VALUES = [10]  # только значения, кратные 5
+TAKE_PROFIT_POINTS_VALUES = [0,50.0]  # 0 отключает TP
+STOP_LOSS_POINTS_VALUES = [0,150.0]  # 0 отключает SL
+DAILY_TAKE_PROFIT_USD_VALUES = [0.0]  # 0 отключает дневной take-profit
 
 COMMISSION_PER_CONTRACT_SIDE_USD = 0.62
 
 RESULTS_ROOT = BASE_DIR / "tester" / "results"
-
 
 MSK_TIMEZONE = ZoneInfo("Europe/Moscow")
 
@@ -203,14 +201,14 @@ def main() -> None:
 
             process_context = multiprocessing.get_context("spawn")
             with ProcessPoolExecutor(
-                max_workers=worker_count,
-                mp_context=process_context,
-                initializer=initialize_signal_worker,
-                initargs=(shared_owner.descriptor,),
+                    max_workers=worker_count,
+                    mp_context=process_context,
+                    initializer=initialize_signal_worker,
+                    initargs=(shared_owner.descriptor,),
             ) as executor:
                 for signal_index, signal_variant in enumerate(
-                    signal_variants,
-                    start=1,
+                        signal_variants,
+                        start=1,
                 ):
                     print(
                         f"\nSignal variant {signal_index}/"
