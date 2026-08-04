@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 import itertools
-import sqlite3
 import subprocess
 import time
+from collections import defaultdict
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 from zoneinfo import ZoneInfo
 
-from core.price_source import set_price_db_path_override
 from ib_signal.signal_calculator import calculate_signal
 from ib_signal.signal_config import DEFAULT_SIGNAL_CONFIG, SignalConfig
 from ib_signal.signal_errors import SignalDataNotReadyError
+from tester.in_memory_signal_data import InMemorySignalDataSource, load_tester_data
 from tester.models import (
     ExecutionVariant,
     SignalBatchResult,
@@ -21,7 +21,7 @@ from tester.models import (
     TesterSignal,
 )
 from tester.result_store import ResultStore
-from tester.trading_simulator import load_price_bars, simulate_trading
+from tester.trading_simulator import simulate_trading
 
 
 # =============================================================================
@@ -75,6 +75,15 @@ def format_ts_msk(ts: int) -> str:
         .astimezone(MSK_TIMEZONE)
         .strftime("%Y-%m-%d %H:%M:%S")
     )
+
+
+def format_bytes(value: int) -> str:
+    size = float(value)
+    for suffix in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if size < 1024.0 or suffix == "TiB":
+            return f"{size:.2f} {suffix}"
+        size /= 1024.0
+    return f"{size:.2f} TiB"
 
 
 def ceil_to_step(ts: int, step_seconds: int) -> int:
@@ -163,17 +172,42 @@ def build_signal_config(variant: SignalVariant) -> SignalConfig:
     )
 
 
+def format_stage_timings(
+        totals: dict[str, float],
+        calculation_points: int,
+) -> str:
+    if calculation_points <= 0:
+        return "no timing data"
+    order = [
+        "candidate_search",
+        "pattern_matrix",
+        "pearson",
+        "filter_and_score",
+        "potential",
+        "total",
+    ]
+    parts = []
+    for name in order:
+        elapsed = float(totals.get(name, 0.0))
+        parts.append(
+            f"{name}={elapsed:.2f}s/{elapsed * 1000.0 / calculation_points:.2f}ms"
+        )
+    return ", ".join(parts)
+
+
 def calculate_signal_batch(
         *,
         variant: SignalVariant,
         start_ts: int,
         end_ts: int,
+        data_source: InMemorySignalDataSource,
 ) -> SignalBatchResult:
     settings = build_signal_config(variant)
     signals: list[TesterSignal] = []
     calculation_points = 0
     skipped_points = 0
     no_signal_points = 0
+    stage_totals: dict[str, float] = defaultdict(float)
 
     for signal_bar_ts in iter_signal_bar_timestamps(
         start_ts=start_ts,
@@ -196,10 +230,14 @@ def calculate_signal_batch(
                 instrument_code="MNQ",
                 signal_bar_ts=signal_bar_ts,
                 settings=settings,
+                data_source=data_source,
             )
         except SignalDataNotReadyError:
             skipped_points += 1
             continue
+
+        for name, elapsed in result.stage_timings_seconds.items():
+            stage_totals[name] += float(elapsed)
 
         if not result.has_signal:
             no_signal_points += 1
@@ -229,6 +267,11 @@ def calculate_signal_batch(
             )
         )
 
+    print(
+        "  signal stage profile: "
+        + format_stage_timings(stage_totals, calculation_points),
+        flush=True,
+    )
     return SignalBatchResult(
         signals=signals,
         calculation_points=calculation_points,
@@ -251,30 +294,9 @@ def read_git_commit() -> str:
         return "unknown"
 
 
-def read_price_db_metadata(db_path: Path, table_name: str) -> dict:
-    stat = db_path.stat()
-    conn = sqlite3.connect(str(db_path))
-    try:
-        row = conn.execute(
-            f"SELECT COUNT(*), MIN(bar_time_ts), MAX(bar_time_ts) "
-            f"FROM \"{table_name}\""
-        ).fetchone()
-    finally:
-        conn.close()
-    return {
-        "path": str(db_path.resolve()),
-        "size": int(stat.st_size),
-        "mtime_ns": int(stat.st_mtime_ns),
-        "rows_count": int(row[0] or 0),
-        "min_ts": None if row[1] is None else int(row[1]),
-        "max_ts": None if row[2] is None else int(row[2]),
-    }
-
-
 def main() -> None:
     start_ts = parse_msk_datetime(START_DATETIME_MSK)
     end_ts = parse_msk_datetime(END_DATETIME_MSK)
-    set_price_db_path_override("MNQ", PRICE_DB_PATH)
 
     signal_variants = build_signal_variants()
     execution_variants = build_execution_variants()
@@ -283,22 +305,35 @@ def main() -> None:
     result_dir = RESULTS_ROOT / datetime.now().strftime("%Y%m%d_%H%M%S")
     store = ResultStore(result_dir)
     git_commit = read_git_commit()
-    price_db_metadata = read_price_db_metadata(PRICE_DB_PATH, PRICE_TABLE_NAME)
-    bars = load_price_bars(
-        db_path=PRICE_DB_PATH,
-        table_name=PRICE_TABLE_NAME,
-        start_ts=start_ts,
-        end_ts=end_ts,
-    )
 
     print(
         f"MNQ tester: {START_DATETIME_MSK} -> {END_DATETIME_MSK} MSK\n"
         f"price DB: {PRICE_DB_PATH}\n"
-        f"price bars in test interval: {len(bars)}\n"
         f"signal variants: {len(signal_variants)}\n"
         f"execution variants: {len(execution_variants)}\n"
         f"total runs: {run_count}\n"
-        f"results: {result_dir}",
+        f"results: {result_dir}\n"
+        "Loading price history into RAM through one SQLite connection...",
+        flush=True,
+    )
+
+    loaded = load_tester_data(
+        db_path=PRICE_DB_PATH,
+        table_name=PRICE_TABLE_NAME,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        history_lookback_days=HISTORY_LOOKBACK_DAYS,
+        max_rolling_back_minutes=max(ROLLING_BACK_MINUTES_VALUES),
+    )
+    bars = loaded.execution_bars
+    price_db_metadata = loaded.price_db_metadata
+    signal_source = loaded.signal_source
+    print(
+        f"RAM load complete: signal_rows={loaded.stats.signal_rows}, "
+        f"candidate_signal_rows={loaded.stats.candidate_signal_rows}, "
+        f"execution_bars={loaded.stats.execution_bars}, "
+        f"signal_memory={format_bytes(loaded.stats.signal_memory_bytes)}, "
+        f"elapsed={loaded.stats.elapsed_seconds:.2f}s",
         flush=True,
     )
 
@@ -315,12 +350,19 @@ def main() -> None:
                 variant=signal_variant,
                 start_ts=start_ts,
                 end_ts=end_ts,
+                data_source=signal_source,
             )
             signal_elapsed = time.perf_counter() - signal_started
+            average_ms = (
+                signal_elapsed * 1000.0 / signal_batch.calculation_points
+                if signal_batch.calculation_points
+                else 0.0
+            )
             print(
                 f"  signals={len(signal_batch.signals)}, "
                 f"skipped={signal_batch.skipped_points}, "
-                f"signal calculation={signal_elapsed:.2f}s",
+                f"signal calculation={signal_elapsed:.2f}s, "
+                f"average={average_ms:.2f}ms/point",
                 flush=True,
             )
 
