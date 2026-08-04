@@ -82,7 +82,6 @@ class ResultStoreTest(unittest.TestCase):
             ) as file:
                 reader = csv.DictReader(file)
                 self.assertEqual(reader.fieldnames[:2], ["id", "net_profit_usd"])
-                self._assert_clean_columns(reader.fieldnames)
                 rows = list(reader)
             self.assertEqual([row["id"] for row in rows], ["2", "1"])
             self.assertEqual(rows[0]["net_profit_usd"], "85.0")
@@ -90,9 +89,7 @@ class ResultStoreTest(unittest.TestCase):
             with (result_dir / "hourly_results.csv").open(
                 newline="", encoding="utf-8-sig"
             ) as file:
-                reader = csv.DictReader(file)
-                self._assert_clean_columns(reader.fieldnames)
-                hourly_rows = list(reader)
+                hourly_rows = list(csv.DictReader(file))
             second_run_rows = [row for row in hourly_rows if row["id"] == "2"]
             self.assertEqual(len(second_run_rows), 24)
 
@@ -108,7 +105,13 @@ class ResultStoreTest(unittest.TestCase):
             self.assertEqual(float(hour_11["net_profit_usd"]), 0.0)
             self.assertEqual(int(hour_11["trades_count"]), 0)
 
-            for filename in ("trades.csv",):
+            for filename in (
+                "summary.csv",
+                "signals.csv",
+                "trades.csv",
+                "daily_results.csv",
+                "hourly_results.csv",
+            ):
                 with (result_dir / filename).open(
                     newline="", encoding="utf-8-sig"
                 ) as file:
