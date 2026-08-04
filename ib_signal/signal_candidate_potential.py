@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal, TypeAlias
@@ -18,66 +19,34 @@ from ib_signal.signal_candidates import CandidateWindow
 from ib_signal.signal_window import SignalWindow
 
 PotentialDirection: TypeAlias = Literal["LONG", "SHORT", "NONE"]
+CandidateFullValuesReader: TypeAlias = Callable[..., np.ndarray | None]
 
 
 @dataclass(frozen=True)
 class CandidatePotentialResult:
-    # True, если потенциал реально посчитан.
     is_available: bool
-
-    # Причина недоступности, если is_available=False.
     unavailable_reason: str | None
-
-    # Направление по финальной точке weighted path.
     direction: PotentialDirection
-
-    # Сколько кандидатов требовалось минимум.
     min_count: int
-
-    # Сколько кандидатов максимум брали в расчёт.
     max_count: int
-
-    # Сколько кандидатов было на входе.
     source_candidates_count: int
-
-    # Сколько кандидатов взяли в расчёт после проверки future-window.
     used_candidates_count: int
-
-    # Signal timestamp каждого кандидата, реально использованного в прогнозе.
     used_candidate_signal_bar_ts: np.ndarray
-
-    # Индивидуальные future path использованных кандидатов в пунктах текущего инструмента.
     candidate_future_delta_points: np.ndarray
-
-    # Временная шкала future path в минутах от signal_bar.
     x_minutes: np.ndarray
-
-    # Weighted future path в bps.
     weighted_future_delta_bps: np.ndarray
-
-    # Weighted future path в пунктах текущего инструмента.
     weighted_future_delta_points: np.ndarray
-
-    # Финальная точка weighted future path.
     end_delta_bps: float
     end_delta_points: float
-
-    # Максимальный profit в сторону direction. Положительное число.
     max_profit_bps: float
     max_profit_points: float
     max_profit_time_ct: str
-
-    # Максимальная просадка против direction. Отрицательное число.
     max_drawdown_bps: float
     max_drawdown_points: float
     max_drawdown_time_ct: str
-
-    # Сколько кандидатов закончили в сторону direction / против / flat.
     same_direction_count: int
     opposite_direction_count: int
     flat_count: int
-
-    # Доли веса кандидатов в сторону direction / против / flat.
     same_direction_weight_share: float
     opposite_direction_weight_share: float
     flat_weight_share: float
@@ -99,7 +68,6 @@ def read_candidate_full_values(
         expected_points: int,
         bar_size_seconds: int,
 ) -> np.ndarray | None:
-    """Reads a candidate pattern and its historical future from price DB."""
     target = get_price_db_target(instrument_code)
     conn = open_sqlite_connection(
         str(target.db_path),
@@ -224,8 +192,6 @@ def calculate_future_delta_bps(
         pattern_points: int,
         trade_points: int,
 ) -> np.ndarray | None:
-    """Что делает: строит future delta path кандидата в bps от entry.
-    Зачем нужна: кандидаты могут быть на разных ценовых уровнях, поэтому усреднять надо относительное движение."""
     values = np.asarray(full_values, dtype=float)
 
     if values.ndim != 1:
@@ -259,8 +225,6 @@ def calculate_future_delta_bps(
 
 
 def normalize_candidate_weights(raw_scores: np.ndarray) -> np.ndarray:
-    """Что делает: превращает candidate score в веса.
-    Зачем нужна: weighted potential должен давать больший вес более сильным кандидатам."""
     scores = np.asarray(raw_scores, dtype=float)
 
     if scores.ndim != 1:
@@ -279,15 +243,11 @@ def normalize_candidate_weights(raw_scores: np.ndarray) -> np.ndarray:
 
 
 def get_ct_time_text(ts: int) -> str:
-    """Что делает: форматирует UTC timestamp в CT-время.
-    Зачем нужна: в POTENTIAL нужны времена max profit / drawdown."""
     dt_utc = datetime.fromtimestamp(int(ts), tz=timezone.utc)
     return str(build_bar_time_fields_from_utc_dt(dt_utc)["bar_time_ct"])
 
 
 def get_direction(value: float) -> PotentialDirection:
-    """Что делает: определяет направление по знаку значения.
-    Зачем нужна: direction задаёт, что считается profit и drawdown."""
     number = float(value)
 
     if number > 0.0:
@@ -307,8 +267,6 @@ def build_empty_potential_result(
         source_candidates_count: int,
         used_candidates_count: int = 0,
 ) -> CandidatePotentialResult:
-    """Что делает: возвращает пустой potential result.
-    Зачем нужна: runner/plot/log получают единый объект даже когда потенциал считать нельзя."""
     return CandidatePotentialResult(
         is_available=False,
         unavailable_reason=reason,
@@ -345,8 +303,6 @@ def calculate_direction_stats(
         final_delta_bps: np.ndarray,
         weights: np.ndarray,
 ) -> tuple[int, int, int, float, float, float]:
-    """Что делает: считает count/weight-share кандидатов в сторону потенциала и против.
-    Зачем нужна: кроме weighted path надо видеть согласованность кандидатов."""
     if final_delta_bps.shape[0] != weights.shape[0]:
         raise ValueError(
             f"final_delta_bps и weights не совпадают: "
@@ -387,9 +343,8 @@ def build_candidate_potential_result(
         candidate_scores: np.ndarray,
         min_count: int,
         max_count: int,
+        full_values_reader: CandidateFullValuesReader | None = None,
 ) -> CandidatePotentialResult:
-    """Что делает: строит weighted future path по top-score кандидатам.
-    Зачем нужна: potential показывает ожидаемое развитие future-window по уже отобранным кандидатам."""
     min_count = int(min_count)
     max_count = int(max_count)
 
@@ -452,9 +407,10 @@ def build_candidate_potential_result(
     future_series: list[np.ndarray] = []
     valid_candidates: list[CandidateWindow] = []
     valid_scores: list[float] = []
+    reader = read_candidate_full_values if full_values_reader is None else full_values_reader
 
     for candidate, candidate_score in zip(selected_candidates, selected_scores):
-        full_values = read_candidate_full_values(
+        full_values = reader(
             instrument_code=instrument_code,
             candidate=candidate,
             expected_points=expected_points,
@@ -501,9 +457,16 @@ def build_candidate_potential_result(
     current_entry_price = float(current_values[-1])
     candidate_future_points = future_matrix / 10000.0 * abs(current_entry_price)
     weighted_future_points = weighted_future_bps / 10000.0 * abs(current_entry_price)
-    used_candidate_signal_bar_ts = np.asarray([candidate.signal_bar_ts for candidate in valid_candidates], dtype=np.int64)
+    used_candidate_signal_bar_ts = np.asarray(
+        [candidate.signal_bar_ts for candidate in valid_candidates],
+        dtype=np.int64,
+    )
 
-    x_minutes = np.arange(weighted_future_points.size, dtype=float) * bar_size_seconds / 60.0
+    x_minutes = (
+        np.arange(weighted_future_points.size, dtype=float)
+        * bar_size_seconds
+        / 60.0
+    )
 
     end_delta_bps = float(weighted_future_bps[-1])
     end_delta_points = float(weighted_future_points[-1])
@@ -521,20 +484,16 @@ def build_candidate_potential_result(
         max_profit_points = max(0.0, max_up_points)
         max_profit_bps = max(0.0, max_up_bps)
         max_profit_index = max_up_index
-
         max_drawdown_points = min(0.0, max_down_points)
         max_drawdown_bps = min(0.0, max_down_bps)
         max_drawdown_index = max_down_index
-
     elif direction == "SHORT":
         max_profit_points = max(0.0, -max_down_points)
         max_profit_bps = max(0.0, -max_down_bps)
         max_profit_index = max_down_index
-
         max_drawdown_points = -max(0.0, max_up_points)
         max_drawdown_bps = -max(0.0, max_up_bps)
         max_drawdown_index = max_up_index
-
     else:
         max_profit_points = 0.0
         max_profit_bps = 0.0
@@ -591,8 +550,6 @@ def build_candidate_potential_result(
 
 
 def format_candidate_potential_result(result: CandidatePotentialResult) -> str:
-    """Что делает: форматирует potential result для runtime-лога.
-    Зачем нужна: лог показывает weighted future path без необходимости открывать PNG."""
     if not result.is_available:
         return (
             f"status=off, reason={result.unavailable_reason}, "
@@ -615,3 +572,21 @@ def format_candidate_potential_result(result: CandidatePotentialResult) -> str:
         f"{result.opposite_direction_weight_share:.2f}/"
         f"{result.flat_weight_share:.2f}"
     )
+
+
+__all__ = [
+    "PotentialDirection",
+    "CandidateFullValuesReader",
+    "CandidatePotentialResult",
+    "CandidateFinalOutcomeResult",
+    "read_candidate_full_values",
+    "build_candidate_final_outcome_result",
+    "calculate_future_delta_bps",
+    "normalize_candidate_weights",
+    "get_ct_time_text",
+    "get_direction",
+    "build_empty_potential_result",
+    "calculate_direction_stats",
+    "build_candidate_potential_result",
+    "format_candidate_potential_result",
+]

@@ -1,0 +1,1 @@
+"""Historical MNQ strategy tester."""
