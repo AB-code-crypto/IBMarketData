@@ -21,7 +21,6 @@ MSK_TIMEZONE = ZoneInfo("Europe/Moscow")
 CT_TIMEZONE = ZoneInfo("America/Chicago")
 FUTURES_DAILY_FLAT_START_CT = time(14, 59, 50)
 FUTURES_CLEARING_END_CT = time(16, 0, 0)
-MNQ_MULTIPLIER_USD_PER_POINT = 2.0
 
 
 def quote_identifier(value: str) -> str:
@@ -299,9 +298,7 @@ def simulate_trading(
             pnl_points = float(exit_price) - entry_price
         else:
             pnl_points = entry_price - float(exit_price)
-        pnl_before_commission_usd = (
-            pnl_points * MNQ_MULTIPLIER_USD_PER_POINT
-        )
+        pnl_before_commission_usd = pnl_points * 2.0
         exit_commission_usd = float(commission_per_contract_side_usd)
         net_pnl_usd = (
             pnl_before_commission_usd
@@ -436,11 +433,11 @@ def simulate_trading(
             if position_side == "LONG":
                 unrealized_usd = (
                     float(bar.bid_close) - entry_price
-                ) * MNQ_MULTIPLIER_USD_PER_POINT
+                ) * 2.0
             elif position_side == "SHORT":
                 unrealized_usd = (
                     entry_price - float(bar.ask_close)
-                ) * MNQ_MULTIPLIER_USD_PER_POINT
+                ) * 2.0
 
             if day_net_realized_usd + unrealized_usd >= daily_target:
                 if position_side != "FLAT":
