@@ -44,7 +44,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 PRICE_DB_PATH = BASE_DIR / "data" / "prices" / "MNQ.sqlite3"
 PRICE_TABLE_NAME = "MNQ_5s"
 
-START_DATETIME_MSK = "2026-07-01 00:00:00"
+START_DATETIME_MSK = "2026-01-01 00:00:00"
 END_DATETIME_MSK = "2026-07-31 23:59:59"
 
 # Для i7-14700 используем 20 worker-процессов: по одному на физическое ядро.
