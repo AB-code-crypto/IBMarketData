@@ -44,7 +44,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 PRICE_DB_PATH = BASE_DIR / "data" / "prices" / "MNQ.sqlite3"
 PRICE_TABLE_NAME = "MNQ_5s"
 
-START_DATETIME_MSK = "2026-01-01 00:00:00"
+START_DATETIME_MSK = "2026-07-01 00:00:00"
 END_DATETIME_MSK = "2026-07-31 23:59:59"
 
 # Для i7-14700 используем 20 worker-процессов: по одному на физическое ядро.
@@ -63,8 +63,8 @@ POTENTIAL_MIN_ABS_END_DELTA_POINTS_VALUES = [20.0]
 
 DELAY_SECONDS_VALUES = [10]  # только значения, кратные 5
 TAKE_PROFIT_POINTS_VALUES = [0]  # 0 отключает TP    пример: [0, 50.0, 100]
-STOP_LOSS_POINTS_VALUES = [150.0]  # 0 отключает SL  пример: [0, 100.0, 150.0]
-DAILY_TAKE_PROFIT_USD_VALUES = [0.0]  # 0 отключает дневной take-profit
+STOP_LOSS_POINTS_VALUES = [ 150.0]  # 0 отключает SL  пример: [0, 100.0, 150.0]
+DAILY_TAKE_PROFIT_USD_VALUES = [0.0]  # 0 отключает дневной take-profit [0.0, 300, 500, 700, 1000]
 
 COMMISSION_PER_CONTRACT_SIDE_USD = 0.62
 
