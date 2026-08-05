@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 # Скрипт кладётся в корень IBMarketData рядом с .env.
 PROJECT_ROOT = Path(__file__).resolve().parent
-load_dotenv(PROJECT_ROOT / ".env.copy", encoding="utf-8-sig")
+load_dotenv(PROJECT_ROOT / ".env.copier", encoding="utf-8-sig")
 
 from core.ib_account import normalize_account_id, validate_ib_account_access
 from core.ib_connector import connect_ib, disconnect_ib, monitor_ib_connection

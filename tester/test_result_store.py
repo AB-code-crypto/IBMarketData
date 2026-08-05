@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +12,7 @@ from tester.models import (
     SignalBatchResult,
     SignalVariant,
     SimulationResult,
+    TesterSignal,
 )
 from tester.result_store import ResultStore
 
@@ -35,13 +37,18 @@ FORBIDDEN_COLUMNS = {
 
 
 class ResultStoreTest(unittest.TestCase):
-    def test_summary_is_sorted_and_hourly_results_use_entry_hour(self) -> None:
+    def test_summary_is_sorted_and_details_are_stored_in_sqlite(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             result_dir = Path(temporary_dir)
             store = ResultStore(result_dir)
             signal_variant = SignalVariant(90, 30, 0.7, 1.5, 3, 9, 10.0)
             execution_variant = ExecutionVariant(10, 50.0, 150.0, 0.0)
-            signal_batch = SignalBatchResult([], 100, 2, 80)
+            signal_batch = SignalBatchResult(
+                [self._signal()],
+                100,
+                2,
+                80,
+            )
 
             first_id = store.save_run(
                 signal_variant=signal_variant,
@@ -75,7 +82,74 @@ class ResultStoreTest(unittest.TestCase):
 
             self.assertEqual(first_id, 1)
             self.assertEqual(second_id, 2)
-            self.assertFalse((result_dir / "results.sqlite3").exists())
+            self.assertFalse((result_dir / "signals.csv").exists())
+            self.assertFalse((result_dir / "trades.csv").exists())
+
+            details_path = result_dir / "signals_trades.sqlite3"
+            self.assertTrue(details_path.is_file())
+            conn = sqlite3.connect(str(details_path))
+            try:
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0],
+                    2,
+                )
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM signals").fetchone()[0],
+                    2,
+                )
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0],
+                    4,
+                )
+
+                run_row = conn.execute(
+                    """
+                    SELECT rolling_back_minutes, delay_seconds
+                    FROM runs
+                    WHERE id = 2
+                    """
+                ).fetchone()
+                self.assertEqual(run_row, (90, 10))
+
+                signal_row = conn.execute(
+                    """
+                    SELECT signal_time_msk, direction, best_pearson
+                    FROM signals
+                    WHERE run_id = 2 AND signal_index = 1
+                    """
+                ).fetchone()
+                self.assertEqual(
+                    signal_row,
+                    ("2026-08-04 09:30:00", "LONG", 0.81),
+                )
+
+                trade_rows = conn.execute(
+                    """
+                    SELECT entry_time_msk, net_pnl_usd
+                    FROM trades
+                    WHERE run_id = 2
+                    ORDER BY trade_index
+                    """
+                ).fetchall()
+                self.assertEqual(
+                    trade_rows,
+                    [
+                        ("2026-08-04 09:05:00", 100.0),
+                        ("2026-08-04 09:55:00", -25.0),
+                        ("2026-08-04 10:00:00", 10.0),
+                    ],
+                )
+
+                for table_name in ("runs", "signals", "trades"):
+                    columns = [
+                        str(row[1])
+                        for row in conn.execute(
+                            f"PRAGMA table_info({table_name})"
+                        ).fetchall()
+                    ]
+                    self._assert_clean_columns(columns)
+            finally:
+                conn.close()
 
             with (result_dir / "summary.csv").open(
                 newline="", encoding="utf-8-sig"
@@ -97,18 +171,20 @@ class ResultStoreTest(unittest.TestCase):
             self.assertEqual(float(hour_9["net_profit_usd"]), 75.0)
             self.assertEqual(int(hour_9["trades_count"]), 2)
 
-            hour_10 = next(row for row in second_run_rows if row["hour_msk"] == "10")
+            hour_10 = next(
+                row for row in second_run_rows if row["hour_msk"] == "10"
+            )
             self.assertEqual(float(hour_10["net_profit_usd"]), 10.0)
             self.assertEqual(int(hour_10["trades_count"]), 1)
 
-            hour_11 = next(row for row in second_run_rows if row["hour_msk"] == "11")
+            hour_11 = next(
+                row for row in second_run_rows if row["hour_msk"] == "11"
+            )
             self.assertEqual(float(hour_11["net_profit_usd"]), 0.0)
             self.assertEqual(int(hour_11["trades_count"]), 0)
 
             for filename in (
                 "summary.csv",
-                "signals.csv",
-                "trades.csv",
                 "daily_results.csv",
                 "hourly_results.csv",
             ):
@@ -123,6 +199,26 @@ class ResultStoreTest(unittest.TestCase):
         names = set(fieldnames or [])
         self.assertFalse(names & FORBIDDEN_COLUMNS)
         self.assertFalse(any(name.endswith("_ts") for name in names))
+
+    @staticmethod
+    def _signal() -> TesterSignal:
+        return TesterSignal(
+            signal_bar_ts=0,
+            signal_time_msk="2026-08-04 09:30:00",
+            signal_time_ct="2026-08-04 01:30:00",
+            direction="LONG",
+            reference_price=21000.0,
+            best_pearson=0.81,
+            best_candidate_score=0.75,
+            potential_end_delta_points=15.0,
+            potential_max_profit_points=22.0,
+            potential_max_drawdown_points=-8.0,
+            potential_used=5,
+            raw_candidates_count=2000,
+            valid_candidates_count=1800,
+            pearson_passed_count=7,
+            minmax_passed_count=5,
+        )
 
     @staticmethod
     def _trade(
