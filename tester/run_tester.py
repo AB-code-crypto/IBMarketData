@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 
 # Должно выполняться до первого import NumPy. Каждый worker использует один
 # вычислительный поток, а параллелизм создаётся отдельными процессами.
@@ -25,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from ib_signal.signal_time import FUT_SEARCH_HOUR_GROUPS_CT
 from tester.in_memory_signal_data import load_tester_data
 from tester.models import ExecutionVariant, SignalVariant
 from tester.parallel_signal_runner import (
@@ -69,7 +69,6 @@ DAILY_TAKE_PROFIT_USD_VALUES = [0.0]  # 0 отключает дневной take
 
 COMMISSION_PER_CONTRACT_SIDE_USD = 0.62
 
-SIGNAL_TIME_PATH = BASE_DIR / "ib_signal" / "signal_time.py"
 RESULTS_ROOT = BASE_DIR / "tester" / "results"
 
 MSK_TIMEZONE = ZoneInfo("Europe/Moscow")
@@ -181,16 +180,32 @@ def main() -> None:
     logical_cpu_count = os.cpu_count() or 1
     worker_count = max(1, min(int(WORKER_PROCESSES), logical_cpu_count))
 
-    if not SIGNAL_TIME_PATH.is_file():
-        raise FileNotFoundError(
-            f"Signal time config not found: {SIGNAL_TIME_PATH}"
-        )
-
     result_dir = RESULTS_ROOT / datetime.now().strftime("%Y%m%d_%H%M%S")
-    result_dir.mkdir(parents=True, exist_ok=True)
-    signal_time_snapshot_path = result_dir / SIGNAL_TIME_PATH.name
-    shutil.copy2(SIGNAL_TIME_PATH, signal_time_snapshot_path)
     store = ResultStore(result_dir)
+    store.save_test_settings(
+        {
+            "START_DATETIME_MSK": START_DATETIME_MSK,
+            "END_DATETIME_MSK": END_DATETIME_MSK,
+            "ROLLING_BACK_MINUTES_VALUES": ROLLING_BACK_MINUTES_VALUES,
+            "ROLLING_TRADE_MINUTES_VALUES": ROLLING_TRADE_MINUTES_VALUES,
+            "PEARSON_MIN_VALUES": PEARSON_MIN_VALUES,
+            "MINMAX_HARD_FILTER_MAX_RATIO_VALUES": (
+                MINMAX_HARD_FILTER_MAX_RATIO_VALUES
+            ),
+            "CANDIDATE_MIN_COUNT_VALUES": CANDIDATE_MIN_COUNT_VALUES,
+            "CANDIDATE_MAX_COUNT_VALUES": CANDIDATE_MAX_COUNT_VALUES,
+            "POTENTIAL_MIN_ABS_END_DELTA_POINTS_VALUES": (
+                POTENTIAL_MIN_ABS_END_DELTA_POINTS_VALUES
+            ),
+            "DELAY_SECONDS_VALUES": DELAY_SECONDS_VALUES,
+            "TAKE_PROFIT_POINTS_VALUES": TAKE_PROFIT_POINTS_VALUES,
+            "STOP_LOSS_POINTS_VALUES": STOP_LOSS_POINTS_VALUES,
+            "DAILY_TAKE_PROFIT_USD_VALUES": (
+                DAILY_TAKE_PROFIT_USD_VALUES
+            ),
+            "FUT_SEARCH_HOUR_GROUPS_CT": FUT_SEARCH_HOUR_GROUPS_CT,
+        }
+    )
 
     print(
         f"MNQ tester: {START_DATETIME_MSK} -> {END_DATETIME_MSK} MSK\n"
@@ -201,7 +216,7 @@ def main() -> None:
         f"worker processes: {worker_count} "
         f"(logical CPUs detected: {logical_cpu_count})\n"
         f"results: {result_dir}\n"
-        f"signal_time snapshot: {signal_time_snapshot_path}\n"
+        f"database: {store.db_path}\n"
         "Loading price history into RAM through one SQLite connection...",
         flush=True,
     )

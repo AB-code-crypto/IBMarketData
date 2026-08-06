@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import csv
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -8,6 +8,7 @@ from pathlib import Path
 
 from tester.models import (
     CompletedTrade,
+    DailyResult,
     ExecutionVariant,
     SignalBatchResult,
     SignalVariant,
@@ -17,30 +18,34 @@ from tester.models import (
 from tester.result_store import ResultStore
 
 
-FORBIDDEN_COLUMNS = {
-    "commission_per_contract_side_usd",
-    "created_at_utc",
-    "git_commit",
-    "price_db_path",
-    "price_db_size",
-    "price_db_mtime_ns",
-    "price_rows_count",
-    "price_min_ts",
-    "price_max_ts",
-    "start_ts",
-    "end_ts",
-    "elapsed_seconds",
-    "calculation_points",
-    "skipped_points",
-    "no_signal_points",
-}
-
-
 class ResultStoreTest(unittest.TestCase):
-    def test_summary_is_sorted_and_details_are_stored_in_sqlite(self) -> None:
+    def test_all_results_are_stored_in_one_database(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             result_dir = Path(temporary_dir)
             store = ResultStore(result_dir)
+            store.save_test_settings(
+                {
+                    "START_DATETIME_MSK": "2026-01-01 00:00:00",
+                    "END_DATETIME_MSK": "2026-07-31 23:59:59",
+                    "ROLLING_BACK_MINUTES_VALUES": [90],
+                    "ROLLING_TRADE_MINUTES_VALUES": [30],
+                    "PEARSON_MIN_VALUES": [0.6],
+                    "MINMAX_HARD_FILTER_MAX_RATIO_VALUES": [5],
+                    "CANDIDATE_MIN_COUNT_VALUES": [3, 7],
+                    "CANDIDATE_MAX_COUNT_VALUES": [7, 9, 11],
+                    "POTENTIAL_MIN_ABS_END_DELTA_POINTS_VALUES": [30],
+                    "DELAY_SECONDS_VALUES": [10],
+                    "TAKE_PROFIT_POINTS_VALUES": [200],
+                    "STOP_LOSS_POINTS_VALUES": [150],
+                    "DAILY_TAKE_PROFIT_USD_VALUES": [0.0],
+                    "FUT_SEARCH_HOUR_GROUPS_CT": {
+                        15: [],
+                        16: [],
+                        17: [0, 1, 2],
+                    },
+                }
+            )
+
             signal_variant = SignalVariant(90, 30, 0.7, 1.5, 3, 9, 10.0)
             execution_variant = ExecutionVariant(10, 50.0, 150.0, 0.0)
             signal_batch = SignalBatchResult(
@@ -56,29 +61,21 @@ class ResultStoreTest(unittest.TestCase):
                 signal_batch=signal_batch,
                 simulation=SimulationResult(
                     trades=[self._trade("2026-08-04 08:15:00", 50.0)],
-                    daily_results=[],
+                    daily_results=[
+                        DailyResult(
+                            "2026-08-04",
+                            50.0,
+                            1,
+                            1,
+                            False,
+                        )
+                    ],
                     metrics={"net_profit_usd": 50.0},
                 ),
             )
 
-            # Проверяем результат до второго прогона и до store.close().
-            # Это имитирует просмотр файлов во время продолжающегося теста.
-            with (result_dir / "summary.csv").open(
-                newline="", encoding="utf-8-sig"
-            ) as file:
-                visible_summary_rows = list(csv.DictReader(file))
-            self.assertEqual(len(visible_summary_rows), 1)
-            self.assertEqual(visible_summary_rows[0]["id"], "1")
-
-            with (result_dir / "hourly_results.csv").open(
-                newline="", encoding="utf-8-sig"
-            ) as file:
-                visible_hourly_rows = list(csv.DictReader(file))
-            self.assertEqual(len(visible_hourly_rows), 24)
-            self.assertTrue(all(row["id"] == "1" for row in visible_hourly_rows))
-
             visible_conn = sqlite3.connect(
-                str(result_dir / "signals_trades.sqlite3")
+                str(result_dir / "results.sqlite3")
             )
             try:
                 self.assertEqual(
@@ -89,15 +86,9 @@ class ResultStoreTest(unittest.TestCase):
                 )
                 self.assertEqual(
                     visible_conn.execute(
-                        "SELECT COUNT(*) FROM signals"
+                        "SELECT COUNT(*) FROM hourly_results"
                     ).fetchone()[0],
-                    1,
-                )
-                self.assertEqual(
-                    visible_conn.execute(
-                        "SELECT COUNT(*) FROM trades"
-                    ).fetchone()[0],
-                    1,
+                    24,
                 )
             finally:
                 visible_conn.close()
@@ -116,7 +107,15 @@ class ResultStoreTest(unittest.TestCase):
                         self._trade("2026-08-04 09:55:00", -25.0),
                         self._trade("2026-08-04 10:00:00", 10.0),
                     ],
-                    daily_results=[],
+                    daily_results=[
+                        DailyResult(
+                            "2026-08-04",
+                            85.0,
+                            3,
+                            3,
+                            False,
+                        )
+                    ],
                     metrics={"net_profit_usd": 85.0},
                 ),
             )
@@ -124,123 +123,128 @@ class ResultStoreTest(unittest.TestCase):
 
             self.assertEqual(first_id, 1)
             self.assertEqual(second_id, 2)
-            self.assertFalse((result_dir / "signals.csv").exists())
-            self.assertFalse((result_dir / "trades.csv").exists())
-
-            details_path = result_dir / "signals_trades.sqlite3"
-            self.assertTrue(details_path.is_file())
-            conn = sqlite3.connect(str(details_path))
-            try:
-                self.assertEqual(
-                    conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0],
-                    2,
-                )
-                self.assertEqual(
-                    conn.execute("SELECT COUNT(*) FROM signals").fetchone()[0],
-                    2,
-                )
-                self.assertEqual(
-                    conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0],
-                    4,
-                )
-
-                run_row = conn.execute(
-                    """
-                    SELECT rolling_back_minutes, delay_seconds
-                    FROM runs
-                    WHERE id = 2
-                    """
-                ).fetchone()
-                self.assertEqual(run_row, (90, 10))
-
-                signal_row = conn.execute(
-                    """
-                    SELECT signal_time_msk, direction, best_pearson
-                    FROM signals
-                    WHERE run_id = 2 AND signal_index = 1
-                    """
-                ).fetchone()
-                self.assertEqual(
-                    signal_row,
-                    ("2026-08-04 09:30:00", "LONG", 0.81),
-                )
-
-                trade_rows = conn.execute(
-                    """
-                    SELECT entry_time_msk, net_pnl_usd
-                    FROM trades
-                    WHERE run_id = 2
-                    ORDER BY trade_index
-                    """
-                ).fetchall()
-                self.assertEqual(
-                    trade_rows,
-                    [
-                        ("2026-08-04 09:05:00", 100.0),
-                        ("2026-08-04 09:55:00", -25.0),
-                        ("2026-08-04 10:00:00", 10.0),
-                    ],
-                )
-
-                for table_name in ("runs", "signals", "trades"):
-                    columns = [
-                        str(row[1])
-                        for row in conn.execute(
-                            f"PRAGMA table_info({table_name})"
-                        ).fetchall()
-                    ]
-                    self._assert_clean_columns(columns)
-            finally:
-                conn.close()
-
-            with (result_dir / "summary.csv").open(
-                newline="", encoding="utf-8-sig"
-            ) as file:
-                reader = csv.DictReader(file)
-                self.assertEqual(reader.fieldnames[:2], ["id", "net_profit_usd"])
-                rows = list(reader)
-            self.assertEqual([row["id"] for row in rows], ["2", "1"])
-            self.assertEqual(rows[0]["net_profit_usd"], "85.0")
-
-            with (result_dir / "hourly_results.csv").open(
-                newline="", encoding="utf-8-sig"
-            ) as file:
-                hourly_rows = list(csv.DictReader(file))
-            second_run_rows = [row for row in hourly_rows if row["id"] == "2"]
-            self.assertEqual(len(second_run_rows), 24)
-
-            hour_9 = next(row for row in second_run_rows if row["hour_msk"] == "9")
-            self.assertEqual(float(hour_9["net_profit_usd"]), 75.0)
-            self.assertEqual(int(hour_9["trades_count"]), 2)
-
-            hour_10 = next(
-                row for row in second_run_rows if row["hour_msk"] == "10"
+            self.assertTrue(
+                (result_dir / "results.sqlite3").is_file()
             )
-            self.assertEqual(float(hour_10["net_profit_usd"]), 10.0)
-            self.assertEqual(int(hour_10["trades_count"]), 1)
-
-            hour_11 = next(
-                row for row in second_run_rows if row["hour_msk"] == "11"
-            )
-            self.assertEqual(float(hour_11["net_profit_usd"]), 0.0)
-            self.assertEqual(int(hour_11["trades_count"]), 0)
 
             for filename in (
                 "summary.csv",
                 "daily_results.csv",
                 "hourly_results.csv",
+                "signals.csv",
+                "trades.csv",
+                "signals_trades.sqlite3",
+                "signal_time.py",
             ):
-                with (result_dir / filename).open(
-                    newline="", encoding="utf-8-sig"
-                ) as file:
-                    reader = csv.DictReader(file)
-                    self._assert_clean_columns(reader.fieldnames)
+                self.assertFalse((result_dir / filename).exists())
 
-    def _assert_clean_columns(self, fieldnames: list[str] | None) -> None:
-        self.assertIsNotNone(fieldnames)
-        names = set(fieldnames or [])
-        self.assertFalse(names & FORBIDDEN_COLUMNS)
-        self.assertFalse(any(name.endswith("_ts") for name in names))
+            conn = sqlite3.connect(
+                str(result_dir / "results.sqlite3")
+            )
+            try:
+                names = {
+                    row[0]
+                    for row in conn.execute(
+                        """
+                        SELECT name
+                        FROM sqlite_master
+                        WHERE type IN ('table', 'view')
+                        """
+                    ).fetchall()
+                }
+                self.assertTrue(
+                    {
+                        "test_settings",
+                        "runs",
+                        "run_metrics",
+                        "signals",
+                        "trades",
+                        "daily_results",
+                        "hourly_results",
+                        "summary",
+                    }.issubset(names)
+                )
+
+                settings = {
+                    name: json.loads(value_json)
+                    for name, value_json in conn.execute(
+                        "SELECT name, value_json FROM test_settings"
+                    ).fetchall()
+                }
+                self.assertEqual(
+                    settings["CANDIDATE_MIN_COUNT_VALUES"],
+                    [3, 7],
+                )
+                self.assertEqual(
+                    settings["FUT_SEARCH_HOUR_GROUPS_CT"]["15"],
+                    [],
+                )
+
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM runs"
+                    ).fetchone()[0],
+                    2,
+                )
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM signals"
+                    ).fetchone()[0],
+                    2,
+                )
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM trades"
+                    ).fetchone()[0],
+                    4,
+                )
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM daily_results"
+                    ).fetchone()[0],
+                    2,
+                )
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM hourly_results"
+                    ).fetchone()[0],
+                    48,
+                )
+
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT id, net_profit_usd FROM summary"
+                    ).fetchall(),
+                    [(2, 85.0), (1, 50.0)],
+                )
+
+                self.assertEqual(
+                    conn.execute(
+                        """
+                        SELECT
+                            net_profit_usd,
+                            trades_count,
+                            winning_trades_count,
+                            losing_trades_count
+                        FROM hourly_results
+                        WHERE run_id = 2 AND hour_msk = 9
+                        """
+                    ).fetchone(),
+                    (75.0, 2, 1, 1),
+                )
+
+                self.assertEqual(
+                    conn.execute(
+                        """
+                        SELECT net_realized_pnl_usd, closed_trades_count
+                        FROM daily_results
+                        WHERE run_id = 2
+                        """
+                    ).fetchone(),
+                    (85.0, 3),
+                )
+            finally:
+                conn.close()
 
     @staticmethod
     def _signal() -> TesterSignal:
