@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 
 # Должно выполняться до первого import NumPy. Каждый worker использует один
 # вычислительный поток, а параллелизм создаётся отдельными процессами.
@@ -44,30 +45,31 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 PRICE_DB_PATH = BASE_DIR / "data" / "prices" / "MNQ.sqlite3"
 PRICE_TABLE_NAME = "MNQ_5s"
 
-START_DATETIME_MSK = "2026-07-01 00:00:00"
+START_DATETIME_MSK = "2026-01-01 00:00:00"
 END_DATETIME_MSK = "2026-07-31 23:59:59"
 
 # Для i7-14700 используем 20 worker-процессов: по одному на физическое ядро.
 # Если параллельно на компьютере выполняется тяжёлая работа, значение можно
 # временно уменьшить.
-WORKER_PROCESSES = 16
+WORKER_PROCESSES = 18
 
 # Для перебора добавь значения в соответствующий список.
 ROLLING_BACK_MINUTES_VALUES = [90]  # пример: [30, 60, 90]
 ROLLING_TRADE_MINUTES_VALUES = [30]  # пример: [10, 15, 20]
 PEARSON_MIN_VALUES = [0.60]
 MINMAX_HARD_FILTER_MAX_RATIO_VALUES = [5]  # пример: [1.50, 3, 5]
-CANDIDATE_MIN_COUNT_VALUES = [3]
-CANDIDATE_MAX_COUNT_VALUES = [9]
-POTENTIAL_MIN_ABS_END_DELTA_POINTS_VALUES = [20.0]
+CANDIDATE_MIN_COUNT_VALUES = [3]  # [3,5,7]
+CANDIDATE_MAX_COUNT_VALUES = [7,9]  # [7,9,11]
+POTENTIAL_MIN_ABS_END_DELTA_POINTS_VALUES = [30]  # [30, 40]
 
 DELAY_SECONDS_VALUES = [10]  # только значения, кратные 5
 TAKE_PROFIT_POINTS_VALUES = [0]  # 0 отключает TP    пример: [0, 50.0, 100]
-STOP_LOSS_POINTS_VALUES = [ 150.0]  # 0 отключает SL  пример: [0, 100.0, 150.0]
+STOP_LOSS_POINTS_VALUES = [150.0]  # 0 отключает SL  пример: [0, 100.0, 150.0]
 DAILY_TAKE_PROFIT_USD_VALUES = [0.0]  # 0 отключает дневной take-profit [0.0, 300, 500, 700, 1000]
 
 COMMISSION_PER_CONTRACT_SIDE_USD = 0.62
 
+SIGNAL_TIME_PATH = BASE_DIR / "ib_signal" / "signal_time.py"
 RESULTS_ROOT = BASE_DIR / "tester" / "results"
 
 MSK_TIMEZONE = ZoneInfo("Europe/Moscow")
@@ -90,34 +92,66 @@ def format_bytes(value: int) -> str:
 
 
 def build_signal_variants() -> list[SignalVariant]:
-    return [
-        SignalVariant(
-            rolling_back_minutes=int(rolling_back),
-            rolling_trade_minutes=int(rolling_trade),
-            pearson_min=float(pearson_min),
-            minmax_hard_filter_max_ratio=float(minmax_ratio),
-            candidate_min_count=int(candidate_min),
-            candidate_max_count=int(candidate_max),
-            potential_min_abs_end_delta_points=float(potential_threshold),
-        )
-        for (
-            rolling_back,
-            rolling_trade,
-            pearson_min,
-            minmax_ratio,
-            candidate_min,
-            candidate_max,
-            potential_threshold,
-        ) in itertools.product(
-            ROLLING_BACK_MINUTES_VALUES,
-            ROLLING_TRADE_MINUTES_VALUES,
-            PEARSON_MIN_VALUES,
-            MINMAX_HARD_FILTER_MAX_RATIO_VALUES,
-            CANDIDATE_MIN_COUNT_VALUES,
-            CANDIDATE_MAX_COUNT_VALUES,
-            POTENTIAL_MIN_ABS_END_DELTA_POINTS_VALUES,
-        )
-    ]
+    variants: list[SignalVariant] = []
+
+    for rolling_back in ROLLING_BACK_MINUTES_VALUES:
+        for rolling_trade in ROLLING_TRADE_MINUTES_VALUES:
+            for pearson_min in PEARSON_MIN_VALUES:
+                for minmax_ratio in MINMAX_HARD_FILTER_MAX_RATIO_VALUES:
+                    for candidate_min in CANDIDATE_MIN_COUNT_VALUES:
+                        for candidate_max in CANDIDATE_MAX_COUNT_VALUES:
+                            for potential_threshold in (
+                                    POTENTIAL_MIN_ABS_END_DELTA_POINTS_VALUES
+                            ):
+                                rolling_back_value = int(rolling_back)
+                                rolling_trade_value = int(rolling_trade)
+                                pearson_min_value = float(pearson_min)
+                                minmax_ratio_value = float(minmax_ratio)
+                                candidate_min_value = int(candidate_min)
+                                candidate_max_value = int(candidate_max)
+                                potential_threshold_value = float(
+                                    potential_threshold
+                                )
+
+                                # =============================================
+                                # ПРАВИЛА ОТСЕВА КОМБИНАЦИЙ ТЕСТЕРА
+                                #
+                                # Новые правила добавляй прямо сюда:
+                                #
+                                # if какое_то_условие:
+                                #     continue
+                                # =============================================
+
+                                # Максимум кандидатов не может быть меньше
+                                # минимально необходимого количества.
+                                if candidate_min_value > candidate_max_value:
+                                    continue
+
+                                variants.append(
+                                    SignalVariant(
+                                        rolling_back_minutes=(
+                                            rolling_back_value
+                                        ),
+                                        rolling_trade_minutes=(
+                                            rolling_trade_value
+                                        ),
+                                        pearson_min=pearson_min_value,
+                                        minmax_hard_filter_max_ratio=(
+                                            minmax_ratio_value
+                                        ),
+                                        candidate_min_count=(
+                                            candidate_min_value
+                                        ),
+                                        candidate_max_count=(
+                                            candidate_max_value
+                                        ),
+                                        potential_min_abs_end_delta_points=(
+                                            potential_threshold_value
+                                        ),
+                                    )
+                                )
+
+    return variants
 
 
 def build_execution_variants() -> list[ExecutionVariant]:
@@ -147,7 +181,15 @@ def main() -> None:
     logical_cpu_count = os.cpu_count() or 1
     worker_count = max(1, min(int(WORKER_PROCESSES), logical_cpu_count))
 
+    if not SIGNAL_TIME_PATH.is_file():
+        raise FileNotFoundError(
+            f"Signal time config not found: {SIGNAL_TIME_PATH}"
+        )
+
     result_dir = RESULTS_ROOT / datetime.now().strftime("%Y%m%d_%H%M%S")
+    result_dir.mkdir(parents=True, exist_ok=True)
+    signal_time_snapshot_path = result_dir / SIGNAL_TIME_PATH.name
+    shutil.copy2(SIGNAL_TIME_PATH, signal_time_snapshot_path)
     store = ResultStore(result_dir)
 
     print(
@@ -159,6 +201,7 @@ def main() -> None:
         f"worker processes: {worker_count} "
         f"(logical CPUs detected: {logical_cpu_count})\n"
         f"results: {result_dir}\n"
+        f"signal_time snapshot: {signal_time_snapshot_path}\n"
         "Loading price history into RAM through one SQLite connection...",
         flush=True,
     )
