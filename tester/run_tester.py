@@ -64,7 +64,7 @@ POTENTIAL_MIN_ABS_END_DELTA_POINTS_VALUES = [30]  # [30, 40]
 
 DELAY_SECONDS_VALUES = [10]  # только значения, кратные 5
 TAKE_PROFIT_POINTS_VALUES = [0]  # 0 отключает TP    пример: [0, 50.0, 100]
-STOP_LOSS_POINTS_VALUES = [150.0]  # 0 отключает SL  пример: [0, 100.0, 150.0]
+STOP_LOSS_POINTS_VALUES = [0]  # 0 отключает SL  пример: [0, 100.0, 150.0]
 DAILY_TAKE_PROFIT_USD_VALUES = [0.0]  # 0 отключает дневной take-profit [0.0, 300, 500, 700, 1000]
 
 COMMISSION_PER_CONTRACT_SIDE_USD = 0.62

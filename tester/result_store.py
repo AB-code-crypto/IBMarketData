@@ -63,11 +63,18 @@ class ResultStore:
 
         self.conn = sqlite3.connect(str(self.details_db_path))
         self.conn.execute("PRAGMA foreign_keys=ON")
-        self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.conn.execute("PRAGMA synchronous=FULL")
         self.conn.execute("PRAGMA temp_store=MEMORY")
         self._initialize_database()
 
+    def flush(self) -> None:
+        # SQLite-транзакции сохраняются внутри save_run, но явный commit
+        # фиксирует контракт: после возврата из save_run результат уже
+        # доступен другому процессу и переживёт штатную остановку тестера.
+        self.conn.commit()
+
     def close(self) -> None:
+        self.flush()
         self.conn.close()
 
     def _initialize_database(self) -> None:
@@ -149,6 +156,8 @@ class ResultStore:
             if not file_exists:
                 writer.writeheader()
             writer.writerows(materialized)
+            file.flush()
+            os.fsync(file.fileno())
 
     @staticmethod
     def _write_csv_rows_atomic(
@@ -162,6 +171,8 @@ class ResultStore:
             writer = csv.DictWriter(file, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
+            file.flush()
+            os.fsync(file.fileno())
         os.replace(temporary_path, path)
 
     @staticmethod
@@ -206,6 +217,7 @@ class ResultStore:
             common_config=common_config,
             simulation=simulation,
         )
+        self.flush()
         return run_id
 
     def _save_details_to_database(

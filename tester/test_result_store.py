@@ -60,6 +60,48 @@ class ResultStoreTest(unittest.TestCase):
                     metrics={"net_profit_usd": 50.0},
                 ),
             )
+
+            # Проверяем результат до второго прогона и до store.close().
+            # Это имитирует просмотр файлов во время продолжающегося теста.
+            with (result_dir / "summary.csv").open(
+                newline="", encoding="utf-8-sig"
+            ) as file:
+                visible_summary_rows = list(csv.DictReader(file))
+            self.assertEqual(len(visible_summary_rows), 1)
+            self.assertEqual(visible_summary_rows[0]["id"], "1")
+
+            with (result_dir / "hourly_results.csv").open(
+                newline="", encoding="utf-8-sig"
+            ) as file:
+                visible_hourly_rows = list(csv.DictReader(file))
+            self.assertEqual(len(visible_hourly_rows), 24)
+            self.assertTrue(all(row["id"] == "1" for row in visible_hourly_rows))
+
+            visible_conn = sqlite3.connect(
+                str(result_dir / "signals_trades.sqlite3")
+            )
+            try:
+                self.assertEqual(
+                    visible_conn.execute(
+                        "SELECT COUNT(*) FROM runs"
+                    ).fetchone()[0],
+                    1,
+                )
+                self.assertEqual(
+                    visible_conn.execute(
+                        "SELECT COUNT(*) FROM signals"
+                    ).fetchone()[0],
+                    1,
+                )
+                self.assertEqual(
+                    visible_conn.execute(
+                        "SELECT COUNT(*) FROM trades"
+                    ).fetchone()[0],
+                    1,
+                )
+            finally:
+                visible_conn.close()
+
             second_id = store.save_run(
                 signal_variant=signal_variant,
                 execution_variant=execution_variant,
